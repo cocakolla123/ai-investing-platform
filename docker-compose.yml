@@ -1,0 +1,26 @@
+# Dynamo — single-host stack (Milestone 0 stub; services land in M1).
+# Design: docs/design/12-operations.md
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg16 # includes TimescaleDB; pgvector added in init script (M1)
+    environment:
+      POSTGRES_USER: dynamo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: dynamo_dev
+    volumes:
+      - pgdata:/home/postgres/pgdata
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dynamo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # M1: dagster-webserver + dagster-daemon (orchestration/)
+  # M1: api (FastAPI, infra/docker/Dockerfile.api)
+  # M1: dashboard (Streamlit)
+  # M1: grafana + prometheus (infra/monitoring/)
+
+volumes:
+  pgdata:

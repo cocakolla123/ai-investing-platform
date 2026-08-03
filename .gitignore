@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Env & secrets — only .env.example is committed
+.env
+.env.*
+!.env.example
+
+# Data & artifacts
+data/
+*.parquet
+*.duckdb
+models/artifacts/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Dagster
+.dagster_home/
