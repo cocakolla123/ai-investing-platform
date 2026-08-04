@@ -1,5 +1,23 @@
-# Dynamo — single-host stack (Milestone 0 stub; services land in M1).
-# Design: docs/design/12-operations.md
+# Dynamo — single-host stack (M1). Design: docs/design/12-operations.md §1.
+# Memory/CPU budget sized for a 4 vCPU / 8 GB host; log rotation per §5.
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: 50m
+      max-file: "7"
+
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: infra/docker/Dockerfile.app
+  image: dynamo-app
+  env_file:
+    - path: .env
+      required: false # fresh clones run partially configured (doc 01 §6)
+  <<: *logging
+
 services:
   postgres:
     image: timescale/timescaledb-ha:pg16 # includes TimescaleDB; pgvector added in init script (M1)
@@ -16,11 +34,113 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    mem_limit: 2560m
+    cpus: 1.5
+    <<: *logging
 
-  # M1: dagster-webserver + dagster-daemon (orchestration/)
-  # M1: api (FastAPI, infra/docker/Dockerfile.api)
-  # M1: dashboard (Streamlit)
-  # M1: grafana + prometheus (infra/monitoring/)
+  dagster-webserver:
+    <<: *app-image
+    command:
+      ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-f", "orchestration/definitions.py"]
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - dagster-home:/opt/dagster/dagster_home
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 512m
+    cpus: 0.5
+
+  dagster-daemon:
+    <<: *app-image
+    command: ["dagster-daemon", "run", "-f", "orchestration/definitions.py"]
+    volumes:
+      - dagster-home:/opt/dagster/dagster_home
+      - parquet:/app/data/parquet
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 1g
+    cpus: 1.0
+
+  api:
+    <<: *app-image
+    # `python -m dynamo.api` binds loopback (host use); in a container the
+    # same app is served on 0.0.0.0 so the 127.0.0.1 port map can reach it.
+    command:
+      [
+        "uvicorn",
+        "dynamo.api.wiring:create_wired_app",
+        "--factory",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 512m
+    cpus: 0.5
+
+  dashboard:
+    <<: *app-image
+    command:
+      [
+        "streamlit",
+        "run",
+        "dashboard/app.py",
+        "--server.port",
+        "8501",
+        "--server.address",
+        "0.0.0.0",
+        "--server.headless",
+        "true",
+      ]
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      - api
+    mem_limit: 512m
+    cpus: 0.5
+
+  prometheus:
+    image: prom/prometheus:v2.53.4
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    mem_limit: 512m
+    cpus: 0.25
+    <<: *logging
+
+  grafana:
+    image: grafana/grafana-oss:11.1.13
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000" # 3000 is dagster-webserver on the host
+    depends_on:
+      - prometheus
+    mem_limit: 256m
+    cpus: 0.25
+    <<: *logging
 
 volumes:
   pgdata:
+  dagster-home:
+  parquet:
+  prometheus-data:
+  grafana-data:

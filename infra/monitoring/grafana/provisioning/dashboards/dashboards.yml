@@ -1,0 +1,12 @@
+# Dashboards are provisioned as JSON from infra/monitoring/dashboards (doc 12 §6).
+apiVersion: 1
+
+providers:
+  - name: dynamo
+    orgId: 1
+    folder: Dynamo
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 60
+    options:
+      path: /var/lib/grafana/dashboards

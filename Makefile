@@ -29,3 +29,18 @@ down:
 
 migrate:        ## Apply DB migrations (M1+)
 	uv run alembic upgrade head
+
+# --- Orchestration (M1) ---------------------------------------------------
+.PHONY: dagster pipeline-dry api dash
+
+dagster:        ## Dagster dev UI (webserver + daemon, local)
+	uv run dagster dev -f orchestration/definitions.py
+
+pipeline-dry:   ## Wiring dry-run job: no DB or API keys needed
+	uv run dagster job execute -f orchestration/definitions.py -j dry_run_job
+
+api:            ## Serve the FastAPI app on 127.0.0.1:8000
+	uv run python -m dynamo.api
+
+dash:           ## Serve the Streamlit dashboard on 127.0.0.1:8501
+	uv run streamlit run dashboard/app.py

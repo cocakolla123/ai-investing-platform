@@ -1,0 +1,18 @@
+# Prometheus config — doc 12 §6. Scrapes the API's /metrics (dynamo_* catalog).
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+  # node-exporter runs on the host, outside compose (doc 12 §6):
+  # - job_name: node
+  #   static_configs:
+  #     - targets: ["host.docker.internal:9100"]

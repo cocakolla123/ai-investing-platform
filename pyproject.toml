@@ -72,7 +72,7 @@ ignore = ["RUF012"]
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
-include = ["src", "tests"]
+include = ["src", "tests", "orchestration"]
 # Strict where correctness is money: domain contracts and risk math.
 strict = ["src/dynamo/domain", "src/dynamo/risk"]
 typeCheckingMode = "basic"

@@ -11,16 +11,33 @@ A production-quality, single-user AI investing platform:
 
 ## Status
 
-**Milestone 0 — design.** No functional code yet. The complete technical design lives in
-[`docs/design/`](docs/design/) (start at `00-goals-and-non-goals.md`); decisions are recorded in
-[`docs/adr/`](docs/adr/). Implementation begins at M1 (research pipeline) after design sign-off.
+**M1–M7 implemented; paper-validation phase.** All modules are built and tested (695 unit
+tests, integration tests against Timescale, Dagster dry-run green). The complete technical
+design lives in [`docs/design/`](docs/design/); decisions in [`docs/adr/`](docs/adr/).
+Remaining before real money: accumulate clean unattended paper runs, tune from results, then
+M8 hardening + the explicit human live-approval gate (`docs/design/00` §5).
+
+## Quickstart
+
+1. `cp .env.example .env` and fill in keys. Minimum for a research-only run:
+   `ANTHROPIC_API_KEY` (fund console.anthropic.com credits), `POSTGRES_PASSWORD`.
+   Add `TIINGO_API_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY`, `ALPACA_API_KEY/SECRET`
+   (paper) as you enable more of the pipeline — every adapter degrades gracefully
+   when its key is absent.
+2. `docker compose up -d postgres && make migrate`
+3. `make dagster` → http://127.0.0.1:3000 (pipeline UI; schedules run the nightly loop)
+4. `make api` → http://127.0.0.1:8000 · `make dash` → http://127.0.0.1:8501
+5. `make pipeline-dry` — wiring check with no keys or DB needed.
+
+macOS note: LightGBM needs libomp (`brew install libomp`). Linux containers install
+libgomp1 via `infra/docker/Dockerfile.app`.
 
 ## Development
 
 ```
 make dev        # uv sync
 make check      # lint + typecheck + unit tests
-make up         # docker compose stack
+make up         # full docker compose stack (dagster, api, dashboard, prometheus, grafana)
 ```
 
 Environments: `DEV | TEST | PAPER | LIVE`, one `.env.<env>` each — see `.env.example`.

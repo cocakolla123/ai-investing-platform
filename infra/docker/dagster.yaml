@@ -1,0 +1,25 @@
+# Dagster instance config (DAGSTER_HOME=/opt/dagster/dagster_home).
+#
+# Storage: the default SQLite files live in the dagster-home volume — fine for
+# a one-host, one-daemon deployment. Documented upgrade path (when run history
+# or concurrent webserver/daemon access outgrows SQLite): point storage at the
+# existing Postgres instance, e.g.
+#
+#   storage:
+#     postgres:
+#       postgres_url:
+#         env: DAGSTER_PG_URL   # separate database in the same instance
+#
+# per doc 01 §3 ("Storage in the same Postgres").
+
+telemetry:
+  enabled: false
+
+run_retries:
+  enabled: true
+  max_retries: 1
+
+# In-process runs on the daemon (doc 12 §1: no per-run containers — RAM).
+run_launcher:
+  module: dagster.core.launcher
+  class: DefaultRunLauncher
