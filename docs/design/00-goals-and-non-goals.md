@@ -38,7 +38,8 @@ Long-horizon risk-adjusted growth, operationalized as:
 ## 3. Users and scope
 
 - **One user** (the owner). No multi-tenancy, no auth beyond a single dashboard credential.
-- **Assets:** US equities + ETFs (tradable), prediction markets Kalshi/Polymarket (research-only).
+- **Assets:** US equities + ETFs (tradable), Kalshi prediction markets (small gated sleeve,
+  demo-first — ADR-0009), Polymarket (research-only).
 - **Horizons:** long-term quality sleeve (months–years) + tactical sleeve (days–weeks),
   allocation configurable.
 - **Execution:** Alpaca **paper** trading. Live trading is a future *decision* gated by
@@ -103,7 +104,7 @@ validation source.
 |---|---|
 | Intraday / high-frequency trading | No edge at personal scale; free data isn't tick-grade. Not revisited. |
 | Options, futures, crypto trading | Complexity + risk model rewrite. Revisit only after live equities run ≥ 1y cleanly. |
-| Beating prediction markets systematically | Kalshi/Polymarket are research inputs & calibration checks (`02`, `03`). No execution hooks. |
+| Beating prediction markets systematically | Still a non-assumption. Kalshi is now *tradable* behind the same gates as equities (demo-first, ≤ 5% sleeve, evidence-gated — ADR-0009); Polymarket remains research-only with no execution hooks. The sleeve tests whether committee estimates carry edge; it does not presume they do. |
 | Multi-user / SaaS | Single-user by design; removes auth, tenancy, compliance surface. |
 | Kubernetes | Compose on one host; images stay 12-factor/K8s-compatible. Revisit only on real scale need. |
 | Deep learning forecasting (LSTM/transformers) | ADR-0003: insufficient data scale; modular `ForecastModel` port keeps the door open with defined revisit criteria. |

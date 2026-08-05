@@ -204,6 +204,66 @@ prediction_market_prices = Table(
     Column("trusted", Boolean, nullable=False, default=False),
 )
 
+# --- Prediction-market trading — Kalshi sleeve (ADR-0009; migration 0002) ---
+# Mirrors orders/order_events/positions/trades; prices in integer-ish cents,
+# contracts are integers. Polymarket has NO rows here — research only.
+
+pm_orders = Table(
+    "pm_orders",
+    metadata,
+    Column("client_order_id", Text, primary_key=True),
+    Column("broker_order_id", Text),
+    Column("decision_context_id", Text, nullable=False),
+    Column("venue", Text, nullable=False, default="kalshi"),
+    Column("market_id", Text, nullable=False, index=True),
+    Column("side", Text, nullable=False),  # yes | no
+    Column("contracts", Integer, nullable=False),
+    Column("limit_price_cents", Integer, nullable=False),
+    Column("state", Text, nullable=False, default="proposed"),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+pm_order_events = Table(
+    "pm_order_events",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("client_order_id", Text, nullable=False, index=True),
+    Column("from_state", Text),
+    Column("to_state", Text, nullable=False),
+    Column("reason", Text, nullable=False, default=""),
+    Column("payload", JSONB),
+    _ts(),
+)
+
+pm_positions = Table(
+    "pm_positions",
+    metadata,
+    Column("venue", Text, primary_key=True),
+    Column("market_id", Text, primary_key=True),
+    Column("side", Text, nullable=False),
+    Column("contracts", Integer, nullable=False),
+    Column("avg_price_cents", Float, nullable=False),
+    Column("question", Text, nullable=False, default=""),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+pm_trades = Table(
+    "pm_trades",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("client_order_id", Text, index=True),  # null for settlements
+    Column("venue", Text, nullable=False, default="kalshi"),
+    Column("market_id", Text, nullable=False, index=True),
+    Column("side", Text, nullable=False),
+    Column("contracts", Integer, nullable=False),
+    Column("price_cents", Float, nullable=False),
+    Column("fees_cents", Float, nullable=False, default=0.0),
+    Column("kind", Text, nullable=False, default="fill"),  # fill | settlement
+    Column("realized_pnl_cents", Float),
+    Column("filled_at", DateTime(timezone=True), nullable=False),
+)
+
 # --- Surveillance & quality (doc 02 §2, §6) ---
 
 surveillance_flags = Table(

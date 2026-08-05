@@ -10,6 +10,9 @@
 | Macro digest (Sonnet) | 08:30 daily |
 | Earnings calendar | 07:00 daily |
 | Prediction-market snapshot | 20:00 daily |
+| Kalshi PM trading (gated, demo-first) | 20:30 daily |
+| Kalshi PM resolution + calibration | 20:45 daily |
+| Kalshi PM reconciliation | every 15 min 09:30-16:00 market days |
 | Tier-2 detectors + triage (after data quality) | 22:30 market days |
 | Features -> scores -> signals -> regime -> selection | 23:00 market days |
 | Committee batch submission | 23:30 market days |
@@ -32,6 +35,7 @@ from dagster import (
 
 from orchestration.assets.ingestion import filings_poll_job
 from orchestration.assets.learning_ops import healthcheck_job
+from orchestration.assets.pm_trading import pm_reconciliation_job, pm_trading_job
 from orchestration.assets.portfolio_exec import (
     paper_execution_job,
     reconciliation_job,
@@ -64,6 +68,9 @@ earnings_calendar_job = define_asset_job(
 prediction_market_job = define_asset_job(
     "prediction_market_job",
     selection=AssetSelection.assets("prediction_market_snapshot"),
+)
+pm_resolution_job = define_asset_job(
+    "pm_resolution_job", selection=AssetSelection.assets("pm_resolution")
 )
 macro_digest_job = define_asset_job(
     "macro_digest_job", selection=AssetSelection.assets("macro_digest")
@@ -130,10 +137,36 @@ filings_poll_schedule = ScheduleDefinition(
     job=filings_poll_job,
     execution_timezone=TZ,
 )
+# Kalshi PM sleeve (ADR-0009): trade after the 20:00 snapshot, then settle.
+pm_trading_schedule = ScheduleDefinition(
+    name="pm_trading_schedule",
+    cron_schedule="30 20 * * *",
+    job=pm_trading_job,
+    execution_timezone=TZ,
+)
+pm_resolution_schedule = ScheduleDefinition(
+    name="pm_resolution_schedule",
+    cron_schedule="45 20 * * *",
+    job=pm_resolution_job,
+    execution_timezone=TZ,
+)
+pm_reconciliation_schedule = ScheduleDefinition(
+    name="pm_reconciliation_schedule",
+    cron_schedule=f"*/15 9-16 * * {MARKET_DAYS}",
+    job=pm_reconciliation_job,
+    execution_timezone=TZ,
+)
 macro_digest_schedule = ScheduleDefinition(
     name="macro_digest_schedule",
     cron_schedule="30 8 * * *",
     job=macro_digest_job,
+    execution_timezone=TZ,
+)
+social_job = define_asset_job("social_job", selection=AssetSelection.assets("social_scan"))
+social_schedule = ScheduleDefinition(
+    name="social_schedule",
+    cron_schedule=f"10 22 * * {MARKET_DAYS}",
+    job=social_job,
     execution_timezone=TZ,
 )
 tier2_schedule = ScheduleDefinition(
@@ -204,8 +237,10 @@ ALL_JOBS = [
     macro_ingest_job,
     earnings_calendar_job,
     prediction_market_job,
+    pm_resolution_job,
     macro_digest_job,
     tier2_job,
+    social_job,
     scores_job,
     risk_portfolio_job,
     nightly_rollup_job,
@@ -219,9 +254,13 @@ ALL_SCHEDULES = [
     macro_ingest_schedule,
     earnings_calendar_schedule,
     prediction_market_schedule,
+    pm_trading_schedule,
+    pm_resolution_schedule,
+    pm_reconciliation_schedule,
     filings_poll_schedule,
     macro_digest_schedule,
     tier2_schedule,
+    social_schedule,
     scores_schedule,
     committee_schedule,
     risk_portfolio_schedule,

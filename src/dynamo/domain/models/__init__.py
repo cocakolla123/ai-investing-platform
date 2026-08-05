@@ -35,6 +35,15 @@ from dynamo.domain.models.market import (
     UniverseMembership,
     XbrlFact,
 )
+from dynamo.domain.models.pm import (
+    PM_VENUE_KALSHI,
+    PMOrder,
+    PMPosition,
+    PMSide,
+    PMTrade,
+    PMTradeDecision,
+    settlement_pnl_cents,
+)
 from dynamo.domain.models.portfolio import (
     ORDER_TRANSITIONS,
     TERMINAL_ORDER_STATES,
@@ -99,6 +108,7 @@ from dynamo.domain.models.risk import (
 __all__ = [
     "ACTION_SCORE",
     "ORDER_TRANSITIONS",
+    "PM_VENUE_KALSHI",
     "PROMOTION_TRANSITIONS",
     "STANCE_SCORE",
     "TERMINAL_ORDER_STATES",
@@ -138,6 +148,11 @@ __all__ = [
     "OrderSide",
     "OrderState",
     "OrderType",
+    "PMOrder",
+    "PMPosition",
+    "PMSide",
+    "PMTrade",
+    "PMTradeDecision",
     "PortfolioState",
     "Position",
     "PostTradeReview",
@@ -182,4 +197,5 @@ __all__ = [
     "Veto",
     "WatchlistRow",
     "XbrlFact",
+    "settlement_pnl_cents",
 ]

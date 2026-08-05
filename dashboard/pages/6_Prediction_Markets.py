@@ -1,4 +1,4 @@
-"""Prediction markets screen (doc 11 §3.7). Research only — no execution."""
+"""Prediction markets screen (doc 11 §3.7; ADR-0009 Kalshi trading sleeve)."""
 
 from __future__ import annotations
 
@@ -12,9 +12,88 @@ from dynamo.persistence import schema
 st.set_page_config(page_title="Dynamo — Prediction Markets", layout="wide")
 st.title("Prediction markets")
 
-# Mandatory banner, verbatim (doc 00 §7, doc 03 §6).
-st.warning("Research only. No execution hooks exist.")
+# Mandatory banner, verbatim (ADR-0009).
+st.warning(
+    "Kalshi: demo/live trading enabled behind the gate. "
+    "Polymarket: research only — no execution hooks."
+)
 
+# --- Kalshi sleeve: positions / orders / P&L (ADR-0009) ---
+
+st.subheader("Kalshi sleeve")
+positions = safe_df(select(schema.pm_positions))
+orders = safe_df(
+    select(schema.pm_orders).order_by(schema.pm_orders.c.created_at.desc()).limit(50)
+)
+trades = safe_df(
+    select(schema.pm_trades).order_by(schema.pm_trades.c.filled_at.desc()).limit(200)
+)
+
+if positions.empty and orders.empty and trades.empty:
+    st.info("No Kalshi sleeve activity yet.")
+else:
+    realized_usd = 0.0
+    if not trades.empty:
+        settlements = trades[trades["kind"] == "settlement"]
+        if not settlements.empty:
+            realized_usd = float(settlements["realized_pnl_cents"].fillna(0.0).sum()) / 100.0
+    exposure_usd = 0.0
+    if not positions.empty:
+        exposure_usd = float(
+            (positions["contracts"] * positions["avg_price_cents"]).sum()
+        ) / 100.0
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Open markets", 0 if positions.empty else len(positions))
+    c2.metric("Exposure (cost basis)", f"${exposure_usd:,.2f}")
+    c3.metric("Realized P&L", f"${realized_usd:,.2f}")
+
+    if not positions.empty:
+        st.caption("Open positions")
+        st.dataframe(
+            positions[
+                ["market_id", "side", "contracts", "avg_price_cents", "question", "updated_at"]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+    if not orders.empty:
+        st.caption("Orders (latest 50)")
+        st.dataframe(
+            orders[
+                [
+                    "client_order_id",
+                    "market_id",
+                    "side",
+                    "contracts",
+                    "limit_price_cents",
+                    "state",
+                    "created_at",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+    if not trades.empty:
+        st.caption("Fills & settlements (latest 200)")
+        st.dataframe(
+            trades[
+                [
+                    "market_id",
+                    "side",
+                    "contracts",
+                    "price_cents",
+                    "kind",
+                    "realized_pnl_cents",
+                    "filled_at",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+# --- Research views (doc 03 §6) ---
+
+st.subheader("Committee views")
 views = safe_df(
     select(schema.prediction_market_views).order_by(schema.prediction_market_views.c.as_of.desc())
 )

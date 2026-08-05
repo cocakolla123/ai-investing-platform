@@ -38,6 +38,8 @@ def test_expected_assets_present() -> None:
         # portfolio / risk (docs 06, 07)
         "risk_verdict",
         "target_portfolio",
+        # prediction markets — Kalshi sleeve (ADR-0009)
+        "pm_resolution",
         # learning / ops (docs 10, 12)
         "post_trade_reviews",
         "calibration_update",
@@ -58,6 +60,8 @@ def test_op_jobs_resolve() -> None:
         "paper_execution_job",
         "reconciliation_job",
         "stops_job",
+        "pm_trading_job",
+        "pm_reconciliation_job",
         "healthcheck_job",
     ):
         assert defs.get_job_def(name).name == name

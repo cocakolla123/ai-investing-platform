@@ -46,7 +46,7 @@ labeled, never silently used, and suppression is itself logged.
 | Free/cheap data quality: bad split/dividend adjustments, gaps, IEX-only depth on Alpaca | High | Med | Dual-source close check (50 bps), gap detection vs exchange calendar, corp-action sanity + `adjustment_version` recompute (doc 02 §5–6); IEX depth accepted — EOD strategies only (doc 00 §7) | Quarantine count per run; systemic alert at > 20 symbols; quarterly synthetic-fault drill must catch injected bad close | `data/quality.py` |
 | Survivorship bias corrupting backtests | Med | High | Tiingo delisted-name history; point-in-time `universe_membership` is the backbone for backtest selection (doc 02 §2); XBRL keyed by `filed_at`, never restated | Backtest asserts universe reconstruction at historical dates; CI test with a known-delisted fixture symbol | `backtest` universe reconstruction |
 | yfinance-class provider brittleness / silent ToS changes | Med | Med | yfinance is break-glass only, never production (ADR-0004); all providers behind ports — replacement is an adapter, not a rewrite; client-side rate limiting | `provider_errors_total` sustained; provider budget 80% warn; contract tests against recorded cassettes detect response-shape drift | Provider adapters (typed errors) |
-| Kalshi/Polymarket API limits or ToS shifts | Med | Low | Research-only, read-only, no execution hooks (doc 00 §7); daily snapshot cadence is trivially light; thin-market filter limits dependence | Snapshot job failure alert; feature degrades to "no prediction-market context" label in digests | Prediction-market adapters |
+| Kalshi/Polymarket API limits or ToS shifts | Med | Med | Polymarket stays read-only (no execution hooks); Kalshi trading is demo-first behind the doc 09 §7 gate with a hard 5% sleeve cap, 1% per-market cap, and fail-closed sizing (ADR-0009); thin-market filter limits dependence; kill-switch halts PM orders through the same pathway as equities | Snapshot/trading job failure alerts; sticky reconciliation halt on any position/balance divergence vs Kalshi; research degrades to "no prediction-market context" label in digests | Prediction-market adapters + `execution/kalshi_broker.py` |
 
 ## 3. Claude & LLM
 
@@ -94,14 +94,15 @@ by alerts that stay rare enough to be believed.
 ## 6. Regulatory & terms of service
 
 Kept deliberately small by scope decisions already made in doc 00: single user, no advice
-given to anyone, no data redistribution, prediction markets research-only with no execution
-hooks, and live trading gated behind an explicit future decision. Most regulatory surface was
-designed out rather than mitigated.
+given to anyone, no data redistribution, Polymarket research-only with no execution hooks
+(Kalshi trading is CFTC-regulated, personal, demo-first behind the gate — ADR-0009), and live
+trading gated behind an explicit future decision. Most regulatory surface was designed out
+rather than mitigated.
 
 | Risk | Likelihood | Impact | Mitigation | Tripwire / monitoring | Owner (detector) |
 |---|---|---|---|---|---|
 | Personal automated trading via Alpaca — regulatory/ToS exposure | Low | Med | **Paper: no exposure** — simulated fills, no capital. Live (future): personal account, self-directed; note **PDT rules** (≥ $25k equity or < 4 day-trades/5 days — nightly cadence makes day-trades rare by construction, but the execution layer counts them); Alpaca ToS permits personal API trading; platform stays strictly single-user with **no advice-giving scope** (doc 00 §3) — nothing is published or shared, removing adviser-registration questions | Day-trade counter in execution layer (doc 09) hard-blocks a 4th day-trade under $25k; live gate review (doc 00 §5) includes a ToS/regulatory re-check as a checklist item | `execution/gate.py` + live-gate checklist |
-| Data-provider ToS violations (redistribution, scraping posture) | Low | Med | Single-user, no redistribution of any provider data; EDGAR declared User-Agent and rate compliance (doc 02 §1); prediction markets read-only per venue ToS | Provider budget monitors keep usage visibly inside declared limits | Provider adapters |
+| Data-provider ToS violations (redistribution, scraping posture) | Low | Med | Single-user, no redistribution of any provider data; EDGAR declared User-Agent and rate compliance (doc 02 §1); Polymarket read-only per venue ToS; Kalshi trading uses the official trade API under a personal account (ADR-0009) | Provider budget monitors keep usage visibly inside declared limits | Provider adapters |
 
 ## 7. Review cadence
 
