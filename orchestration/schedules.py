@@ -23,6 +23,7 @@
 | Paper execution | 09:35 market days |
 | Reconciliation + stops | every 15 min 09:30-16:00 market days |
 | Parquet export + metrics + equity curve | 02:00 daily |
+| Daily activity report | 02:15 daily |
 | Healthcheck dead-man ping | 02:30 daily |
 | Post-trade reviews + calibration + drift | Sunday 08:00 |
 """
@@ -104,6 +105,10 @@ risk_portfolio_job = define_asset_job(
 nightly_rollup_job = define_asset_job(
     "nightly_rollup_job",
     selection=AssetSelection.assets("metrics_daily", "equity_curve", "parquet_export"),
+)
+daily_report_job = define_asset_job(
+    "daily_report_job",
+    selection=AssetSelection.assets("daily_report"),
 )
 weekly_learning_job = define_asset_job(
     "weekly_learning_job",
@@ -245,6 +250,13 @@ nightly_rollup_schedule = ScheduleDefinition(
     job=nightly_rollup_job,
     execution_timezone=TZ,
 )
+# Daily activity report: after the 02:00 rollup, before the 02:30 dead-man ping.
+daily_report_schedule = ScheduleDefinition(
+    name="daily_report_schedule",
+    cron_schedule="15 2 * * *",
+    job=daily_report_job,
+    execution_timezone=TZ,
+)
 healthcheck_schedule = ScheduleDefinition(
     name="healthcheck_schedule",
     cron_schedule="30 2 * * *",
@@ -272,6 +284,7 @@ ALL_JOBS = [
     scores_job,
     risk_portfolio_job,
     nightly_rollup_job,
+    daily_report_job,
     weekly_learning_job,
 ]
 
@@ -299,6 +312,7 @@ ALL_SCHEDULES = [
     reconciliation_schedule,
     stops_schedule,
     nightly_rollup_schedule,
+    daily_report_schedule,
     healthcheck_schedule,
     weekly_learning_schedule,
 ]

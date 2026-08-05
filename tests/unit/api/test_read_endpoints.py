@@ -42,6 +42,24 @@ def test_dossiers_and_reports(client) -> None:
     assert client.get("/reports/2020-01-01").status_code == 404
 
 
+def test_daily_report_list_and_fetch(client) -> None:
+    dates = client.get("/reports/daily").json()  # literal segment beats {report_date}
+    assert dates["total"] == 1
+    assert dates["items"][0]["as_of"] == "2026-08-03"
+    body = client.get("/reports/daily/2026-08-03").json()
+    assert body["as_of"] == "2026-08-03"
+    assert set(body["data"]) == {"markdown", "report"}
+    assert body["data"]["markdown"].startswith("# Dynamo Daily Report")
+    assert body["data"]["report"]["day"] == "2026-08-03"
+
+
+def test_daily_report_missing_date_is_problem_json_404(client) -> None:
+    resp = client.get("/reports/daily/2020-01-01")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("application/problem+json")
+    assert "2020-01-01" in resp.json()["detail"]
+
+
 def test_positions_page(client) -> None:
     body = client.get("/portfolio/positions").json()
     assert body["items"][0]["decision_context_id"] == "dc-1"

@@ -15,6 +15,7 @@ from orchestration.assets.learning_ops import LEARNING_ASSETS, healthcheck_job
 from orchestration.assets.options_trading import OPTIONS_JOBS
 from orchestration.assets.pm_trading import PM_ASSETS, PM_JOBS
 from orchestration.assets.portfolio_exec import EXECUTION_JOBS, PORTFOLIO_ASSETS
+from orchestration.assets.reporting import REPORTING_ASSETS
 from orchestration.assets.research import COMMITTEE_JOBS, RESEARCH_ASSETS
 from orchestration.assets.social import SOCIAL_ASSETS
 from orchestration.dry_run import dry_run_job
@@ -30,6 +31,7 @@ defs = Definitions(
         *PORTFOLIO_ASSETS,
         *PM_ASSETS,
         *LEARNING_ASSETS,
+        *REPORTING_ASSETS,
     ],
     jobs=[
         filings_poll_job,

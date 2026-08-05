@@ -793,3 +793,14 @@ alerts = Table(
     Column("ackable", Boolean, nullable=False, default=True),
     Column("acked_at", DateTime(timezone=True)),
 )
+
+# Rendered daily activity report (migration 0004): both the DailyReport JSON
+# and the exact markdown shown to the owner, keyed by report day.
+daily_reports = Table(
+    "daily_reports",
+    metadata,
+    Column("as_of", Date, primary_key=True),
+    Column("payload", JSONB, nullable=False),  # DailyReport (dynamo.reporting.daily)
+    Column("markdown", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)

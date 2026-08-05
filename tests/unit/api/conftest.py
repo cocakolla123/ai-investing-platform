@@ -73,6 +73,14 @@ class FakeReportsStore:
         self.dossiers: dict[str, list[dict[str, Any]]] = {
             "AAPL": [{"symbol": "AAPL", "as_of": AS_OF, "payload": {"business_summary": "x"}}]
         }
+        self.daily_reports: dict[date, dict[str, Any]] = {
+            AS_OF: {
+                "as_of": AS_OF,
+                "markdown": f"# Dynamo Daily Report — {AS_OF.isoformat()} (Monday)\n",
+                "payload": {"day": AS_OF.isoformat(), "trades": []},
+                "created_at": datetime(2026, 8, 4, 6, 15, tzinfo=UTC),
+            }
+        }
 
     def latest_watchlist(self) -> tuple[date | None, list[WatchlistRow]]:
         return self.watchlist_as_of, self.watchlist_rows
@@ -94,6 +102,15 @@ class FakeReportsStore:
             "watchlist": [dict(symbol="AAPL", rank=1)],
             "gaps": [{"scope": "llm_call", "key": "batch-1/MSFT", "reason": "schema_invalid"}],
         }
+
+    def daily_report_dates(self) -> list[dict[str, Any]]:
+        return [
+            {"as_of": as_of, "created_at": r["created_at"]}
+            for as_of, r in sorted(self.daily_reports.items(), reverse=True)
+        ]
+
+    def daily_report(self, as_of: date) -> dict[str, Any] | None:
+        return self.daily_reports.get(as_of)
 
 
 class FakePortfolioStore:

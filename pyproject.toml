@@ -95,10 +95,11 @@ forbidden_modules = [
     "dynamo.data", "dynamo.llm", "dynamo.persistence", "dynamo.execution",
     "dynamo.api", "dynamo.research", "dynamo.risk", "dynamo.portfolio",
     "dynamo.backtest", "dynamo.learning", "dynamo.observability", "dynamo.config",
+    "dynamo.reporting",
 ]
 
 [[tool.importlinter.contracts]]
 name = "core logic does not import adapters"
 type = "forbidden"
 source_modules = ["dynamo.risk", "dynamo.portfolio", "dynamo.research", "dynamo.backtest", "dynamo.learning"]
-forbidden_modules = ["dynamo.data", "dynamo.llm", "dynamo.persistence", "dynamo.execution", "dynamo.api"]
+forbidden_modules = ["dynamo.data", "dynamo.llm", "dynamo.persistence", "dynamo.execution", "dynamo.api", "dynamo.reporting"]

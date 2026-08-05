@@ -108,6 +108,18 @@ class SqlReportsStore:
             "gaps": gaps,  # quarantined-call gaps rendered explicitly (doc 03 §3)
         }
 
+    def daily_report_dates(self) -> list[dict[str, Any]]:
+        t = schema.daily_reports
+        return _rows(
+            self._engine,
+            select(t.c.as_of, t.c.created_at).order_by(t.c.as_of.desc()),
+        )
+
+    def daily_report(self, as_of: date) -> dict[str, Any] | None:
+        t = schema.daily_reports
+        rows = _rows(self._engine, select(t).where(t.c.as_of == as_of))
+        return rows[0] if rows else None
+
 
 class SqlPortfolioStore:
     def __init__(self, engine: Engine) -> None:

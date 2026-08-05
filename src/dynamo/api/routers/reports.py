@@ -41,6 +41,26 @@ def list_reports(deps: DepsDep) -> Page[dict[str, Any]]:
     return Page.of(deps.reports.report_dates())
 
 
+# NOTE: /reports/daily must be registered BEFORE /reports/{report_date} so the
+# literal segment wins over the date path parameter.
+@router.get("/reports/daily")
+def list_daily_reports(deps: DepsDep) -> Page[dict[str, Any]]:
+    """Dates that have a stored daily activity report."""
+    return Page.of(deps.reports.daily_report_dates())
+
+
+@router.get("/reports/daily/{report_date}")
+def get_daily_report(report_date: date, deps: DepsDep) -> AsOf[dict[str, Any]]:
+    """One day's activity report: rendered markdown + the DailyReport JSON."""
+    report = deps.reports.daily_report(report_date)
+    if report is None:
+        raise HTTPException(404, f"no daily report for {report_date.isoformat()}")
+    return AsOf(
+        data={"markdown": report["markdown"], "report": report["payload"]},
+        as_of=report_date,
+    )
+
+
 @router.get("/reports/{report_date}")
 def get_report(report_date: date, deps: DepsDep) -> AsOf[dict[str, Any]]:
     report = deps.reports.report_for(report_date)
