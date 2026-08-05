@@ -94,7 +94,7 @@ class TestCompleteJson:
         client, _, writer = make_client(messages)
         assert complete(client) == GOOD
         call = messages.calls[0]
-        assert call["model"] == "claude-sonnet-4-6"
+        assert call["model"] == "claude-sonnet-5"
         assert call["output_config"] == {
             "format": {"type": "json_schema", "schema": SCHEMA}
         }
@@ -186,9 +186,38 @@ class TestBatches:
         [requests] = messages.batches.created_with
         assert requests[0]["custom_id"] == "2026-08-03-ACME-dossier"
         params = requests[0]["params"]
-        assert params["model"] == "claude-sonnet-4-6"
+        assert params["model"] == "claude-sonnet-5"
         assert params["max_tokens"] == 1024
-        assert params["system"][0]["cache_control"] == {"type": "ephemeral"}
+        # Batch requests use 1h-TTL caching (batch-processing doc: batches can
+        # exceed the 5m TTL; discounts stack on hits).
+        assert params["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+        assert params["messages"][0]["content"][0]["cache_control"] == {
+            "type": "ephemeral",
+            "ttl": "1h",
+        }
+
+    def test_segmented_context_gets_per_segment_breakpoints(self) -> None:
+        from dynamo.domain.ports import CONTEXT_CACHE_BOUNDARY
+
+        messages = StubMessages([make_response(GOOD)])
+        client, _, _ = make_client(messages)
+        ctx = CONTEXT_CACHE_BOUNDARY.join(["BASE", "DOSSIER", "ADVOCATES", "EXTRA", "MORE"])
+        client.complete_json(
+            role="arbiter",
+            system="SYSTEM",
+            context=ctx,
+            instruction="INSTRUCTION",
+            schema=SCHEMA,
+            model_tier="arbiter",
+        )
+        blocks = messages.calls[0]["messages"][0]["content"]
+        # 3 cached segments + 1 uncached overflow + instruction = 5 blocks;
+        # 4 total breakpoints incl. system (the API maximum).
+        assert [b["text"] for b in blocks[:3]] == ["BASE", "DOSSIER", "ADVOCATES"]
+        assert all(b["cache_control"] == {"type": "ephemeral"} for b in blocks[:3])
+        assert "cache_control" not in blocks[3]
+        assert CONTEXT_CACHE_BOUNDARY in blocks[3]["text"]
+        assert blocks[4]["text"] == "INSTRUCTION"
 
     def test_submit_blocked_when_over_budget(self) -> None:
         messages = StubMessages([])

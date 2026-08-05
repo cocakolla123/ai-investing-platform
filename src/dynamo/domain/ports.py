@@ -23,6 +23,7 @@ from dynamo.domain.models.market import (
     PredictionMarketPrice,
     XbrlFact,
 )
+from dynamo.domain.models.pm import PMOrder
 from dynamo.domain.models.portfolio import Order
 
 
@@ -63,7 +64,9 @@ class NewsProvider(Protocol):
 
 
 class PredictionMarketProvider(Protocol):
-    """Read-only. No order endpoints exist anywhere in the platform."""
+    """Read-only market/price snapshots. Kalshi additionally has a gated
+    trading path via :class:`PMBroker` (ADR-0009); Polymarket stays
+    research-only with no execution hooks."""
 
     @property
     def venue(self) -> str: ...
@@ -94,6 +97,34 @@ class Broker(Protocol):
     def positions(self) -> list[dict[str, Any]]: ...
 
     def account(self) -> dict[str, Any]: ...
+
+
+class PMBroker(Protocol):
+    """Prediction-market broker port — Kalshi only (ADR-0009).
+
+    KalshiBroker (demo/prod behind the live gate) + MockPMBroker for tests.
+    Polymarket has NO implementation of this port, by design.
+    """
+
+    def submit(self, order: PMOrder) -> str: ...  # returns broker_order_id
+
+    def cancel(self, client_order_id: str) -> None: ...
+
+    def get_order(self, client_order_id: str) -> dict[str, Any]: ...
+
+    def open_orders(self) -> list[dict[str, Any]]: ...
+
+    def positions(self) -> list[dict[str, Any]]: ...
+
+    def balance(self) -> dict[str, Any]: ...
+
+
+# Segment boundary inside ResearchModel `context` strings. Implementations MAY
+# split on it to place prompt-cache breakpoints at stable prefix boundaries
+# (doc 03 section 3: stable -> volatile). Callers build contexts as growing
+# prefixes (base | dossier | advocates) so later calls re-read earlier segments
+# from cache. Plain-text safe: ASCII group separator, never in natural text.
+CONTEXT_CACHE_BOUNDARY = "\n\x1d\n"
 
 
 class ResearchModel(Protocol):

@@ -18,6 +18,7 @@ from typing import Any
 import anthropic
 
 from dynamo.config.settings import Settings
+from dynamo.domain.ports import CONTEXT_CACHE_BOUNDARY
 from dynamo.llm.cost_meter import CostMeter
 
 _TIERS = ("screen", "analyst", "arbiter")
@@ -100,28 +101,33 @@ class AnthropicClient:
         schema: dict[str, Any],
         max_tokens: int,
         structured: bool,
+        batch: bool = False,
     ) -> dict[str, Any]:
         if not structured:
             instruction = instruction + _FALLBACK_SUFFIX + json.dumps(schema, sort_keys=True)
+        # Batches run concurrently over long windows -> 1h TTL maximizes
+        # best-effort hits (batch-processing doc tip); sync path uses the 5m
+        # default. Batch + cache-read discounts stack (~95% off on hits).
+        cache: dict[str, str] = (
+            {"type": "ephemeral", "ttl": "1h"} if batch else {"type": "ephemeral"}
+        )
+        # Context arrives as stable->volatile segments split on the cache
+        # boundary (doc 03 section 3). Each of the first 3 segments gets its
+        # own breakpoint (4 total incl. system) so later calls sharing a
+        # prefix re-read it from cache; extra segments stay uncached.
+        segments = [s for s in context.split(CONTEXT_CACHE_BOUNDARY) if s]
+        content: list[dict[str, Any]] = []
+        for seg in segments[:3]:
+            content.append({"type": "text", "text": seg, "cache_control": dict(cache)})
+        overflow = CONTEXT_CACHE_BOUNDARY.join(segments[3:])
+        if overflow:
+            content.append({"type": "text", "text": overflow})
+        content.append({"type": "text", "text": instruction})
         params: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "system": [
-                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
-            ],
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": context,
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                        {"type": "text", "text": instruction},
-                    ],
-                }
-            ],
+            "system": [{"type": "text", "text": system, "cache_control": dict(cache)}],
+            "messages": [{"role": "user", "content": content}],
         }
         if structured:
             params["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
@@ -229,6 +235,7 @@ class AnthropicClient:
                 schema=req["schema"],
                 max_tokens=int(req.get("max_tokens", 4096)),
                 structured=structured,
+                batch=True,
             )
             custom_id = str(req["custom_id"])
             schemas[custom_id] = req["schema"]

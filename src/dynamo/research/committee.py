@@ -30,7 +30,7 @@ from dynamo.domain.models.research import (
     Side,
     Stance,
 )
-from dynamo.domain.ports import ResearchModel
+from dynamo.domain.ports import CONTEXT_CACHE_BOUNDARY, ResearchModel
 from dynamo.research.prompt_loader import LoadedPrompt
 
 DISAGREEMENT_VETO_THRESHOLD = 0.6
@@ -346,8 +346,10 @@ class CommitteeEngine:
 
 
 def advocate_context_for(context: str, dossier_payload: Mapping[str, Any]) -> str:
+    # CONTEXT_CACHE_BOUNDARY keeps the shared base context a byte-identical
+    # prefix segment, so bull/bear/arbiter re-read it from prompt cache.
     return (
-        f"{context}\n\n## Dossier analysis (JSON)\n"
+        f"{context}{CONTEXT_CACHE_BOUNDARY}## Dossier analysis (JSON)\n"
         f"{json.dumps(dict(dossier_payload), sort_keys=True, default=str)}"
     )
 
@@ -359,8 +361,7 @@ def arbiter_context_for(
     bear_payload: Mapping[str, Any],
     quant_score: QuantScore | None,
 ) -> str:
-    parts = [
-        advocate_context_for(context, dossier_payload),
+    tail = [
         "## Bull advocate brief (JSON)",
         json.dumps(dict(bull_payload), sort_keys=True, default=str),
         "## Bear advocate brief (JSON)",
@@ -370,4 +371,5 @@ def arbiter_context_for(
         if quant_score is not None
         else "null",
     ]
-    return "\n\n".join(parts)
+    prefix = advocate_context_for(context, dossier_payload)
+    return prefix + CONTEXT_CACHE_BOUNDARY + "\n\n".join(tail)
