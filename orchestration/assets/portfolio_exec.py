@@ -5,7 +5,7 @@ execution is gated: paper orders only with Alpaca keys AND DYNAMO_ENV=PAPER,
 and never with the kill switch engaged.
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, cast
 
 import pandas as pd
@@ -535,6 +535,51 @@ def reconciliation_job() -> None:
     reconcile_broker_state()
 
 
+def _pdt_filtered_specs(
+    context: OpExecutionContext, dynamo: DynamoResource, specs: list[Any], equity: float
+) -> list[Any]:
+    """PDT guard (ADR-0010): a same-day-entered name is never auto-exited when
+    the exit would trip the pattern day-trader rule under $25k equity — log +
+    alert instead, UNLESS it is a disaster stop."""
+    from dynamo.domain.models.risk import StopKind
+    from dynamo.risk.intraday import count_day_trades, pdt_exit_allowed
+
+    today = utcnow().date()
+    t = schema.trades
+    frame = _read_df(
+        dynamo,
+        select(t.c.symbol, t.c.side, t.c.filled_at).where(
+            t.c.filled_at >= datetime.combine(today - timedelta(days=7), time.min, tzinfo=UTC)
+        ),
+    )
+    fills: list[tuple[str, str, date]] = [
+        (str(r["symbol"]), str(r["side"]), _pydate(r["filled_at"]))
+        for r in frame.to_dict(orient="records")
+    ]
+    entered_today = {sym for sym, side, day in fills if side == "buy" and day == today}
+    day_trades = count_day_trades(fills)
+    repo = dynamo.market_repo()
+    allowed: list[Any] = []
+    for spec in specs:
+        decision = pdt_exit_allowed(
+            equity=equity,
+            day_trades_in_window=day_trades,
+            entered_today=spec.symbol in entered_today,
+            is_disaster_stop=spec.kind == StopKind.DISASTER,
+        )
+        if decision.allowed:
+            allowed.append(spec)
+        else:
+            message = (
+                f"stop exit for {spec.symbol} deferred: {decision.reason} "
+                f"(same-day entry, equity ${equity:,.0f}, "
+                f"{day_trades} day trades in window)"
+            )
+            context.log.warning("stops: %s", message)
+            repo.add_alert(severity="warn", name="pdt_stop_deferred", message=message)
+    return allowed
+
+
 @op
 def maintain_stops(context: OpExecutionContext, dynamo: DynamoResource) -> None:
     """Apply the risk engine's stop updates through the order state machine."""
@@ -554,6 +599,11 @@ def maintain_stops(context: OpExecutionContext, dynamo: DynamoResource) -> None:
     specs = list(risk.stop_updates)
     if not specs:
         context.log.info("stops: no stop updates in %s", verdict_id)
+        return
+    state = _portfolio_state(dynamo)
+    specs = _pdt_filtered_specs(context, dynamo, specs, state.equity if state else 0.0)
+    if not specs:
+        context.log.info("stops: all stop updates deferred by the PDT guard")
         return
     positions = {p.symbol: p for p in PositionRepository(dynamo.engine()).all_positions()}
     broker = _broker(dynamo)

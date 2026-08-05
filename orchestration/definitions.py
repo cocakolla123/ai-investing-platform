@@ -10,7 +10,9 @@ from __future__ import annotations
 from dagster import Definitions
 
 from orchestration.assets.ingestion import INGESTION_ASSETS, filings_poll_job
+from orchestration.assets.intraday import INTRADAY_JOBS
 from orchestration.assets.learning_ops import LEARNING_ASSETS, healthcheck_job
+from orchestration.assets.options_trading import OPTIONS_JOBS
 from orchestration.assets.pm_trading import PM_ASSETS, PM_JOBS
 from orchestration.assets.portfolio_exec import EXECUTION_JOBS, PORTFOLIO_ASSETS
 from orchestration.assets.research import COMMITTEE_JOBS, RESEARCH_ASSETS
@@ -36,6 +38,8 @@ defs = Definitions(
         *COMMITTEE_JOBS,
         *EXECUTION_JOBS,
         *PM_JOBS,
+        *OPTIONS_JOBS,
+        *INTRADAY_JOBS,
         *ALL_JOBS,
     ],
     schedules=ALL_SCHEDULES,

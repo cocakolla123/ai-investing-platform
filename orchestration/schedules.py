@@ -13,6 +13,9 @@
 | Kalshi PM trading (gated, demo-first) | 20:30 daily |
 | Kalshi PM resolution + calibration | 20:45 daily |
 | Kalshi PM reconciliation | every 15 min 09:30-16:00 market days |
+| Options trading (defined-risk, gated) | 00:45 daily |
+| Options reconciliation | every 15 min 09:30-16:00 market days |
+| Intraday same-day entries | every 15 min 09:30-16:00 market days |
 | Tier-2 detectors + triage (after data quality) | 22:30 market days |
 | Features -> scores -> signals -> regime -> selection | 23:00 market days |
 | Committee batch submission | 23:30 market days |
@@ -34,7 +37,12 @@ from dagster import (
 )
 
 from orchestration.assets.ingestion import filings_poll_job
+from orchestration.assets.intraday import intraday_entries_job
 from orchestration.assets.learning_ops import healthcheck_job
+from orchestration.assets.options_trading import (
+    options_reconciliation_job,
+    options_trading_job,
+)
 from orchestration.assets.pm_trading import pm_reconciliation_job, pm_trading_job
 from orchestration.assets.portfolio_exec import (
     paper_execution_job,
@@ -156,6 +164,26 @@ pm_reconciliation_schedule = ScheduleDefinition(
     job=pm_reconciliation_job,
     execution_timezone=TZ,
 )
+# Options sleeve (ADR-0010): trade nightly after target_portfolio (00:30),
+# reconcile + evaluate same-day entries on the 15-minute intraday loop.
+options_trading_schedule = ScheduleDefinition(
+    name="options_trading_schedule",
+    cron_schedule="45 0 * * *",
+    job=options_trading_job,
+    execution_timezone=TZ,
+)
+options_reconciliation_schedule = ScheduleDefinition(
+    name="options_reconciliation_schedule",
+    cron_schedule=f"*/15 9-16 * * {MARKET_DAYS}",
+    job=options_reconciliation_job,
+    execution_timezone=TZ,
+)
+intraday_entries_schedule = ScheduleDefinition(
+    name="intraday_entries_schedule",
+    cron_schedule=f"*/15 9-16 * * {MARKET_DAYS}",
+    job=intraday_entries_job,
+    execution_timezone=TZ,
+)
 macro_digest_schedule = ScheduleDefinition(
     name="macro_digest_schedule",
     cron_schedule="30 8 * * *",
@@ -257,6 +285,9 @@ ALL_SCHEDULES = [
     pm_trading_schedule,
     pm_resolution_schedule,
     pm_reconciliation_schedule,
+    options_trading_schedule,
+    options_reconciliation_schedule,
+    intraday_entries_schedule,
     filings_poll_schedule,
     macro_digest_schedule,
     tier2_schedule,

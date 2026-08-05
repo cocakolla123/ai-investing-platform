@@ -103,7 +103,7 @@ validation source.
 | Non-goal | Rationale / revisit condition |
 |---|---|
 | Intraday / high-frequency trading | No edge at personal scale; free data isn't tick-grade. Not revisited. |
-| Options, futures, crypto trading | Complexity + risk model rewrite. Revisit only after live equities run ≥ 1y cleanly. |
+| Futures, crypto trading | Complexity + risk model rewrite. Revisit only after live equities run ≥ 1y cleanly. Options are now *partially* in scope: a small defined-risk sleeve (long calls/puts, covered calls, cash-secured puts — ADR-0010) behind the same gates as equities, ≤ 5% premium at risk, unbounded-loss structures unrepresentable in code; spreads/multi-leg remain out until the ADR-0010 revisit criteria are met. |
 | Beating prediction markets systematically | Still a non-assumption. Kalshi is now *tradable* behind the same gates as equities (demo-first, ≤ 5% sleeve, evidence-gated — ADR-0009); Polymarket remains research-only with no execution hooks. The sleeve tests whether committee estimates carry edge; it does not presume they do. |
 | Multi-user / SaaS | Single-user by design; removes auth, tenancy, compliance surface. |
 | Kubernetes | Compose on one host; images stay 12-factor/K8s-compatible. Revisit only on real scale need. |

@@ -12,8 +12,77 @@ from dynamo.persistence import schema
 st.set_page_config(page_title="Dynamo — Positions", layout="wide")
 st.title("Positions")
 
+
+def _options_section() -> None:
+    """Options sleeve (ADR-0010): positions, premium at risk vs cap, expiries."""
+    from dynamo.config.settings import get_settings
+    from dynamo.domain.models.options import CONTRACT_MULTIPLIER, OptionStructure
+
+    st.subheader("Options (defined-risk sleeve)")
+    opts = safe_df(
+        select(schema.options_positions).order_by(
+            schema.options_positions.c.expiry, schema.options_positions.c.occ_symbol
+        )
+    )
+    if empty_note(opts, "No open option positions."):
+        return
+
+    def _risk(row: pd.Series) -> float:
+        structure = str(row["structure"])
+        if structure in (OptionStructure.LONG_CALL.value, OptionStructure.LONG_PUT.value):
+            return float(row["contracts"]) * float(row["avg_price"]) * CONTRACT_MULTIPLIER
+        if structure == OptionStructure.CASH_SECURED_PUT.value:
+            return float(row["contracts"]) * float(row["strike"]) * CONTRACT_MULTIPLIER
+        return 0.0  # covered call — share-covered
+
+    opts["premium_at_risk"] = opts.apply(_risk, axis=1)
+    opts["days_to_expiry"] = opts["expiry"].map(
+        lambda d: (pd.Timestamp(d).date() - pd.Timestamp.now().date()).days
+    )
+    settings = get_settings()
+    eq = schema.equity_curve
+    equity_df = safe_df(select(eq).order_by(eq.c.as_of.desc()).limit(1))
+    total_risk = float(opts["premium_at_risk"].sum())
+    if not equity_df.empty:
+        equity = float(equity_df.iloc[0]["equity"])
+        cap = settings.options_premium_at_risk_cap * equity
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Premium at risk", f"${total_risk:,.0f}")
+        col2.metric(
+            "Sleeve cap",
+            f"${cap:,.0f}",
+            f"{total_risk / cap:.0%} used" if cap > 0 else None,
+        )
+        col3.metric("Open contracts", int(opts["contracts"].sum()))
+    else:
+        st.metric("Premium at risk", f"${total_risk:,.0f} (no equity curve yet)")
+    st.dataframe(
+        opts[
+            [
+                "occ_symbol",
+                "underlying",
+                "structure",
+                "side",
+                "contracts",
+                "strike",
+                "avg_price",
+                "premium_at_risk",
+                "expiry",
+                "days_to_expiry",
+            ]
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+    soon = opts[opts["days_to_expiry"] <= 7]
+    if not soon.empty:
+        st.warning("Expiring within 7 days: " + ", ".join(soon["occ_symbol"]))
+
+
 positions = safe_df(select(schema.positions).order_by(schema.positions.c.symbol))
-if empty_note(positions, "No open positions — nothing has been bought yet."):
+if positions.empty:
+    st.info("No open positions — nothing has been bought yet.")
+    _options_section()
     st.stop()
 
 closes = latest_closes(list(positions["symbol"]))
@@ -84,3 +153,5 @@ if lots:
     st.dataframe(pd.DataFrame(lots), width="stretch", hide_index=True)
 else:
     st.info("No lot detail stored for this position.")
+
+_options_section()

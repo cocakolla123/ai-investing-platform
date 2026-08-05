@@ -264,6 +264,100 @@ pm_trades = Table(
     Column("filled_at", DateTime(timezone=True), nullable=False),
 )
 
+# --- Options trading — defined-risk sleeve (ADR-0010; migration 0003) ---
+# Mirrors orders/order_events/positions/trades; prices in dollars per share,
+# contracts are integers. Only the four defined-risk structures ever appear in
+# ``structure`` (enforced by the domain validators, not the database).
+
+options_orders = Table(
+    "options_orders",
+    metadata,
+    Column("client_order_id", Text, primary_key=True),
+    Column("broker_order_id", Text),
+    Column("decision_context_id", Text, nullable=False),
+    Column("occ_symbol", Text, nullable=False, index=True),
+    Column("underlying", Text, nullable=False, index=True),
+    # long_call | long_put | covered_call | cash_secured_put
+    Column("structure", Text, nullable=False),
+    Column("side", Text, nullable=False),  # buy | sell
+    Column("right", Text, nullable=False),  # call | put
+    Column("expiry", Date, nullable=False),
+    Column("strike", Float, nullable=False),
+    Column("contracts", Integer, nullable=False),
+    Column("limit_price", Float, nullable=False),
+    Column("state", Text, nullable=False, default="proposed"),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+options_order_events = Table(
+    "options_order_events",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("client_order_id", Text, nullable=False, index=True),
+    Column("from_state", Text),
+    Column("to_state", Text, nullable=False),
+    Column("reason", Text, nullable=False, default=""),
+    Column("payload", JSONB),
+    _ts(),
+)
+
+options_positions = Table(
+    "options_positions",
+    metadata,
+    Column("occ_symbol", Text, primary_key=True),
+    Column("underlying", Text, nullable=False, index=True),
+    Column("structure", Text, nullable=False),
+    Column("side", Text, nullable=False),
+    Column("right", Text, nullable=False),
+    Column("expiry", Date, nullable=False),
+    Column("strike", Float, nullable=False),
+    Column("contracts", Integer, nullable=False),
+    Column("avg_price", Float, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+options_trades = Table(
+    "options_trades",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("client_order_id", Text, index=True),  # null for expiry close-outs
+    Column("occ_symbol", Text, nullable=False, index=True),
+    Column("underlying", Text, nullable=False, index=True),
+    Column("side", Text, nullable=False),
+    Column("right", Text, nullable=False),
+    Column("contracts", Integer, nullable=False),
+    Column("price", Float, nullable=False),
+    Column("fees", Float, nullable=False, default=0.0),
+    Column("kind", Text, nullable=False, default="fill"),  # fill | expiry
+    Column("filled_at", DateTime(timezone=True), nullable=False),
+)
+
+# Minimal chain persistence: only rows near the selection targets (spot ±20%,
+# target expiries) to keep volume small.
+options_chain_snapshots = Table(
+    "options_chain_snapshots",
+    metadata,
+    Column("underlying", Text, primary_key=True),
+    Column("as_of", DateTime(timezone=True), primary_key=True),
+    Column("expiry", Date, primary_key=True),
+    Column("strike", Float, primary_key=True),
+    Column("cp", Text, primary_key=True),  # call | put
+    Column("bid", Float),
+    Column("ask", Float),
+    Column("oi", Integer),
+    Column("iv", Float),
+    Column("delta", Float),
+)
+
+options_iv_history = Table(
+    "options_iv_history",
+    metadata,
+    Column("underlying", Text, primary_key=True),
+    Column("as_of", Date, primary_key=True),
+    Column("atm_iv", Float, nullable=False),
+)
+
 # --- Surveillance & quality (doc 02 §2, §6) ---
 
 surveillance_flags = Table(

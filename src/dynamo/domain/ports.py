@@ -23,6 +23,7 @@ from dynamo.domain.models.market import (
     PredictionMarketPrice,
     XbrlFact,
 )
+from dynamo.domain.models.options import OptionOrder
 from dynamo.domain.models.pm import PMOrder
 from dynamo.domain.models.portfolio import Order
 
@@ -117,6 +118,25 @@ class PMBroker(Protocol):
     def positions(self) -> list[dict[str, Any]]: ...
 
     def balance(self) -> dict[str, Any]: ...
+
+
+class OptionsBroker(Protocol):
+    """Options broker port — defined-risk sleeve (ADR-0010).
+
+    AlpacaOptionsBroker (paper first, live only behind the doc 09 §7 gate) +
+    MockOptionsBroker for tests. Limit orders only — the port has no market
+    order surface, by design.
+    """
+
+    def submit(self, order: OptionOrder) -> str: ...  # returns broker_order_id
+
+    def cancel(self, client_order_id: str) -> None: ...
+
+    def get_order(self, client_order_id: str) -> dict[str, Any]: ...
+
+    def open_orders(self) -> list[dict[str, Any]]: ...
+
+    def positions(self) -> list[dict[str, Any]]: ...  # options positions only
 
 
 # Segment boundary inside ResearchModel `context` strings. Implementations MAY

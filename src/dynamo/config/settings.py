@@ -81,6 +81,23 @@ class Settings(BaseSettings):
     pm_kelly_fraction_cap: float = 0.25  # fractional Kelly, same cap as equities
     pm_max_open_markets: int = 10
 
+    # --- Options sleeve (ADR-0010; defined-risk only, paper first) ---
+    # Hard caps enforced in code (risk/options_sizing.py + domain validators):
+    # the sleeve trades ONLY long calls, long puts, covered calls, and
+    # cash-secured puts — unbounded-loss structures are unrepresentable.
+    options_premium_at_risk_cap: float = 0.05  # long premium + assignment obligations
+    options_per_position_cap: float = 0.01  # per-position premium at risk, of equity
+    options_min_dte: int = 21
+    options_max_dte: int = 90
+    options_min_open_interest: int = 100
+    options_max_spread_pct: float = 0.10  # (ask - bid) / mid ceiling
+    options_min_conviction: float = 0.7
+    options_iv_rank_max: float = 0.8  # never buy premium when IV rank is extreme
+    options_max_open_positions: int = 8
+
+    # --- Same-day tactical entries (15-min intraday loop) ---
+    intraday_entry_cap_per_day: int = 3
+
     # --- Social awareness (Reddit + StockTwits; detector input ONLY) ---
     # Social text is untrusted (pump-and-dump surface): it feeds the Tier-2
     # social_burst detector as an awareness trigger and never moves a score.
