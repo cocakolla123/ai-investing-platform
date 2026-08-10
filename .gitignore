@@ -26,3 +26,6 @@ models/artifacts/
 
 # Dagster
 .dagster_home/
+
+# Private keys (Kalshi etc.) — never committed
+secrets/
