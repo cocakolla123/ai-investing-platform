@@ -17,6 +17,7 @@ from dynamo.domain.models.pm import PMSide
 from dynamo.risk.pm_sizing import (
     SKIP_AT_PER_MARKET_CAP,
     SKIP_CONFIDENCE_BELOW_FLOOR,
+    SKIP_CROSS_VENUE_DISAGREEMENT,
     SKIP_EDGE_BELOW_FLOOR,
     SKIP_INVALID_EQUITY,
     SKIP_MARKET_CLOSED,
@@ -33,7 +34,8 @@ EQUITY = 100_000.0
 PARAMS = PMSizingParams()
 
 
-def run(views, prices=None, markets=None, equity=EQUITY, positions=(), params=None):
+def run(views, prices=None, markets=None, equity=EQUITY, positions=(), params=None,
+        cross_venue=None):
     prices = (
         prices
         if prices is not None
@@ -43,7 +45,8 @@ def run(views, prices=None, markets=None, equity=EQUITY, positions=(), params=No
         markets if markets is not None else {v.market_id: make_market(v.market_id) for v in views}
     )
     return select_and_size_pm_trades(
-        views, prices, markets, equity, list(positions), NOW, params or PARAMS
+        views, prices, markets, equity, list(positions), NOW, params or PARAMS,
+        cross_venue=cross_venue,
     )
 
 
@@ -165,6 +168,70 @@ class TestGreedyAllocation:
         assert sum(1 for _, r in result.skipped if r == "max_open_markets") == 2
 
 
+class TestCrossVenueCorroboration:
+    """OddsPipe corroboration gate (ADR-0009 addendum): purely additive."""
+
+    def test_agreement_unchanged_plus_rationale_note(self) -> None:
+        # est 0.60 vs kalshi 0.43 (we say YES); polymarket 0.55 also above
+        # kalshi -> corroborated: identical sizing, annotated rationale.
+        view = make_view(estimated=0.60, implied=0.43)
+        base = run([view])
+        result = run([view], cross_venue={view.market_id: 0.55})
+        assert len(result.decisions) == 1
+        d, b = result.decisions[0], base.decisions[0]
+        assert (d.side, d.contracts, d.price_cents, d.kelly_fraction) == (
+            b.side, b.contracts, b.price_cents, b.kelly_fraction,
+        )
+        assert "cross-venue corroborated (polymarket yes 0.55)" in d.rationale
+        assert "corroborated" not in b.rationale
+
+    def test_disagreement_beyond_gap_skips(self) -> None:
+        # We say up (0.60 > 0.43) but polymarket prices DOWN (0.30 < 0.43)
+        # and |0.30 - 0.60| = 0.30 > 0.10 -> both venues against us: stand down.
+        view = make_view(estimated=0.60, implied=0.43)
+        result = run([view], cross_venue={view.market_id: 0.30})
+        assert result.decisions == ()
+        assert (view.market_id, SKIP_CROSS_VENUE_DISAGREEMENT) in result.skipped
+
+    def test_disagreement_beyond_gap_skips_no_side(self) -> None:
+        # NO-side candidate (est 0.30 < kalshi 0.43); polymarket above kalshi
+        # disagrees, and |0.60 - 0.30| > 0.10 -> skipped.
+        view = make_view(estimated=0.30, implied=0.43)
+        result = run([view], cross_venue={view.market_id: 0.60})
+        assert result.decisions == ()
+        assert (view.market_id, SKIP_CROSS_VENUE_DISAGREEMENT) in result.skipped
+
+    def test_disagreement_within_gap_unchanged(self) -> None:
+        # est 0.60 vs kalshi 0.51 (edge 0.09); polymarket 0.505 disagrees but
+        # |0.505 - 0.60| = 0.095 <= 0.10 -> unchanged, no note.
+        view = make_view(estimated=0.60, implied=0.51)
+        base = run([view])
+        result = run([view], cross_venue={view.market_id: 0.505})
+        assert result.decisions == base.decisions
+
+    def test_polymarket_equal_to_kalshi_is_neutral(self) -> None:
+        view = make_view(estimated=0.60, implied=0.43)
+        base = run([view])
+        result = run([view], cross_venue={view.market_id: 0.43})
+        assert result.decisions == base.decisions
+        assert "corroborated" not in result.decisions[0].rationale
+
+    def test_missing_match_and_nan_unchanged(self) -> None:
+        view = make_view(estimated=0.60, implied=0.43)
+        base = run([view])
+        for mapping in (None, {}, {"OTHER": 0.10}, {view.market_id: float("nan")},
+                        {view.market_id: float("inf")}, {view.market_id: 1.5}):
+            assert run([view], cross_venue=mapping).decisions == base.decisions
+
+    def test_deterministic_under_reordering_with_mapping(self) -> None:
+        views = [make_view(f"M{i}", estimated=0.60, implied=0.43) for i in range(6)]
+        mapping = {"M0": 0.55, "M1": 0.30, "M3": 0.50, "M5": float("nan")}
+        a = run(views, cross_venue=mapping)
+        b = run(list(reversed(views)), cross_venue=dict(reversed(mapping.items())))
+        assert a == b
+        assert ("M1", SKIP_CROSS_VENUE_DISAGREEMENT) in a.skipped
+
+
 # --- hypothesis invariants -------------------------------------------------
 
 probs = st.floats(min_value=0.0, max_value=1.0)
@@ -270,5 +337,62 @@ def test_invariants(data) -> None:
     # Deterministic under input reordering.
     again = select_and_size_pm_trades(
         list(reversed(views)), prices, markets, equity, positions, NOW, PARAMS
+    )
+    assert again.decisions == result.decisions
+
+    # cross_venue=None is exactly the legacy behaviour.
+    with_none = select_and_size_pm_trades(
+        views, prices, markets, equity, positions, NOW, PARAMS, cross_venue=None
+    )
+    assert with_none == result
+
+
+@given(
+    scenario(),
+    st.dictionaries(
+        st.sampled_from([f"M{i}" for i in range(8)] + ["UNRELATED"]),
+        wild_probs,
+        max_size=9,
+    ),
+)
+@settings(max_examples=100, deadline=None)
+def test_invariants_with_cross_venue(data, cross_venue) -> None:
+    """An arbitrary (even adversarial) cross_venue mapping never violates caps."""
+    views, prices, markets, equity, positions = data
+    result = select_and_size_pm_trades(
+        views, prices, markets, equity, positions, NOW, PARAMS, cross_venue=cross_venue
+    )
+
+    exposure = {p.market_id: p.exposure_dollars for p in positions}
+    new_total = 0.0
+    for d in result.decisions:
+        assert isinstance(d.contracts, int) and d.contracts >= 1
+        assert 1 <= d.price_cents <= 99
+        assert d.venue == "kalshi"
+        assert abs(d.edge) >= PARAMS.min_edge
+        dollars = d.contracts * d.price_cents / 100.0
+        new_total += dollars
+        assert exposure.get(d.market_id, 0.0) + dollars <= (
+            PARAMS.per_market_cap * equity + 1e-6
+        )
+    if result.decisions:
+        assert sum(exposure.values()) + new_total <= PARAMS.sleeve_cap * equity + 1e-6
+
+    # The gate only ever REMOVES candidates before allocation; every skip it
+    # adds carries the dedicated reason.
+    baseline = select_and_size_pm_trades(views, prices, markets, equity, positions, NOW, PARAMS)
+    vetoed = {m for m, r in result.skipped if r == SKIP_CROSS_VENUE_DISAGREEMENT}
+    assert vetoed <= {v.market_id for v in views}
+    if not vetoed:
+        # Identical sizing (rationale may gain a corroboration note only).
+        sized = [(d.market_id, d.side, d.contracts, d.price_cents) for d in result.decisions]
+        assert sized == [
+            (d.market_id, d.side, d.contracts, d.price_cents) for d in baseline.decisions
+        ]
+
+    # Deterministic under input reordering with the mapping applied.
+    again = select_and_size_pm_trades(
+        list(reversed(views)), prices, markets, equity, positions, NOW, PARAMS,
+        cross_venue=dict(cross_venue),
     )
     assert again.decisions == result.decisions

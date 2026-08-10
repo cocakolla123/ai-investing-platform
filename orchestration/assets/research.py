@@ -510,16 +510,37 @@ def _macro_context(dynamo: DynamoResource, as_of: date) -> str:
     return "\n".join(sorted(lines))
 
 
+def _cross_venue_digest(dynamo: DynamoResource, as_of: date) -> str:
+    """Top-5 OddsPipe cross-venue divergences as context lines ('' when none)."""
+    cv = schema.pm_cross_venue_spreads
+    frame = _read_df(dynamo, select(cv).where(cv.c.ts >= _since(as_of, 3)))
+    if frame.empty:
+        return ""
+    frame = frame.sort_values("ts").drop_duplicates(subset=["kalshi_market_id"], keep="last")
+    frame = frame.assign(_abs_diff=frame["yes_diff"].abs()).sort_values(
+        "_abs_diff", ascending=False
+    )
+    lines = ["Cross-venue divergences (OddsPipe; same question on both venues):"]
+    for row in frame.head(5).to_dict(orient="records"):
+        lines.append(
+            f"- {row['question']}: kalshi yes {float(row['kalshi_yes']):.0%} vs "
+            f"polymarket yes {float(row['polymarket_yes']):.0%} "
+            f"(diff {float(row['yes_diff']):+.2f})"
+        )
+    return "\n".join(lines)
+
+
 def _pm_digest(dynamo: DynamoResource, as_of: date) -> tuple[str, list[tuple[Any, float]]]:
     from dynamo.domain.models.market import PredictionMarket
 
     pm, pp = schema.prediction_markets, schema.prediction_market_prices
+    cross_venue = _cross_venue_digest(dynamo, as_of)
     prices = _read_df(
         dynamo,
         select(pp).where(pp.c.ts >= _since(as_of, 3), pp.c.trusted.is_(True)),
     )
     if prices.empty:
-        return "", []
+        return cross_venue, []
     prices = (
         prices.sort_values("ts")
         .drop_duplicates(subset=["venue", "market_id"], keep="last")
@@ -534,7 +555,10 @@ def _pm_digest(dynamo: DynamoResource, as_of: date) -> tuple[str, list[tuple[Any
         implied = float(row["implied_prob"])
         lines.append(f"- {market.question}: implied {implied:.0%} ({market.venue})")
         tracked.append((market, implied))
-    return "\n".join(lines), tracked
+    text = "\n".join(lines)
+    if cross_venue:
+        text = f"{text}\n\n{cross_venue}" if text else cross_venue
+    return text, tracked
 
 
 @dagster_asset(group_name=RESEARCH_GROUP)

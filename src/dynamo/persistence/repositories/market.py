@@ -41,6 +41,7 @@ from dynamo.domain.models.market import (
     UniverseMembership,
     XbrlFact,
 )
+from dynamo.domain.models.pm import CrossVenueSpread
 from dynamo.persistence import schema
 
 log = structlog.get_logger(__name__)
@@ -284,6 +285,22 @@ class MarketDataRepository:
             for p in prices
         ]
         return self.upsert_rows(schema.prediction_market_prices, rows)
+
+    def upsert_cross_venue_spreads(self, spreads: Iterable[CrossVenueSpread]) -> int:
+        """OddsPipe matched pairs (enrichment); keyed by (kalshi_market_id, ts)."""
+        rows = [
+            {
+                "question": s.question,
+                "kalshi_market_id": s.kalshi_market_id,
+                "polymarket_id": s.polymarket_id,
+                "kalshi_yes": s.kalshi_yes,
+                "polymarket_yes": s.polymarket_yes,
+                "yes_diff": s.yes_diff,
+                "ts": s.as_of,
+            }
+            for s in spreads
+        ]
+        return self.upsert_rows(schema.pm_cross_venue_spreads, rows)
 
     def insert_surveillance_flags(self, flags: Iterable[SurveillanceFlag]) -> int:
         """Append-only (surrogate id); nightly runs write one batch per date."""

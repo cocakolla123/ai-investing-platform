@@ -144,6 +144,29 @@ def prediction_market_snapshot(
     return MaterializeResult(metadata={"markets": markets_total, "prices": prices_total})
 
 
+@dagster_asset(
+    group_name=INGESTION_GROUP,
+    partitions_def=daily_partitions,
+    deps=["prediction_market_snapshot"],
+)
+def oddspipe_spreads(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
+    """OddsPipe cross-venue matched pairs (enrichment; ADR-0009 addendum).
+
+    Runs in the 20:00 ET snapshot chain, after the primary Kalshi/Polymarket
+    snapshot. No key or API down -> skip with a log line; nothing breaks.
+    """
+    provider = dynamo.oddspipe()
+    if provider is None:
+        context.log.warning("oddspipe_spreads: ODDSPIPE_API_KEY unset — skipping")
+        return _skipped("oddspipe not configured")
+    spreads = provider.spreads()
+    if not spreads:
+        context.log.info("oddspipe_spreads: no matched pairs returned")
+        return MaterializeResult(metadata={"rows": 0, "pairs": 0})
+    rows = dynamo.market_repo().upsert_cross_venue_spreads(spreads)
+    return MaterializeResult(metadata={"rows": rows, "pairs": len(spreads)})
+
+
 # --- EDGAR 10-minute poller: schedule-driven op job, not an asset (doc 02 §4) ---
 
 
@@ -172,4 +195,5 @@ INGESTION_ASSETS = [
     macro_series,
     earnings_calendar,
     prediction_market_snapshot,
+    oddspipe_spreads,
 ]

@@ -54,3 +54,27 @@ committee's probability estimates carry real edge, with calibration
   custody solution the owner accepts, and written confirmation of US-person eligibility.
 - **Sleeve growth:** any cap increase requires a promotion-style evidence bundle, never a
   config-only edit.
+
+## Addendum (2026-08-09) — OddsPipe cross-venue enrichment
+OddsPipe (https://oddspipe.com, free tier, `X-API-Key` auth) is wired in as an **enrichment
+source only** — the direct Kalshi and Polymarket adapters stay primary and nothing depends on
+OddsPipe being available:
+
+- **What it adds.** `/v1/spreads` supplies matched cross-venue pairs (the same question priced
+  on both Kalshi and Polymarket, with both YES prices and the spread), persisted to
+  `pm_cross_venue_spreads` (migration 0005) by the `oddspipe_spreads` asset in the 20:00 ET
+  snapshot chain. `/v1/markets/{id}/candlesticks` (1m/5m/1h/1d) is available for optional
+  historical backfill. The macro/PM research context gains a short "Cross-venue divergences"
+  section (top 5 by |YES spread|), and the Prediction Markets dashboard page shows the top 10.
+- **Corroboration gate** (`risk/pm_sizing.py`, pure and additive): `select_and_size_pm_trades`
+  accepts an optional `cross_venue` mapping (Kalshi market_id → matched Polymarket YES price),
+  passed IN by orchestration — the risk module never fetches. When a match exists for a
+  candidate: if the Polymarket price agrees with our estimate's direction versus the Kalshi
+  price, the trade is unchanged and its rationale notes the corroboration; if it disagrees AND
+  `|polymarket − estimated| > pm_cross_venue_veto_gap` (default 0.10), the trade is skipped
+  with reason `cross_venue_disagreement` — both venues pricing against our estimate means
+  stand down. Missing, unmatched, or non-finite entries change nothing (NaN-safe,
+  deterministic; all existing caps and floors are untouched).
+- **Graceful degradation.** No `ODDSPIPE_API_KEY`, API down, or malformed payloads each
+  produce one log line and an empty result: the snapshot chain, the sleeve, and the research
+  context behave exactly as before OddsPipe existed.

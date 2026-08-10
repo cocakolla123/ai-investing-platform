@@ -204,6 +204,20 @@ prediction_market_prices = Table(
     Column("trusted", Boolean, nullable=False, default=False),
 )
 
+# Cross-venue matched pairs from OddsPipe (ADR-0009 addendum; migration 0005).
+# Enrichment only: corroboration input for the Kalshi sleeve + research context.
+pm_cross_venue_spreads = Table(
+    "pm_cross_venue_spreads",
+    metadata,
+    Column("question", Text, nullable=False),
+    Column("kalshi_market_id", Text, primary_key=True),
+    Column("polymarket_id", Text, nullable=False),
+    Column("kalshi_yes", Float, nullable=False),
+    Column("polymarket_yes", Float, nullable=False),
+    Column("yes_diff", Float, nullable=False),
+    Column("ts", DateTime(timezone=True), primary_key=True),
+)
+
 # --- Prediction-market trading — Kalshi sleeve (ADR-0009; migration 0002) ---
 # Mirrors orders/order_events/positions/trades; prices in integer-ish cents,
 # contracts are integers. Polymarket has NO rows here — research only.

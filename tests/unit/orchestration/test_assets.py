@@ -6,12 +6,13 @@ no SQL engine is ever built; bars/universe come from the FakeRepo.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import orchestration.assets.research as research_mod
 import pandas as pd
 import pytest
-from dagster import materialize
+from dagster import MaterializeResult, build_asset_context, materialize
+from orchestration.assets.ingestion import oddspipe_spreads
 from orchestration.assets.research import data_quality, tier2_scan
 
 from tests.unit.orchestration.conftest import FakeDynamo, FakeRepo
@@ -50,3 +51,32 @@ def test_tier2_scan_skips_triage_without_api_key(
     assert t2 and int(t2[0].metadata["triaged_symbols"].value) == 0  # type: ignore[union-attr]
     # no agent_opinions written when the research model is unavailable
     assert all(name != "agent_opinions" for name, _ in fake_repo.inserted_rows)
+
+
+def test_oddspipe_spreads_skips_without_key(fake_dynamo: FakeDynamo) -> None:
+    """No ODDSPIPE_API_KEY -> graceful skip metadata, nothing persisted."""
+    ctx = build_asset_context(partition_key="2026-08-07")
+    result = cast(MaterializeResult, oddspipe_spreads(ctx, fake_dynamo))
+    assert result.metadata is not None and result.metadata["skipped"] == "oddspipe not configured"
+
+
+def test_oddspipe_spreads_persists_pairs(fake_dynamo: FakeDynamo, fake_repo: FakeRepo) -> None:
+    from datetime import UTC, datetime
+
+    from dynamo.domain.models.pm import CrossVenueSpread
+
+    fake_dynamo.st.oddspipe_spreads = [
+        CrossVenueSpread(
+            question="Fed funds above 4.00% in December?",
+            kalshi_market_id="FED-26DEC-T4.00",
+            kalshi_yes=0.47,
+            polymarket_id="514729",
+            polymarket_yes=0.41,
+            yes_diff=0.06,
+            as_of=datetime(2026, 8, 7, tzinfo=UTC),
+        )
+    ]
+    ctx = build_asset_context(partition_key="2026-08-07")
+    result = cast(MaterializeResult, oddspipe_spreads(ctx, fake_dynamo))
+    assert result.metadata is not None and result.metadata["pairs"] == 1
+    assert ("pm_cross_venue_spreads", fake_dynamo.st.oddspipe_spreads) in fake_repo.inserted_rows

@@ -9,7 +9,7 @@
 | Macro (FRED) | 08:00 daily |
 | Macro digest (Sonnet) | 08:30 daily |
 | Earnings calendar | 07:00 daily |
-| Prediction-market snapshot | 20:00 daily |
+| Prediction-market snapshot (+ OddsPipe spreads) | 20:00 daily |
 | Kalshi PM trading (gated, demo-first) | 20:30 daily |
 | Kalshi PM resolution + calibration | 20:45 daily |
 | Kalshi PM reconciliation | every 15 min 09:30-16:00 market days |
@@ -76,7 +76,8 @@ earnings_calendar_job = define_asset_job(
 )
 prediction_market_job = define_asset_job(
     "prediction_market_job",
-    selection=AssetSelection.assets("prediction_market_snapshot"),
+    # OddsPipe spreads run in the same 20:00 chain, after the primary snapshot.
+    selection=AssetSelection.assets("prediction_market_snapshot", "oddspipe_spreads"),
 )
 pm_resolution_job = define_asset_job(
     "pm_resolution_job", selection=AssetSelection.assets("pm_resolution")

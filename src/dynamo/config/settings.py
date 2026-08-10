@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     pm_min_volume_usd: float = 25_000.0
     pm_max_spread: float = 0.03
 
+    # --- OddsPipe cross-venue enrichment (ADR-0009 addendum; free tier) ---
+    # Enrichment ONLY: the direct Kalshi/Polymarket adapters stay primary.
+    # No key -> the OddsPipe adapter skips gracefully and nothing changes.
+    oddspipe_api_key: str = Field(default="", alias="ODDSPIPE_API_KEY")
+    oddspipe_min_spread: float = 0.03  # minimum YES spread fetched from /v1/spreads
+    pm_cross_venue_veto_gap: float = 0.10  # |polymarket - estimated| veto threshold
+
     # --- Kalshi trading sleeve (ADR-0009; demo first, prod only behind the gate) ---
     # Base URLs exclude the /trade-api/v2 prefix (the adapters append it).
     kalshi_demo_base_url: str = Field(

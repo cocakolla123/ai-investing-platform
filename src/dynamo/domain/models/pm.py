@@ -90,6 +90,23 @@ class PMTradeDecision(Frozen):
     view_ref: str  # "{venue}:{market_id}:{as_of}"
 
 
+class CrossVenueSpread(Frozen):
+    """One matched Kalshi/Polymarket pair from a cross-venue aggregator.
+
+    Enrichment only (ADR-0009 addendum): the pair corroborates — or vetoes —
+    a Kalshi sleeve candidate in :mod:`dynamo.risk.pm_sizing`; it never sizes
+    a trade by itself. Prices are YES probabilities in [0, 1].
+    """
+
+    question: str
+    kalshi_market_id: str
+    kalshi_yes: float = Field(ge=0.0, le=1.0)
+    polymarket_id: str
+    polymarket_yes: float = Field(ge=0.0, le=1.0)
+    yes_diff: float  # kalshi_yes - polymarket_yes as reported (sign preserved)
+    as_of: datetime
+
+
 def settlement_pnl_cents(
     side: PMSide, contracts: int, avg_price_cents: float, resolved_yes: bool
 ) -> float:

@@ -18,6 +18,13 @@ Rules, in order:
    markets held.
 4. Contracts = floor(dollars / price-per-contract); fewer than one contract
    means no trade.
+
+Cross-venue corroboration (ADR-0009 addendum, additive): when a matched
+Polymarket YES price is supplied via ``cross_venue`` (a plain mapping passed
+IN by the caller — this module never fetches anything), a candidate whose
+estimate the other venue *agrees* with is annotated as corroborated; one it
+*disagrees* with beyond ``cross_venue_veto_gap`` (both venues against us) is
+skipped fail-closed. Missing/NaN entries change nothing.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ SKIP_BELOW_ONE_CONTRACT = "below_one_contract"
 SKIP_MAX_OPEN_MARKETS = "max_open_markets"
 SKIP_SLEEVE_CAP_EXHAUSTED = "sleeve_cap_exhausted"
 SKIP_INVALID_EQUITY = "invalid_equity"
+SKIP_CROSS_VENUE_DISAGREEMENT = "cross_venue_disagreement"
 
 
 @dataclass(frozen=True)
@@ -58,6 +66,7 @@ class PMSizingParams:
     max_days_to_resolution: int = 90
     kelly_fraction_cap: float = 0.25
     max_open_markets: int = 10
+    cross_venue_veto_gap: float = 0.10  # |polymarket - estimated| veto threshold
 
 
 @dataclass(frozen=True)
@@ -96,6 +105,7 @@ class _Candidate:
     stake_fraction: float  # capped fractional Kelly, as fraction of equity
     dollars: float  # after the per-market cap
     days_to_resolution: int
+    corroboration: str | None = None  # cross-venue agreement note, if any
 
 
 def _eligible(
@@ -106,6 +116,7 @@ def _eligible(
     exposure_by_market: Mapping[str, float],
     now: datetime,
     params: PMSizingParams,
+    cross_venue: Mapping[str, float] | None,
 ) -> _Candidate | str:
     """One market through the eligibility + per-market sizing rules.
 
@@ -139,6 +150,20 @@ def _eligible(
     if not 0.0 <= confidence <= 1.0 or confidence < params.min_confidence:
         return SKIP_CONFIDENCE_BELOW_FLOOR
 
+    # Cross-venue corroboration (additive; module docstring). ``polymarket``
+    # is the matched venue's YES price for the SAME question. Agreement with
+    # our direction vs the Kalshi price -> note; disagreement beyond the veto
+    # gap (both venues against our estimate) -> stand down. Anything missing,
+    # non-finite, or out of range changes nothing.
+    corroboration: str | None = None
+    polymarket = None if cross_venue is None else cross_venue.get(view.market_id)
+    if polymarket is not None and _finite(polymarket) and 0.0 <= polymarket <= 1.0:
+        ours, theirs = edge, polymarket - p
+        if ours * theirs > 0.0:
+            corroboration = f"cross-venue corroborated (polymarket yes {polymarket:.2f})"
+        elif theirs != 0.0 and abs(polymarket - q) > params.cross_venue_veto_gap:
+            return SKIP_CROSS_VENUE_DISAGREEMENT
+
     side = PMSide.YES if edge > 0.0 else PMSide.NO
     full_kelly = kelly_fraction(q, p, side)
     if full_kelly <= 0.0:
@@ -166,6 +191,7 @@ def _eligible(
         stake_fraction=stake_fraction,
         dollars=dollars,
         days_to_resolution=days,
+        corroboration=corroboration,
     )
 
 
@@ -186,6 +212,8 @@ def _decision(candidate: _Candidate, contracts: int) -> PMTradeDecision:
         f"capped to ${contracts * candidate.price_cents / 100.0:.2f} "
         f"by the per-market and sleeve caps"
     )
+    if candidate.corroboration is not None:
+        rationale += f"; {candidate.corroboration}"
     return PMTradeDecision(
         venue=view.venue,
         market_id=view.market_id,
@@ -210,6 +238,7 @@ def select_and_size_pm_trades(
     open_positions: Sequence[PMPosition],
     now: datetime,
     params: PMSizingParams | None = None,
+    cross_venue: Mapping[str, float] | None = None,
 ) -> PMSizingResult:
     """Filter, size, and greedily allocate the Kalshi sleeve (module docstring).
 
@@ -217,6 +246,10 @@ def select_and_size_pm_trades(
     ``market_id`` ascending. The sleeve total (existing exposure + new orders)
     never exceeds ``sleeve_cap * equity``; no market exceeds
     ``per_market_cap * equity``; fewer than one affordable contract → no trade.
+
+    ``cross_venue`` optionally maps a Kalshi market_id to the matched
+    Polymarket YES price (corroboration input, passed in by the caller);
+    ``None`` or a missing entry leaves behaviour exactly unchanged.
     """
     params = params if params is not None else PMSizingParams()
     if not _finite(equity) or equity <= 0.0:
@@ -236,7 +269,9 @@ def select_and_size_pm_trades(
         if view.market_id in seen:  # one decision per market — first view wins
             continue
         seen.add(view.market_id)
-        outcome = _eligible(view, prices, markets, equity, exposure_by_market, now, params)
+        outcome = _eligible(
+            view, prices, markets, equity, exposure_by_market, now, params, cross_venue
+        )
         if isinstance(outcome, str):
             skipped.append((view.market_id, outcome))
         else:

@@ -8,6 +8,7 @@ authority over what trades; every order carries a hash-chained DecisionContext.
 Polymarket has NO execution wiring here or anywhere.
 """
 
+import math
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -161,6 +162,28 @@ def _latest_pm_frames(
     return views, prices, markets
 
 
+def _latest_cross_venue(dynamo: DynamoResource) -> dict[str, float]:
+    """Latest OddsPipe Polymarket YES price per kalshi_market_id ({} when none).
+
+    Corroboration input for select_and_size_pm_trades (ADR-0009 addendum);
+    an empty table — no OddsPipe key, API down — simply yields {}.
+    """
+    s = schema.pm_cross_venue_spreads
+    frame = _read_df(dynamo, select(s).order_by(s.c.ts.desc()))
+    if frame.empty:
+        return {}
+    frame = frame.drop_duplicates(subset=["kalshi_market_id"], keep="first")
+    mapping: dict[str, float] = {}
+    for row in frame.to_dict(orient="records"):
+        raw = row.get("polymarket_yes")
+        if raw is None:
+            continue
+        value = float(raw)
+        if math.isfinite(value):
+            mapping[str(row["kalshi_market_id"])] = value
+    return mapping
+
+
 def _apply_new_fills(dynamo: DynamoResource, manager: Any, markets: dict[str, Any]) -> int:
     """Record fills discovered by sync_orders into pm_positions."""
     from dynamo.persistence.repositories.pm import PMPositionRepository
@@ -208,6 +231,9 @@ def pm_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) -> No
         context.log.warning("pm_trading: no portfolio state — skipping")
         return
     open_positions = PMPositionRepository(dynamo.engine()).open_positions()
+    cross_venue = _latest_cross_venue(dynamo)
+    if cross_venue:
+        context.log.info("pm_trading: %d cross-venue matches (OddsPipe)", len(cross_venue))
 
     result = select_and_size_pm_trades(
         list(views.values()),
@@ -224,7 +250,9 @@ def pm_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) -> No
             max_days_to_resolution=settings.pm_max_days_to_resolution,
             kelly_fraction_cap=settings.pm_kelly_fraction_cap,
             max_open_markets=settings.pm_max_open_markets,
+            cross_venue_veto_gap=settings.pm_cross_venue_veto_gap,
         ),
+        cross_venue=cross_venue or None,
     )
     for market_id, reason in result.skipped:
         context.log.info("pm_trading: skipped %s (%s)", market_id, reason)

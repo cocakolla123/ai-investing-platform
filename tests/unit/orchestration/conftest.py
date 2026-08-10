@@ -86,6 +86,11 @@ class FakeRepo:
     def upsert_rows(self, table: Any, rows: Any) -> int:
         return self.insert_rows(table, rows)
 
+    def upsert_cross_venue_spreads(self, spreads: Any) -> int:
+        spreads = list(spreads)
+        self.inserted_rows.append(("pm_cross_venue_spreads", spreads))
+        return len(spreads)
+
     def latest_quant_scores(self, symbols: Any = None) -> pd.DataFrame:
         return pd.DataFrame()
 
@@ -110,6 +115,7 @@ class FakeState:
     expired: list[str] = field(default_factory=list)
     meter: CostMeter | None = None
     quarantine_count: int = 0
+    oddspipe_spreads: list[Any] | None = None  # None -> provider unconfigured
 
 
 _STATE: dict[str, FakeState] = {}
@@ -124,6 +130,7 @@ def offline_settings() -> Settings:
         FINNHUB_API_KEY="",
         FRED_API_KEY="",
         KALSHI_API_KEY_ID="",
+        ODDSPIPE_API_KEY="",
         _env_file=None,  # type: ignore[call-arg]
     )
 
@@ -145,6 +152,17 @@ class FakeDynamo(DynamoResource):
 
     def market_repo(self) -> MarketDataRepository:
         return cast(MarketDataRepository, self.st.repo)
+
+    def oddspipe(self) -> Any:
+        spreads = self.st.oddspipe_spreads
+        if spreads is None:
+            return None
+
+        class _StubOddsPipe:
+            def spreads(self, min_spread: Any = None) -> list[Any]:
+                return list(spreads)
+
+        return _StubOddsPipe()
 
     def research_model(self) -> AnthropicClient | None:
         if self.st.statuses is None:

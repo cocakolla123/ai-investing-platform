@@ -91,6 +91,36 @@ else:
             hide_index=True,
         )
 
+# --- Cross-venue spreads (OddsPipe enrichment; ADR-0009 addendum) ---
+
+st.subheader("Cross-venue spreads (OddsPipe)")
+cross_venue = safe_df(
+    select(schema.pm_cross_venue_spreads).order_by(schema.pm_cross_venue_spreads.c.ts.desc())
+)
+if cross_venue.empty:
+    st.info("No cross-venue spreads yet (OddsPipe key unset or no matched pairs).")
+else:
+    latest_cv = cross_venue.drop_duplicates(subset=["kalshi_market_id"], keep="first")
+    top_cv = latest_cv.reindex(
+        latest_cv["yes_diff"].abs().sort_values(ascending=False).index
+    ).head(10)
+    st.caption("Top 10 matched Kalshi/Polymarket pairs by |YES spread|")
+    st.dataframe(
+        top_cv[
+            [
+                "question",
+                "kalshi_market_id",
+                "kalshi_yes",
+                "polymarket_id",
+                "polymarket_yes",
+                "yes_diff",
+                "ts",
+            ]
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
 # --- Research views (doc 03 §6) ---
 
 st.subheader("Committee views")

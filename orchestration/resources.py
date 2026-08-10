@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from dynamo.data.finnhub import FinnhubClient
     from dynamo.data.fred import FredClient
     from dynamo.data.kalshi import KalshiClient
+    from dynamo.data.oddspipe import OddsPipeProvider
     from dynamo.data.polymarket import PolymarketClient
     from dynamo.data.tiingo import TiingoClient
     from dynamo.llm.anthropic_client import AnthropicClient
@@ -186,6 +187,15 @@ class DynamoResource(ConfigurableResource):
 
         s = self.settings()
         return PolymarketClient(min_volume_usd=s.pm_min_volume_usd, max_spread=s.pm_max_spread)
+
+    def oddspipe(self) -> OddsPipeProvider | None:
+        """Cross-venue enrichment (ADR-0009 addendum); None when the key is unset."""
+        s = self.settings()
+        if not s.oddspipe_api_key:
+            return None
+        from dynamo.data.oddspipe import OddsPipeProvider
+
+        return OddsPipeProvider(s.oddspipe_api_key, min_spread=s.oddspipe_min_spread)
 
     # --- sensor support (thin queries; fakes override these in tests) ---
 
