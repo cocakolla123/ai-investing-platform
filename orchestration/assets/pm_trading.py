@@ -1,5 +1,6 @@
 """Prediction-market trading sleeve wiring — ADR-0009 (Kalshi), ADR-0011
-(Polymarket shadow sleeve), docs 06/09 discipline.
+(Polymarket shadow sleeve), ADR-0012 (gated Polymarket live path), docs 06/09
+discipline.
 
 Kalshi is demo-first: the broker talks to the Kalshi demo exchange unless
 DYNAMO_ENV=LIVE, and every submission passes the SAME live gate as equities
@@ -8,11 +9,14 @@ in-scope, unexpired approval and met readiness). The risk engine
 (risk/pm_sizing) has final authority over what trades; every order carries a
 hash-chained DecisionContext.
 
-The Polymarket sleeve is SIMULATED, always (ADR-0011): the same nightly
-pipeline sizes it against the sim bankroll, but the "broker" is the in-house
-PolymarketSimBroker — fills happen internally at Gamma prices + slippage and
-NO real order is ever sent. Polymarket has no real execution wiring here or
-anywhere.
+The Polymarket sleeve is SIMULATED by default (ADR-0011): the same nightly
+pipeline sizes it against the sim bankroll, and the "broker" is the in-house
+PolymarketSimBroker — fills happen internally at Gamma prices + slippage.
+:func:`polymarket_broker_for` is the ONLY route to real execution (ADR-0012):
+DYNAMO_ENV=LIVE + polymarket_live_enabled + full CLOB credentials + a passing
+doc 09 §7 live gate select the real PolymarketBroker; ANY missing
+precondition falls back to the sim broker with a loud warning, and every
+submission is still gate-checked individually exactly like Kalshi's flow.
 """
 
 import math
@@ -22,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import structlog
 from dagster import (
     AssetExecutionContext,
     MaterializeResult,
@@ -38,9 +43,11 @@ from orchestration.assets.portfolio_exec import UtcClock, _portfolio_state
 from orchestration.assets.research import _pydatetime, _read_df
 from orchestration.resources import DynamoResource, utcnow
 
+log = structlog.get_logger(__name__)
+
 PM_GROUP = "prediction_markets"
 PM_VENUE = "kalshi"
-PM_SIM_VENUE = "polymarket"  # SIMULATED sleeve — internal fills only (ADR-0011)
+PM_SIM_VENUE = "polymarket"  # simulated by default; live only via ADR-0012 gate
 
 
 def _pm_broker(dynamo: DynamoResource) -> Any | None:
@@ -87,6 +94,93 @@ def _pm_gate(settings: Settings, scope_fn: Callable[[str], str] | None = None) -
         )
 
     return gate
+
+
+def _polymarket_live_gate_result(settings: Settings, readiness: Any | None = None) -> Any:
+    """The doc 09 §7 gate evaluated once for broker selection (ADR-0012).
+
+    Uses today's approval artifact with ``scope_target=None``, so the live
+    broker activates only under an approval scoped ``all`` — per-market scopes
+    still apply at submission time through the manager's gate. Readiness
+    defaults to unset (→ refuse), same as the Kalshi flow.
+    """
+    from dynamo.execution.gate import (
+        Readiness,
+        kill_switch_engaged,
+        live_orders_permitted,
+        load_approval,
+    )
+
+    approval = None
+    path = Path(settings.approvals_dir) / f"live-{utcnow().date().isoformat()}.yaml"
+    if path.exists():
+        approval = load_approval(path)
+    return live_orders_permitted(
+        settings.dynamo_env,
+        approval,
+        kill_switch_engaged(settings.kill_switch_path),
+        readiness if readiness is not None else Readiness(),
+        scope_target=None,
+    )
+
+
+def polymarket_broker_for(
+    settings: Settings,
+    *,
+    sim_broker_factory: Callable[[], Any],
+    token_resolver: Callable[[str], tuple[str, str] | None] | None = None,
+    broker_order_lookup: Callable[[str], str | None] | None = None,
+    market_ids_hint: tuple[str, ...] = (),
+    readiness: Any | None = None,
+) -> tuple[Any, bool]:
+    """(broker, live_active) — the ONE precondition chain to real Polymarket
+    execution (ADR-0012).
+
+    Real orders require DYNAMO_ENV=LIVE AND polymarket_live_enabled AND a
+    fully configured PolymarketBroker AND a passing doc 09 §7 gate. Any
+    missing precondition returns the sim broker; the fallback is silent only
+    in the expected non-LIVE/non-enabled state and a loud structlog warning
+    whenever live execution was plausibly intended — fail closed to
+    simulation, never to live.
+    """
+    live_intended = settings.dynamo_env == DynamoEnv.LIVE or settings.polymarket_live_enabled
+
+    def fallback(reason: str) -> tuple[Any, bool]:
+        if live_intended:
+            log.warning(
+                "polymarket_live_fallback_to_sim",
+                reason=reason,
+                env=settings.dynamo_env.value,
+                live_enabled=settings.polymarket_live_enabled,
+            )
+        return sim_broker_factory(), False
+
+    if settings.dynamo_env != DynamoEnv.LIVE:
+        if settings.polymarket_live_enabled:
+            return fallback("env_not_live")
+        return sim_broker_factory(), False  # the normal paper path, unchanged
+    if not settings.polymarket_live_enabled:
+        return fallback("polymarket_live_enabled_false")
+
+    from dynamo.execution.polymarket_broker import PolymarketBroker
+
+    broker = PolymarketBroker(
+        settings,
+        token_resolver=token_resolver,
+        broker_order_lookup=broker_order_lookup,
+        market_ids_hint=market_ids_hint,
+    )
+    if not broker.configured:
+        return fallback(f"not_configured: {broker.configured_detail()}")
+    gate = _polymarket_live_gate_result(settings, readiness)
+    if not getattr(gate, "permitted", False):
+        return fallback(f"gate_refused: {getattr(gate, 'reason', '?')}")
+    log.warning(  # deliberately loud: real-money execution path is active
+        "polymarket_live_broker_active",
+        env=settings.dynamo_env.value,
+        max_order_usd=settings.polymarket_live_max_order_usd,
+    )
+    return broker, True
 
 
 def _pm_manager(dynamo: DynamoResource, broker: Any) -> Any:
@@ -360,12 +454,15 @@ def pm_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) -> No
 
 @op
 def pm_sim_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) -> None:
-    """Polymarket shadow sleeve: same sizing gates, SIMULATED internal fills.
+    """Polymarket sleeve: same sizing gates, SIMULATED fills by default.
 
-    NO real order is ever sent (ADR-0011). Decisions run through
-    risk.pm_sizing against the sim bankroll; the "broker" is
-    PolymarketSimBroker, which fills internally at a fresh Gamma price plus
-    slippage and rejects anything stale, closed, or overdrawing the bankroll.
+    Decisions run through risk.pm_sizing against the sim bankroll; the broker
+    is PolymarketSimBroker (internal fills at a fresh Gamma price plus
+    slippage, fail-closed rejects) UNLESS the full ADR-0012 precondition
+    chain holds — DYNAMO_ENV=LIVE + polymarket_live_enabled + credentials +
+    passing live gate — in which case polymarket_broker_for returns the real
+    CLOB broker and every submission is additionally gate-checked like
+    Kalshi's flow. Any missing precondition falls back to sim with a warning.
     """
     from dynamo.domain.models.portfolio import DecisionContext, OrderState
     from dynamo.domain.models.research import Sleeve
@@ -442,12 +539,29 @@ def pm_sim_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) -
         for q in provider.quotes([d.market_id for d in result.decisions])
         if q.yes_price is not None
     }
-    broker = PolymarketSimBroker(
-        quotes=quotes,
-        cash_cents=cash_cents,
-        now=now,
-        slippage_cents=settings.polymarket_sim_slippage_cents,
+    orders_repo = PMOrderRepository(engine)
+    broker, live_active = polymarket_broker_for(
+        settings,
+        sim_broker_factory=lambda: PolymarketSimBroker(
+            quotes=quotes,
+            cash_cents=cash_cents,
+            now=now,
+            slippage_cents=settings.polymarket_sim_slippage_cents,
+        ),
+        token_resolver=provider.clob_token_ids,
+        broker_order_lookup=lambda coid: (
+            o.broker_order_id if (o := orders_repo.get(coid)) is not None else None
+        ),
+        market_ids_hint=tuple(
+            {d.market_id for d in result.decisions} | {p.market_id for p in open_positions}
+        ),
     )
+    if live_active and _pm_sticky_halt_active(dynamo):
+        context.log.error(
+            "pm_sim_trading: LIVE polymarket broker active but a sticky "
+            "reconciliation halt is engaged — refusing all orders"
+        )
+        return
     manager = PMOrderManager(
         broker,
         PMOrderRepository(engine),
@@ -480,7 +594,8 @@ def pm_sim_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) -
             target_portfolio_id=f"pm-sim-{as_of.isoformat()}",
             payload={
                 "kind": "prediction_market",
-                "simulated": True,  # SIMULATED — no real order is ever sent
+                # SIMULATED unless the full ADR-0012 live chain held above.
+                "simulated": not live_active,
                 "venue": order.venue,
                 "market_id": order.market_id,
                 "decision": decision.model_dump(mode="json"),
@@ -502,15 +617,25 @@ def pm_sim_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) -
                 context.log.error(
                     "pm_sim_trading: %s not filled: %s", order.client_order_id, exc
                 )
-    fills = _apply_new_sim_fills(dynamo, manager, markets, ledger)
-    context.log.info(
-        "pm_sim_trading: %d sized, %d submitted, %d SIMULATED fills, "
-        "sim bankroll $%.2f (no real orders sent)",
-        len(orders),
-        submitted,
-        fills,
-        ledger.cash_cents() / 100.0,
-    )
+    if live_active:
+        # Real fills must never debit the SIM bankroll ledger.
+        fills = _apply_new_fills(dynamo, manager, markets)
+        context.log.info(
+            "pm_sim_trading: %d sized, %d submitted, %d LIVE fills (ADR-0012 gated path)",
+            len(orders),
+            submitted,
+            fills,
+        )
+    else:
+        fills = _apply_new_sim_fills(dynamo, manager, markets, ledger)
+        context.log.info(
+            "pm_sim_trading: %d sized, %d submitted, %d SIMULATED fills, "
+            "sim bankroll $%.2f (no real orders sent)",
+            len(orders),
+            submitted,
+            fills,
+            ledger.cash_cents() / 100.0,
+        )
 
 
 @job
@@ -528,32 +653,98 @@ def pm_trading_job() -> None:
 
 @op
 def pm_reconcile_broker_state(context: OpExecutionContext, dynamo: DynamoResource) -> None:
-    """Order sync + positions/balance reconciliation vs Kalshi; sticky halt."""
+    """Order sync + positions/balance reconciliation vs Kalshi; sticky halt.
+
+    When the ADR-0012 live Polymarket broker is active, the same sync +
+    reconcile + sticky-halt-on-mismatch pass also runs against CLOB truth
+    (``POLYMARKET:<market_id>`` halt scopes). In sim mode the Polymarket
+    sleeve has no external truth and is untouched, exactly as before.
+    """
     from dynamo.execution.pm_order_manager import PMReconciler
     from dynamo.persistence.repositories.execution import ReconciliationRepository
     from dynamo.persistence.repositories.pm import PMPositionRepository
-
-    broker = _pm_broker(dynamo)
-    if broker is None:
-        context.log.info("pm_reconciliation: no kalshi broker configured — skipping")
-        return
-    _views, _prices, markets = _latest_pm_frames(dynamo)
-    manager = _pm_manager(dynamo, broker)
-    fills = _apply_new_fills(dynamo, manager, markets)
 
     repo = dynamo.market_repo()
 
     def alert(name: str, message: str) -> None:
         repo.add_alert(severity="page", name=name, message=message)
 
+    broker = _pm_broker(dynamo)
+    if broker is None:
+        context.log.info("pm_reconciliation: no kalshi broker configured — skipping")
+    else:
+        _views, _prices, markets = _latest_pm_frames(dynamo)
+        manager = _pm_manager(dynamo, broker)
+        fills = _apply_new_fills(dynamo, manager, markets)
+
+        reconciler = PMReconciler(
+            broker, ReconciliationRepository(dynamo.engine()), alert
+        )
+        result = reconciler.reconcile(
+            utcnow(), PMPositionRepository(dynamo.engine()).open_positions(venue=PM_VENUE)
+        )
+        context.log.info(
+            "pm_reconciliation: %d new fills, %d divergences, halted scopes %s",
+            fills,
+            len(result.divergences),
+            sorted(result.halted_scopes),
+        )
+
+    _pm_live_polymarket_reconcile(context, dynamo, alert)
+
+
+def _pm_live_polymarket_reconcile(
+    context: OpExecutionContext, dynamo: DynamoResource, alert: Callable[[str, str], None]
+) -> None:
+    """Reconcile the Polymarket sleeve against CLOB truth — LIVE mode only."""
+    from dynamo.execution.pm_order_manager import PMOrderManager, PMReconciler
+    from dynamo.execution.polymarket_sim import pm_sim_scope
+    from dynamo.persistence.repositories.execution import ReconciliationRepository
+    from dynamo.persistence.repositories.pm import (
+        PMOrderRepository,
+        PMPositionRepository,
+        PMTradeRepository,
+    )
+
+    settings = dynamo.settings()
+    engine = dynamo.engine()
+    open_positions = PMPositionRepository(engine).open_positions(venue=PM_SIM_VENUE)
+    provider = dynamo.polymarket()
+    orders_repo = PMOrderRepository(engine)
+    pm_broker, live_active = polymarket_broker_for(
+        settings,
+        # Sim mode needs no reconciliation (there is no external truth), so
+        # the fallback here is a no-op sentinel, never a sim broker.
+        sim_broker_factory=lambda: None,
+        token_resolver=provider.clob_token_ids if provider is not None else None,
+        broker_order_lookup=lambda coid: (
+            o.broker_order_id if (o := orders_repo.get(coid)) is not None else None
+        ),
+        market_ids_hint=tuple(p.market_id for p in open_positions),
+    )
+    if not live_active:
+        return
+
+    _views, _prices, markets = _latest_pm_frames(dynamo, PM_SIM_VENUE)
+    manager = PMOrderManager(
+        pm_broker,
+        orders_repo,
+        PMTradeRepository(engine),
+        UtcClock(),
+        gate=_pm_gate(settings, scope_fn=pm_sim_scope),
+    )
+    fills = _apply_new_fills(dynamo, manager, markets)
     reconciler = PMReconciler(
-        broker, ReconciliationRepository(dynamo.engine()), alert
+        pm_broker,
+        ReconciliationRepository(engine),
+        alert,
+        scope_fn=pm_sim_scope,
+        run_scope="pm_live",
     )
-    result = reconciler.reconcile(
-        utcnow(), PMPositionRepository(dynamo.engine()).open_positions(venue=PM_VENUE)
-    )
+    result = reconciler.reconcile(utcnow(), open_positions)
     context.log.info(
-        "pm_reconciliation: %d new fills, %d divergences, halted scopes %s",
+        "pm_reconciliation (polymarket LIVE): %d new fills, %d divergences, "
+        "halted scopes %s",
         fills,
         len(result.divergences),
         sorted(result.halted_scopes),

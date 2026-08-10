@@ -65,9 +65,9 @@ class NewsProvider(Protocol):
 
 
 class PredictionMarketProvider(Protocol):
-    """Read-only market/price snapshots. Kalshi additionally has a gated
-    trading path via :class:`PMBroker` (ADR-0009); Polymarket stays
-    research-only with no execution hooks."""
+    """Read-only market/price snapshots. Kalshi and Polymarket additionally
+    have gated trading paths via :class:`PMBroker` (ADR-0009 / ADR-0012);
+    this provider itself never places orders."""
 
     @property
     def venue(self) -> str: ...
@@ -101,10 +101,12 @@ class Broker(Protocol):
 
 
 class PMBroker(Protocol):
-    """Prediction-market broker port — Kalshi only (ADR-0009).
+    """Prediction-market broker port (ADR-0009, ADR-0011, ADR-0012).
 
-    KalshiBroker (demo/prod behind the live gate) + MockPMBroker for tests.
-    Polymarket has NO implementation of this port, by design.
+    KalshiBroker (demo/prod behind the live gate), PolymarketSimBroker (the
+    ADR-0011 simulated sleeve, the default), PolymarketBroker (real CLOB
+    orders, reachable ONLY through the ADR-0012 precondition chain), and
+    MockPMBroker for tests.
     """
 
     def submit(self, order: PMOrder) -> str: ...  # returns broker_order_id

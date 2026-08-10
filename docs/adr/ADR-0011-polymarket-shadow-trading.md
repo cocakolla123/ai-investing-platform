@@ -1,6 +1,9 @@
 # ADR-0011: Polymarket shadow trading (simulated fills, internal ledger)
 
-Status: accepted (2026-08-10)
+Status: accepted (2026-08-10); superseded in part by
+[ADR-0012](ADR-0012-polymarket-live-execution.md) — a real CLOB execution
+path now exists behind the doc 09 §7 live gate, but the simulated sleeve
+described here remains the default in every non-LIVE environment.
 
 ## Context
 

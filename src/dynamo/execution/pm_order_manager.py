@@ -302,6 +302,11 @@ class PMReconciler:
     mismatch halts that market (``KALSHI:<market_id>``), a balance mismatch
     beyond tolerance halts the sleeve globally, and halts clear only through an
     explicit acknowledgment recorded in ``reconciliation_acks``.
+
+    ``scope_fn``/``run_scope`` default to the Kalshi sleeve; the live
+    Polymarket sleeve (ADR-0012) passes ``pm_sim_scope`` (``POLYMARKET:`` halt
+    scopes) and ``run_scope="pm_live"`` so its divergent runs are still caught
+    by the sticky ``pm*`` halt check.
     """
 
     def __init__(
@@ -312,11 +317,15 @@ class PMReconciler:
         *,
         balance_tolerance_cents: float = BALANCE_TOLERANCE_CENTS,
         halts: HaltRegistry | None = None,
+        scope_fn: Callable[[str], str] = pm_scope,
+        run_scope: str = "pm",
     ) -> None:
         self._broker = broker
         self._store = store
         self._alert = alert
         self._tolerance = balance_tolerance_cents
+        self._scope_fn = scope_fn
+        self._run_scope = run_scope
         self.halts = halts if halts is not None else HaltRegistry()
 
     def reconcile(
@@ -340,7 +349,7 @@ class PMReconciler:
             )
             divergences.append(
                 Divergence(
-                    pm_scope(market_id),
+                    self._scope_fn(market_id),
                     kind,
                     f"{ours[0]}:{ours[1]}" if ours is not None else None,
                     f"{theirs[0]}:{theirs[1]}" if theirs is not None else None,
@@ -363,9 +372,9 @@ class PMReconciler:
         clean = not divergences
         run_id = self._store.record_run(
             now,
-            "pm" if clean else ("pm:global" if any(
+            self._run_scope if clean else (f"{self._run_scope}:global" if any(
                 d.scope == GLOBAL_SCOPE for d in divergences
-            ) else "pm:markets"),
+            ) else f"{self._run_scope}:markets"),
             "clean" if clean else "divergent",
             [d.as_dict() for d in divergences],
         )

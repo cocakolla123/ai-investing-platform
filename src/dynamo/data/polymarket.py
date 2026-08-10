@@ -1,8 +1,9 @@
 """Polymarket adapter — READ-ONLY ``PredictionMarketProvider``. Design: doc 02 §7.
 
 Uses the public Gamma API (``gamma-api.polymarket.com``) which requires no key
-for reads. Markets and prices only; no order/CLOB-trading endpoints are wired
-anywhere.
+for reads. Markets, prices, and CLOB token-id lookups only; order placement
+lives solely in :mod:`dynamo.execution.polymarket_broker` (ADR-0012), behind
+the live gate — never here.
 
 Thin-market policy (doc 02 §7): implied probabilities are stored but marked
 ``trusted=False`` unless ``volumeNum`` ≥ ``pm_min_volume_usd`` and the quoted
@@ -172,6 +173,26 @@ class PolymarketClient:
             price = self._to_price(payload or {}, now)
             if price is not None:
                 yield price
+
+    def clob_token_ids(self, market_id: str) -> tuple[str, str] | None:
+        """(yes_token_id, no_token_id) for one market, from Gamma (keyless read).
+
+        Gamma encodes ``clobTokenIds`` as a JSON string in outcome order
+        ('Yes' first by convention, matching :func:`_yes_price`). Returns None
+        when the market is unknown or the field is missing/malformed — the
+        live broker (ADR-0012) rejects the order fail-closed in that case.
+        """
+        payload = self._get(f"/markets/{market_id}")
+        m: dict[str, Any] = payload or {}
+        raw = m.get("clobTokenIds")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                return None
+        if isinstance(raw, list) and len(raw) >= 2 and all(raw[:2]):
+            return str(raw[0]), str(raw[1])
+        return None
 
     def quotes(self, market_ids: Sequence[str]) -> Iterator[GammaQuote]:
         """Fresh per-market YES price + closed/resolved status (reads only).

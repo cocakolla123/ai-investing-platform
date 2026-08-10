@@ -113,3 +113,27 @@ def test_quotes_closed_market_resolution() -> None:
 def test_quotes_skip_unknown_markets() -> None:
     client = make_client(httpx.MockTransport(lambda req: httpx.Response(200, json={})))
     assert list(client.quotes(["999999"])) == []
+
+
+def test_clob_token_ids_parse_json_string() -> None:
+    market = dict(MARKET, clobTokenIds='["11111", "22222"]')
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).endswith("/markets/500001")
+        return httpx.Response(200, json=market)
+
+    tokens = make_client(httpx.MockTransport(handler)).clob_token_ids("500001")
+    assert tokens == ("11111", "22222")  # (yes, no) in outcome order
+
+
+def test_clob_token_ids_missing_or_malformed_return_none() -> None:
+    payloads = [
+        MARKET,  # no clobTokenIds field
+        dict(MARKET, clobTokenIds="not-json"),
+        dict(MARKET, clobTokenIds='["only-one"]'),
+        dict(MARKET, clobTokenIds='["", "22222"]'),  # empty token id
+        {},  # unknown market
+    ]
+    for payload in payloads:
+        handler = httpx.MockTransport(lambda _r, p=payload: httpx.Response(200, json=p))
+        assert make_client(handler).clob_token_ids("500001") is None

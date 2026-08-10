@@ -10,10 +10,13 @@ Two venues can appear in these entities:
 
 - ``kalshi`` — the real sleeve (demo/prod behind the live gate, ADR-0009);
 - ``polymarket`` — the shadow-trading sleeve (ADR-0011): decided by the same
-  pipeline but ALWAYS SIMULATED. Polymarket has no demo exchange, so fills are
-  simulated internally and no real order is ever sent. ``venue`` alone marks a
-  row as simulated (:func:`is_simulated_venue`); there is deliberately no real
-  Polymarket execution path anywhere in the codebase.
+  pipeline and SIMULATED in every environment except a fully-satisfied LIVE
+  precondition chain (ADR-0012: DYNAMO_ENV=LIVE + ``polymarket_live_enabled``
+  + credentials + a passing live gate select the gated CLOB broker).
+  :func:`is_simulated_venue` still reports the venue as simulated-by-default;
+  rows written by the gated live path carry ``simulated: false`` in their
+  DecisionContext payload — revisit this taxonomy at the live decision
+  (ADR-0012 risks).
 """
 
 from __future__ import annotations
@@ -34,12 +37,11 @@ CONTRACT_PAYOUT_CENTS = 100.0
 
 
 def is_simulated_venue(venue: str) -> bool:
-    """True when every execution on ``venue`` is simulated (ADR-0011).
+    """True when executions on ``venue`` are simulated by default (ADR-0011).
 
-    The venue string IS the simulation marker: Polymarket has no real
-    execution path (no broker, no credentials, no CLOB endpoints), so any
-    order/trade/position row carrying ``venue='polymarket'`` is by
-    construction an internal simulation.
+    Polymarket rows are simulated in every environment except the fully
+    gated ADR-0012 LIVE chain; live-path rows are distinguished by the
+    ``simulated: false`` marker in their DecisionContext payload.
     """
     return venue in PM_SIM_VENUES
 

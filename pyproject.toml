@@ -59,6 +59,10 @@ transcripts = ["defeatbeta-api>=0.0.30,<0.0.41"]
 # Tearsheets + factor audits (matplotlib/seaborn/statsmodels/yfinance chain).
 # Both call sites guard the import and degrade to a logged no-op when absent.
 analysis = ["quantstats>=0.0.62", "alphalens-reloaded>=0.4.3"]
+# Live Polymarket CLOB execution (ADR-0012): pulls eth-account/web3 signing
+# machinery, so it stays out of the base install. The broker guards the
+# import and reports configured=False (sim fallback) when absent.
+polymarket = ["py-clob-client>=0.34.6"]
 
 [dependency-groups]
 dev = [

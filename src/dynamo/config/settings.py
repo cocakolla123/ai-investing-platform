@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # --- TickerTick second news source (free, no key, 10 req/min) ---
     tickertick_enabled: bool = Field(default=True, alias="TICKERTICK_ENABLED")
 
-    # --- Prediction markets (Kalshi tradable behind the gate; Polymarket read-only) ---
+    # --- Prediction markets (Kalshi tradable behind the gate; Polymarket reads keyless) ---
     kalshi_api_key_id: str = Field(default="", alias="KALSHI_API_KEY_ID")
     kalshi_private_key_path: str = Field(default="", alias="KALSHI_PRIVATE_KEY_PATH")
     pm_min_volume_usd: float = 25_000.0
@@ -95,14 +95,34 @@ class Settings(BaseSettings):
     pm_kelly_fraction_cap: float = 0.25  # fractional Kelly, same cap as equities
     pm_max_open_markets: int = 10
 
-    # --- Polymarket shadow-trading sleeve (ADR-0011; SIMULATED, never real) ---
+    # --- Polymarket shadow-trading sleeve (ADR-0011; SIMULATED by default) ---
     # Polymarket has no demo exchange, so the sleeve simulates the broker
     # internally: decisions run through the same pm_* gates against the sim
-    # bankroll, fills happen in our own tables at Gamma prices, and NO real
-    # order is ever sent (no credentials, no CLOB endpoints anywhere).
+    # bankroll and fills happen in our own tables at Gamma prices. This is
+    # the ONLY behavior outside a fully-satisfied LIVE precondition chain.
     polymarket_sim_enabled: bool = True
     polymarket_sim_bankroll_usd: float = 1000.0
     polymarket_sim_slippage_cents: int = 1  # applied AGAINST us on every simulated fill
+
+    # --- Polymarket LIVE execution (ADR-0012; gated, sim remains the default) ---
+    # Real CLOB orders require ALL of: DYNAMO_ENV=LIVE, polymarket_live_enabled,
+    # full credentials below, and a passing doc 09 §7 live gate (signed
+    # approval + kill-switch absent + readiness). Anything missing falls back
+    # to the sim broker with a loud warning — never the other way around.
+    polymarket_api_key: str = Field(default="", alias="POLYMARKET_API_KEY")
+    polymarket_api_secret: str = Field(default="", alias="POLYMARKET_API_SECRET")
+    polymarket_passphrase: str = Field(default="", alias="POLYMARKET_PASSPHRASE")
+    # Path to a file in secrets/ holding the Polygon wallet private key used
+    # for EIP-712 order signing. Contents are NEVER logged or printed; the
+    # broker reads the file lazily at client construction.
+    polymarket_wallet_key_path: str = Field(default="", alias="POLYMARKET_WALLET_KEY_PATH")
+    # Polymarket UI accounts trade through a proxy wallet: signature_type 1 =
+    # email/Magic proxy, 2 = browser-wallet proxy, 0 = direct EOA. Proxy types
+    # (1/2) also require the proxy ("funder") address that holds the USDC.
+    polymarket_funder_address: str = Field(default="", alias="POLYMARKET_FUNDER_ADDRESS")
+    polymarket_signature_type: int = 1
+    polymarket_live_enabled: bool = False  # master switch, independent of DYNAMO_ENV
+    polymarket_live_max_order_usd: float = 25.0  # hard per-order cap, enforced in the broker
 
     # --- Options sleeve (ADR-0010; defined-risk only, paper first) ---
     # Hard caps enforced in code (risk/options_sizing.py + domain validators):
