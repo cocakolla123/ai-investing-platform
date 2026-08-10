@@ -43,6 +43,8 @@ from dynamo.backtest.promotion import (
     StageResult,
     run_stage,
 )
+from dynamo.backtest.signal_audit import audit_factor
+from dynamo.backtest.tearsheet import generate_tearsheet, write_backtest_artifacts
 
 __all__ = [
     "PROMOTION_STAGES",
@@ -60,12 +62,14 @@ __all__ = [
     "SessionAdvice",
     "StageGate",
     "StageResult",
+    "audit_factor",
     "baseline_comparison",
     "build_report",
     "compliance_violations",
     "constraint_violation_audit",
     "cost_per_side_fraction",
     "deflated_sharpe_ratio",
+    "generate_tearsheet",
     "half_spread_bps",
     "impact_fraction",
     "in_universe",
@@ -73,4 +77,5 @@ __all__ = [
     "metrics_block",
     "run_look_ahead_audit",
     "run_stage",
+    "write_backtest_artifacts",
 ]

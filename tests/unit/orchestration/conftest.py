@@ -56,7 +56,8 @@ class FakeRepo:
         self.quarantines: list[dict[str, Any]] = []
         self.alerts: list[dict[str, Any]] = []
         self.flags: list[Any] = []
-        self.inserted_rows: list[tuple[str, list[dict[str, Any]]]] = []
+        self.inserted_rows: list[tuple[str, list[Any]]] = []
+        self.transcript_links: list[tuple[str, Any, str]] = []
 
     def universe_at(self, as_of: date, tier: Tier | None = None) -> list[UniverseMembership]:
         return [m for m in self.members if tier is None or m.tier == tier]
@@ -97,6 +98,15 @@ class FakeRepo:
     def latest_verdicts(self, symbols: Any = None) -> pd.DataFrame:
         return pd.DataFrame()
 
+    def upsert_transcripts(self, transcripts: Any, **kwargs: Any) -> int:
+        transcripts = list(transcripts)
+        self.inserted_rows.append(("transcripts", transcripts))
+        return len(transcripts)
+
+    def link_transcript_ref(self, symbol: str, event_date: Any, ref: str) -> int:
+        self.transcript_links.append((symbol, event_date, ref))
+        return 1
+
 
 class _FakeModel:
     def __init__(self, statuses: dict[str, str]) -> None:
@@ -116,6 +126,9 @@ class FakeState:
     meter: CostMeter | None = None
     quarantine_count: int = 0
     oddspipe_spreads: list[Any] | None = None  # None -> provider unconfigured
+    reporters: list[dict[str, Any]] = field(default_factory=list)
+    av_transcripts: dict[str, Any] | None = None  # None -> AV key unset
+    defeatbeta_transcripts: list[Any] | None = None  # None -> extra not installed
 
 
 _STATE: dict[str, FakeState] = {}
@@ -131,6 +144,8 @@ def offline_settings() -> Settings:
         FRED_API_KEY="",
         KALSHI_API_KEY_ID="",
         ODDSPIPE_API_KEY="",
+        ALPHAVANTAGE_API_KEY="",
+        TICKERTICK_ENABLED=False,
         _env_file=None,  # type: ignore[call-arg]
     )
 
@@ -163,6 +178,31 @@ class FakeDynamo(DynamoResource):
                 return list(spreads)
 
         return _StubOddsPipe()
+
+    def earnings_reporters(self, start: Any, end: Any) -> list[dict[str, Any]]:
+        return [r for r in self.st.reporters if start <= r["event_date"] <= end]
+
+    def alphavantage_transcripts(self) -> Any:
+        transcripts = self.st.av_transcripts
+        if transcripts is None:
+            return None
+
+        class _StubAV:
+            def fetch(self, symbol: str, event_date: Any, period: Any = None) -> Any:
+                return transcripts.get(symbol)
+
+        return _StubAV()
+
+    def defeatbeta_transcripts(self) -> Any:
+        bulk = self.st.defeatbeta_transcripts
+        if bulk is None:
+            return None
+
+        class _StubDefeatBeta:
+            def transcripts(self, symbols: Any, *, since: Any) -> list[Any]:
+                return [t for t in bulk if t.symbol in set(symbols)]
+
+        return _StubDefeatBeta()
 
     def research_model(self) -> AnthropicClient | None:
         if self.st.statuses is None:

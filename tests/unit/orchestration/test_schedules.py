@@ -14,6 +14,7 @@ EXPECTED_CRONS = {
     "macro_ingest_schedule": "0 8 * * *",
     "macro_digest_schedule": "30 8 * * *",
     "earnings_calendar_schedule": "0 7 * * *",
+    "transcripts_schedule": "30 7 * * *",
     "prediction_market_schedule": "0 20 * * *",
     "pm_trading_schedule": "30 20 * * *",
     "pm_resolution_schedule": "45 20 * * *",

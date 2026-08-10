@@ -9,6 +9,7 @@
 | Macro (FRED) | 08:00 daily |
 | Macro digest (Sonnet) | 08:30 daily |
 | Earnings calendar | 07:00 daily |
+| Earnings-call transcripts | 07:30 daily |
 | Prediction-market snapshot (+ OddsPipe spreads) | 20:00 daily |
 | Kalshi PM trading (gated, demo-first) | 20:30 daily |
 | Kalshi PM resolution + calibration | 20:45 daily |
@@ -74,6 +75,10 @@ earnings_calendar_job = define_asset_job(
     "earnings_calendar_job",
     selection=AssetSelection.assets("earnings_calendar"),
 )
+transcripts_job = define_asset_job(
+    "transcripts_job",
+    selection=AssetSelection.assets("transcripts"),
+)
 prediction_market_job = define_asset_job(
     "prediction_market_job",
     # OddsPipe spreads run in the same 20:00 chain, after the primary snapshot.
@@ -138,6 +143,10 @@ macro_ingest_schedule = _partitioned_schedule(
 )
 earnings_calendar_schedule = _partitioned_schedule(
     "earnings_calendar_schedule", "0 7 * * *", earnings_calendar_job
+)
+# Transcripts run 30 minutes after the earnings calendar refresh.
+transcripts_schedule = _partitioned_schedule(
+    "transcripts_schedule", "30 7 * * *", transcripts_job
 )
 prediction_market_schedule = _partitioned_schedule(
     "prediction_market_schedule", "0 20 * * *", prediction_market_job
@@ -277,6 +286,7 @@ ALL_JOBS = [
     news_job,
     macro_ingest_job,
     earnings_calendar_job,
+    transcripts_job,
     prediction_market_job,
     pm_resolution_job,
     macro_digest_job,
@@ -295,6 +305,7 @@ ALL_SCHEDULES = [
     news_schedule,
     macro_ingest_schedule,
     earnings_calendar_schedule,
+    transcripts_schedule,
     prediction_market_schedule,
     pm_trading_schedule,
     pm_resolution_schedule,

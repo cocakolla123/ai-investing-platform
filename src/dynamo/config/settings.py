@@ -59,6 +59,13 @@ class Settings(BaseSettings):
         default="Dynamo research (set EDGAR_USER_AGENT)", alias="EDGAR_USER_AGENT"
     )
 
+    # --- Earnings-call transcripts (Alpha Vantage free key; defeatbeta backfill) ---
+    alphavantage_api_key: str = Field(default="", alias="ALPHAVANTAGE_API_KEY")
+    transcript_daily_cap: int = 20  # stay under Alpha Vantage's 25 requests/day free quota
+
+    # --- TickerTick second news source (free, no key, 10 req/min) ---
+    tickertick_enabled: bool = Field(default=True, alias="TICKERTICK_ENABLED")
+
     # --- Prediction markets (Kalshi tradable behind the gate; Polymarket read-only) ---
     kalshi_api_key_id: str = Field(default="", alias="KALSHI_API_KEY_ID")
     kalshi_private_key_path: str = Field(default="", alias="KALSHI_PRIVATE_KEY_PATH")

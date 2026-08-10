@@ -14,6 +14,7 @@ from dynamo.learning.calibration import (
     CalibrationObservation,
     brier_score,
     compute_calibration,
+    conformal_adjust,
     reliability_buckets,
     trade_outcome_achieved,
 )
@@ -130,3 +131,61 @@ def test_outcome_respects_horizon() -> None:
 
 def test_outcome_flat_path_is_failure() -> None:
     assert not trade_outcome_achieved([0.0, 0.1, -0.1], 10.0, 8.0, horizon_days=3)
+
+
+# --- conformal_adjust: recalibrate estimates against realized outcomes ------
+
+
+def _history(n: int, *, overconfident: bool = True) -> list[tuple[float, bool]]:
+    rng = random.Random(7)
+    out: list[tuple[float, bool]] = []
+    for _ in range(n):
+        p = rng.uniform(0.05, 0.95)
+        realized_rate = p * 0.6 if overconfident else p
+        out.append((p, rng.random() < realized_rate))
+    return out
+
+
+def test_conformal_adjust_identity_below_min_n() -> None:
+    probs = [0.2, 0.5, 0.9]
+    assert conformal_adjust(probs, _history(29), min_n=30) == probs
+
+
+def test_conformal_adjust_identity_when_mapie_unimportable(monkeypatch) -> None:
+    import dynamo.learning.calibration as calibration_mod
+
+    class _BrokenImportlib:
+        @staticmethod
+        def import_module(name: str, package: str | None = None) -> object:
+            raise ImportError("mapie unavailable")
+
+    monkeypatch.setattr(calibration_mod, "importlib", _BrokenImportlib)
+    probs = [0.2, 0.5, 0.9]
+    assert conformal_adjust(probs, _history(60), min_n=30) == probs
+
+
+def test_conformal_adjust_identity_on_degenerate_history() -> None:
+    probs = [0.4, 0.6]
+    all_wins = [(0.7, True)] * 40  # single-class history: nothing to learn
+    assert conformal_adjust(probs, all_wins, min_n=30) == probs
+
+
+def test_conformal_adjust_recalibrates_with_enough_history() -> None:
+    pytest.importorskip("mapie")
+    probs = [0.1, 0.5, 0.9]
+    adjusted = conformal_adjust(probs, _history(200), min_n=30)
+    assert len(adjusted) == len(probs)
+    assert all(0.0 <= p <= 1.0 for p in adjusted)
+    # calibrated confidence order is preserved, and the overconfident
+    # forecaster's high-end estimate gets pulled toward reality
+    assert adjusted == sorted(adjusted)
+    assert adjusted[-1] < probs[-1]
+
+
+def test_conformal_adjust_rejects_out_of_range_probs() -> None:
+    with pytest.raises(ValueError):
+        conformal_adjust([1.2], _history(60))
+
+
+def test_conformal_adjust_empty_probs() -> None:
+    assert conformal_adjust([], _history(60)) == []

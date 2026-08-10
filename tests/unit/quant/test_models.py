@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from dynamo.research.quant.models import (
     LightGBMModel,
+    MapieCalibratedClassifier,
     RandomForestModel,
     StatsforecastBaseline,
 )
@@ -57,6 +59,32 @@ def test_lightgbm_binary_isotonic_when_enough_positives() -> None:
     yb = (y > y.median()).astype(float)
     model = LightGBMModel("binary", n_estimators=20, params={"min_child_samples": 5})
     model.fit(x, yb, {"min_isotonic_positives": 50})
+    assert model.calibration_method == "isotonic"
+
+
+def test_lightgbm_binary_mapie_calibration_smoke() -> None:
+    """cfg calibration='mapie' -> conformal (Venn-ABERS) probabilities in [0, 1]."""
+    if not MapieCalibratedClassifier.available():
+        pytest.skip("mapie not installed")
+    x, y = _data(240)
+    yb = (y > y.quantile(0.6)).astype(float)
+    model = LightGBMModel("binary", n_estimators=20, params={"min_child_samples": 5})
+    model.fit(x, yb, {"calibration": "mapie"})
+    assert model.calibration_method == "mapie"
+    probs = model.predict(x)
+    assert probs.shape == (len(x),)
+    assert np.all(probs >= 0.0) and np.all(probs <= 1.0)
+    # deterministic: same data + seed -> identical calibrated scores
+    again = LightGBMModel("binary", n_estimators=20, params={"min_child_samples": 5})
+    again.fit(x, yb, {"calibration": "mapie"})
+    np.testing.assert_allclose(probs, again.predict(x))
+
+
+def test_lightgbm_isotonic_stays_the_default() -> None:
+    x, y = _data(600)
+    yb = (y > y.median()).astype(float)
+    model = LightGBMModel("binary", n_estimators=20, params={"min_child_samples": 5})
+    model.fit(x, yb, {"min_isotonic_positives": 50})  # no calibration key
     assert model.calibration_method == "isotonic"
 
 

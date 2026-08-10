@@ -737,6 +737,33 @@ def build_deep_dive_contexts(
     n = schema.news
     news_df = _read_df(dynamo, select(n).where(n.c.published_at >= _since(as_of, 7)))
 
+    # Latest earnings-call transcript per symbol within 30 days -> labeled,
+    # truncated excerpt in the dossier context (the earnings-call reader
+    # prompt guidance already covers transcripts; no prompt change needed).
+    from dynamo.research.dossier import transcript_excerpt
+
+    tr = schema.transcripts
+    tr_df = _read_df(
+        dynamo,
+        select(tr.c.symbol, tr.c.event_date, tr.c.source, tr.c.content).where(
+            tr.c.symbol.in_(list(symbols)),
+            tr.c.event_date >= as_of - timedelta(days=30),
+            tr.c.event_date <= as_of,
+        ),
+    )
+    transcript_by_symbol: dict[str, str] = {}
+    if not tr_df.empty:
+        latest = tr_df.sort_values(["symbol", "event_date"]).drop_duplicates(
+            subset=["symbol"], keep="last"
+        )
+        for r in latest.to_dict(orient="records"):
+            transcript_by_symbol[str(r["symbol"])] = transcript_excerpt(
+                str(r["content"]),
+                symbol=str(r["symbol"]),
+                event_date=_pydate(r["event_date"]).isoformat(),
+                source=str(r["source"]),
+            )
+
     contexts: dict[str, str] = {}
     for sym in symbols:
         instrument = instruments.get(sym) or Instrument(symbol=sym, name=sym)
@@ -765,6 +792,7 @@ def build_deep_dive_contexts(
             price_stats=price_stats,
             news_items=sym_news[:10],
             macro_digest_text=macro_text,
+            earnings_call_excerpt=transcript_by_symbol.get(sym, ""),
         )
     return contexts
 

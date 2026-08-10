@@ -2,18 +2,25 @@
 
 Outcome definition per horizon: did the position achieve at least half the
 expected upside before hitting the expected downside, within ``horizon_days``.
-All functions are pure.
+All functions are pure. :func:`conformal_adjust` additionally recalibrates
+probability estimates against realized outcomes (MAPIE Venn-ABERS) once
+enough resolutions accumulate.
 """
 
 from __future__ import annotations
 
+import importlib
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 
+import numpy as np
+
 from dynamo.domain.models.learning import CalibrationPoint
 
 N_BUCKETS = 10
+MIN_CONFORMAL_N = 30
 
 
 @dataclass(frozen=True)
@@ -105,6 +112,66 @@ def compute_calibration(
             )
         )
     return points
+
+
+class _PassthroughProbClassifier:
+    """sklearn-shaped shim whose single 'feature' IS the estimated probability."""
+
+    classes_ = np.array([0, 1])
+
+    def fit(self, x: object, y: object) -> _PassthroughProbClassifier:  # pragma: no cover
+        return self
+
+    def predict_proba(self, x: object) -> np.ndarray:
+        p = np.clip(np.asarray(x, dtype=float).ravel(), 0.0, 1.0)
+        return np.column_stack([1.0 - p, p])
+
+    def predict(self, x: object) -> np.ndarray:
+        return (np.asarray(x, dtype=float).ravel() >= 0.5).astype(int)
+
+
+def conformal_adjust(
+    probs: Sequence[float],
+    historical_outcomes: Sequence[tuple[float, bool]],
+    *,
+    min_n: int = MIN_CONFORMAL_N,
+) -> list[float]:
+    """Recalibrate probability estimates against realized outcomes.
+
+    Used on the Kalshi sleeve: committee probability estimates drift (usually
+    overconfident); once at least ``min_n`` markets have RESOLVED, the
+    ``(estimated_prob, realized_outcome)`` history is fed to MAPIE's inductive
+    Venn-ABERS calibrator and tonight's fresh estimates are mapped through it.
+
+    Pure and total: fewer than ``min_n`` resolutions, mapie not importable, or
+    any calibration failure -> the input probabilities come back unchanged
+    (identity fallback). Inputs must lie in [0, 1].
+    """
+    out = [float(p) for p in probs]
+    for p in out:
+        if not 0.0 <= p <= 1.0:
+            raise ValueError(f"probability {p} outside [0, 1]")
+    if not out or len(historical_outcomes) < min_n:
+        return out
+    try:
+        calibration_mod = importlib.import_module("mapie.calibration")
+    except Exception:
+        return out
+    hist_p = np.asarray([float(p) for p, _ in historical_outcomes], dtype=float)
+    hist_y = np.asarray([1 if o else 0 for _, o in historical_outcomes], dtype=int)
+    if len(np.unique(hist_y)) < 2:  # degenerate history: nothing to learn
+        return out
+    try:
+        calibrator = calibration_mod.VennAbersCalibrator(
+            estimator=_PassthroughProbClassifier(), cv="prefit"
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            calibrator.fit(hist_p.reshape(-1, 1), hist_y)
+            adjusted = calibrator.predict_proba(np.asarray(out, dtype=float).reshape(-1, 1))
+    except Exception:
+        return out
+    return [float(p) for p in np.clip(np.asarray(adjusted[:, 1], dtype=float), 0.0, 1.0)]
 
 
 def _validate(observations: Sequence[CalibrationObservation]) -> None:

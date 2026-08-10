@@ -20,15 +20,16 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0005() -> None:
+def test_revision_chain_is_linear_through_0006() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0005" in modules, "0005_oddspipe migration missing"
+    assert "0006" in modules, "0006_transcripts migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0005"}, f"expected 0005 as the single head, got {heads}"
+    assert heads == {"0006"}, f"expected 0006 as the single head, got {heads}"
     assert down["0005"] == "0004"
+    assert down["0006"] == "0005"
 
 
 def test_0005_targets_cross_venue_table() -> None:
@@ -37,6 +38,14 @@ def test_0005_targets_cross_venue_table() -> None:
     assert "pm_cross_venue_spreads" in schema.metadata.tables
     table = schema.metadata.tables["pm_cross_venue_spreads"]
     assert [c.name for c in table.primary_key.columns] == ["kalshi_market_id", "ts"]
+
+
+def test_0006_targets_transcripts_table() -> None:
+    from dynamo.persistence import schema
+
+    assert "transcripts" in schema.metadata.tables
+    table = schema.metadata.tables["transcripts"]
+    assert [c.name for c in table.primary_key.columns] == ["symbol", "event_date", "source"]
 
 
 @pytest.mark.integration

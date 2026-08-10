@@ -26,7 +26,10 @@ if TYPE_CHECKING:
     from dynamo.data.kalshi import KalshiClient
     from dynamo.data.oddspipe import OddsPipeProvider
     from dynamo.data.polymarket import PolymarketClient
+    from dynamo.data.tickertick import TickerTickClient
     from dynamo.data.tiingo import TiingoClient
+    from dynamo.data.transcripts_av import AlphaVantageTranscripts
+    from dynamo.data.transcripts_defeatbeta import DefeatBetaTranscripts
     from dynamo.llm.anthropic_client import AnthropicClient
     from dynamo.llm.cost_meter import CostMeter
     from dynamo.persistence.repositories.market import MarketDataRepository
@@ -188,6 +191,32 @@ class DynamoResource(ConfigurableResource):
         s = self.settings()
         return PolymarketClient(min_volume_usd=s.pm_min_volume_usd, max_spread=s.pm_max_spread)
 
+    def tickertick(self) -> TickerTickClient | None:
+        """Second news source (free, no key); None when disabled via settings."""
+        if not self.settings().tickertick_enabled:
+            return None
+        from dynamo.data.tickertick import TickerTickClient
+
+        return TickerTickClient()
+
+    def alphavantage_transcripts(self) -> AlphaVantageTranscripts | None:
+        """Fresh earnings-call transcripts; None when the AV key is unset."""
+        s = self.settings()
+        if not s.alphavantage_api_key:
+            return None
+        from dynamo.data.transcripts_av import AlphaVantageTranscripts
+
+        return AlphaVantageTranscripts(
+            s.alphavantage_api_key, daily_cap=s.transcript_daily_cap
+        )
+
+    def defeatbeta_transcripts(self) -> DefeatBetaTranscripts | None:
+        """Bulk transcript backfill; None when the ``transcripts`` extra is absent."""
+        from dynamo.data.transcripts_defeatbeta import DefeatBetaTranscripts
+
+        provider = DefeatBetaTranscripts()
+        return provider if provider.available else None
+
     def oddspipe(self) -> OddsPipeProvider | None:
         """Cross-venue enrichment (ADR-0009 addendum); None when the key is unset."""
         s = self.settings()
@@ -247,6 +276,23 @@ class DynamoResource(ConfigurableResource):
                 ).scalar()
                 or 0
             )
+
+    def earnings_reporters(self, start: date, end: date) -> list[dict[str, Any]]:
+        """earnings_events rows with event_date in [start, end] (transcripts asset)."""
+        from sqlalchemy import select
+
+        from dynamo.persistence import schema
+
+        e = schema.earnings_events
+        with self.engine().connect() as conn:
+            return [
+                dict(row._mapping)
+                for row in conn.execute(
+                    select(e.c.symbol, e.c.event_date, e.c.period, e.c.call_transcript_ref)
+                    .where(e.c.event_date >= start, e.c.event_date <= end)
+                    .order_by(e.c.event_date, e.c.symbol)
+                )
+            ]
 
     # --- universe helpers ---
 

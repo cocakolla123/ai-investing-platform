@@ -90,8 +90,24 @@ def news(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeR
     if not symbols:
         return _skipped("no tier-1/promoted symbols")
     since = datetime.combine(as_of - timedelta(days=1), time.min, tzinfo=UTC)
-    rows = dynamo.market_repo().upsert_news(finnhub.news(symbols, since))
-    return MaterializeResult(metadata={"rows": rows, "symbols": len(symbols)})
+    repo = dynamo.market_repo()
+    rows = repo.upsert_news(finnhub.news(symbols, since))
+    # Second source: TickerTick (free, keyless). Ids are namespaced per source
+    # ('finnhub:<id>' vs 'tickertick:<id>') so the shared upsert needs no dedupe.
+    tickertick = dynamo.tickertick()
+    tickertick_rows = 0
+    if tickertick is None:
+        context.log.info("news: tickertick disabled — finnhub only")
+    else:
+        tickertick_rows = repo.upsert_news(tickertick.news(symbols, since))
+    return MaterializeResult(
+        metadata={
+            "rows": rows + tickertick_rows,
+            "finnhub": rows,
+            "tickertick": tickertick_rows,
+            "symbols": len(symbols),
+        }
+    )
 
 
 @dagster_asset(group_name=INGESTION_GROUP, partitions_def=daily_partitions)
@@ -122,6 +138,75 @@ def earnings_calendar(context: AssetExecutionContext, dynamo: DynamoResource) ->
         finnhub.earnings_calendar(as_of - timedelta(days=7), as_of + timedelta(days=21))
     )
     return MaterializeResult(metadata={"rows": rows})
+
+
+@dagster_asset(
+    group_name=INGESTION_GROUP,
+    partitions_def=daily_partitions,
+    deps=["earnings_calendar"],
+)
+def transcripts(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
+    """Earnings-call transcripts for yesterday's + today's reporters.
+
+    Alpha Vantage first (fresh, hard 25/day free quota -> settings cap),
+    defeatbeta-api as fallback/backfill for whatever AV could not serve.
+    Each source degrades independently; no source configured -> logged skip.
+    """
+    as_of = as_of_from_partition(context.partition_key)
+    av = dynamo.alphavantage_transcripts()
+    defeatbeta = dynamo.defeatbeta_transcripts()
+    if av is None and defeatbeta is None:
+        context.log.warning(
+            "transcripts: ALPHAVANTAGE_API_KEY unset and transcripts extra "
+            "not installed — skipping"
+        )
+        return _skipped("no transcript source configured")
+    universe = set(dynamo.universe_symbols(as_of))
+    if not universe:
+        return _skipped("empty universe")
+    reporters = [
+        r
+        for r in dynamo.earnings_reporters(as_of - timedelta(days=1), as_of)
+        if r["symbol"] in universe
+    ][: dynamo.settings().transcript_daily_cap]
+    if not reporters:
+        return MaterializeResult(metadata={"rows": 0, "reporters": 0})
+
+    fetched = []
+    missing = []
+    for r in reporters:
+        transcript = (
+            av.fetch(r["symbol"], r["event_date"], period=r["period"]) if av else None
+        )
+        if transcript is not None:
+            fetched.append(transcript)
+        else:
+            missing.append(r)
+    av_count = len(fetched)
+    if missing and defeatbeta is not None:
+        earliest = min(r["event_date"] for r in missing)
+        fetched.extend(
+            defeatbeta.transcripts(
+                sorted({r["symbol"] for r in missing}),
+                since=earliest - timedelta(days=7),
+            )
+        )
+    repo = dynamo.market_repo()
+    rows = repo.upsert_transcripts(fetched)
+    linked = 0
+    for transcript in fetched:
+        linked += repo.link_transcript_ref(
+            transcript.symbol, transcript.event_date, transcript.ref
+        )
+    return MaterializeResult(
+        metadata={
+            "rows": rows,
+            "reporters": len(reporters),
+            "alphavantage": av_count,
+            "defeatbeta": len(fetched) - av_count,
+            "linked_earnings_events": linked,
+        }
+    )
 
 
 @dagster_asset(group_name=INGESTION_GROUP, partitions_def=daily_partitions)
@@ -194,6 +279,7 @@ INGESTION_ASSETS = [
     news,
     macro_series,
     earnings_calendar,
+    transcripts,
     prediction_market_snapshot,
     oddspipe_spreads,
 ]

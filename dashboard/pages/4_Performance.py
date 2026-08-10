@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import func, select
 from streamlit_helpers import empty_note, safe_df
 
+from dynamo.config.settings import get_settings
 from dynamo.persistence import schema
 
 st.set_page_config(page_title="Dynamo — Performance", layout="wide")
@@ -80,3 +83,30 @@ if not empty_note(cal, "No calibration points yet — needs resolved predictions
             st.dataframe(frame, width="stretch")
     else:
         st.info("No bucket stats on the latest calibration point.")
+
+# --- Backtest tearsheets (quantstats HTML written next to each run report) ---
+
+st.subheader("Backtest tearsheets")
+_backtests_dir = Path(get_settings().artifact_dir) / "backtests"
+_tearsheets = (
+    sorted(_backtests_dir.glob("*/*.html"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if _backtests_dir.exists()
+    else []
+)
+if not _tearsheets:
+    st.info("No tearsheets yet — they appear after an event-driven backtest run.")
+else:
+    for sheet in _tearsheets:
+        run_name = sheet.parent.name
+        col_name, col_dl = st.columns([5, 1])
+        col_name.markdown(f"**{run_name}** — `{sheet.name}`")
+        try:
+            col_dl.download_button(
+                "Download",
+                data=sheet.read_bytes(),
+                file_name=f"{run_name}-{sheet.name}",
+                mime="text/html",
+                key=f"tearsheet-{run_name}-{sheet.name}",
+            )
+        except OSError:
+            col_dl.caption("unreadable")

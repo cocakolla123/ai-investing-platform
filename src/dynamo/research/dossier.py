@@ -23,6 +23,38 @@ class FilingExcerpt(Frozen):
     text: str
 
 
+# Earnings-call transcript truncation: prepared remarks live at the head,
+# Q&A close at the tail — keep both, drop the middle.
+TRANSCRIPT_HEAD_CHARS = 6000
+TRANSCRIPT_TAIL_CHARS = 2000
+
+
+def transcript_excerpt(
+    content: str,
+    *,
+    symbol: str,
+    event_date: str,
+    source: str,
+    head_chars: int = TRANSCRIPT_HEAD_CHARS,
+    tail_chars: int = TRANSCRIPT_TAIL_CHARS,
+) -> str:
+    """Deterministic labeled excerpt of one call transcript for the dossier.
+
+    Short transcripts pass through whole; long ones keep the first
+    ``head_chars`` and last ``tail_chars`` with an explicit elision marker so
+    the model knows material was cut.
+    """
+    text = content.strip()
+    header = f"[transcript {symbol} {event_date} via {source}]"
+    if len(text) <= head_chars + tail_chars:
+        return f"{header}\n{text}"
+    return (
+        f"{header}\n{text[:head_chars]}"
+        f"\n\n[... transcript truncated: middle omitted ...]\n\n"
+        f"{text[-tail_chars:]}"
+    )
+
+
 def _fmt(value: float | int | None) -> str:
     if value is None:
         return "n/a"
@@ -71,8 +103,14 @@ def assemble_dossier_context(
     news_items: Sequence[NewsItem] = (),
     macro_digest_text: str = "",
     journal_hits: Sequence[str] = (),
+    earnings_call_excerpt: str = "",
 ) -> str:
-    """Deterministic string from typed inputs (sorted keys, fixed formats)."""
+    """Deterministic string from typed inputs (sorted keys, fixed formats).
+
+    ``earnings_call_excerpt`` (see :func:`transcript_excerpt`) adds an
+    "Earnings call transcript" section only when non-empty, so contexts
+    without a recent call are byte-identical to before the feature existed.
+    """
     lines: list[str] = []
     lines += _instrument_lines(instrument)
     lines += ["", *_quant_lines(quant_score)]
@@ -92,6 +130,9 @@ def assemble_dossier_context(
             ]
     else:
         lines.append("none")
+
+    if earnings_call_excerpt:
+        lines += ["", "## Earnings call transcript", earnings_call_excerpt.strip()]
 
     lines += ["", "## News digest"]
     if news_items:

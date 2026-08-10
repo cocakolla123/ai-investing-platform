@@ -38,6 +38,7 @@ from dynamo.domain.models.market import (
     PredictionMarketPrice,
     SurveillanceFlag,
     Tier,
+    Transcript,
     UniverseMembership,
     XbrlFact,
 )
@@ -238,6 +239,39 @@ class MarketDataRepository:
             for e in events
         ]
         return self.upsert_rows(schema.earnings_events, rows)
+
+    def upsert_transcripts(
+        self, transcripts: Iterable[Transcript], *, fetched_at: datetime | None = None
+    ) -> int:
+        """Earnings-call transcripts, keyed by (symbol, event_date, source)."""
+        ts = fetched_at or _now()
+        rows = [
+            {
+                "symbol": t.symbol,
+                "event_date": t.event_date,
+                "source": t.source,
+                "period": t.period,
+                "content": t.content,
+                "speakers": [dict(s) for s in t.speakers] if t.speakers is not None else None,
+                "fetched_at": ts,
+            }
+            for t in transcripts
+        ]
+        return self.upsert_rows(schema.transcripts, rows)
+
+    def link_transcript_ref(self, symbol: str, event_date: date, ref: str) -> int:
+        """Point the matching earnings_events row at a stored transcript."""
+        stmt = (
+            update(schema.earnings_events)
+            .where(
+                schema.earnings_events.c.symbol == symbol,
+                schema.earnings_events.c.event_date == event_date,
+            )
+            .values(call_transcript_ref=ref)
+        )
+        with self._engine.begin() as conn:
+            result = conn.execute(stmt)
+        return int(result.rowcount or 0)
 
     def upsert_corporate_actions(
         self, actions: Iterable[CorporateAction], *, fetched_at: datetime | None = None

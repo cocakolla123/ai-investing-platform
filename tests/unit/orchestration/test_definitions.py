@@ -24,6 +24,7 @@ def test_expected_assets_present() -> None:
         "news",
         "macro_series",
         "earnings_calendar",
+        "transcripts",
         "prediction_market_snapshot",
         # research (docs 02 §6, 03, 04, 05)
         "data_quality",

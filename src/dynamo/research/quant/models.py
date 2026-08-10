@@ -3,7 +3,10 @@
 * :class:`LightGBMModel` — primary (regression + binary). Binary scores are
   calibrated with isotonic regression on a chronological validation slice;
   Platt scaling is the fallback when the slice has < 500 positives (isotonic
-  overfits small samples).
+  overfits small samples). ``cfg["calibration"] = "mapie"`` swaps in
+  :class:`MapieCalibratedClassifier` (MAPIE Venn-ABERS conformal calibration
+  of the validation scores); isotonic remains the default and the fallback
+  when mapie is unavailable.
 * :class:`RandomForestModel` — challenger; median-impute fitted on the
   training fold only (doc 04 section 2.2 missing-data policy).
 * :class:`StatsforecastBaseline` — HistoricAverage / SeasonalNaive / AutoETS
@@ -15,6 +18,8 @@ All models are deterministic: fixed seeds, single-threaded tree building.
 
 from __future__ import annotations
 
+import importlib
+import warnings
 from collections.abc import Mapping
 from typing import Any, Literal, cast
 
@@ -26,12 +31,78 @@ MIN_ISOTONIC_POSITIVES = 500
 DEFAULT_VALID_FRACTION = 0.25
 
 Objective = Literal["regression", "binary"]
+Calibration = Literal["isotonic", "mapie"]
 
 __all__ = [
     "LightGBMModel",
+    "MapieCalibratedClassifier",
     "RandomForestModel",
     "StatsforecastBaseline",
 ]
+
+
+class _PassthroughScoreClassifier:
+    """sklearn-shaped shim: 'features' ARE probabilities of the positive class.
+
+    Lets MAPIE's prefit calibrators recalibrate a raw score column without
+    retraining the underlying model.
+    """
+
+    classes_ = np.array([0, 1])
+
+    def fit(self, x: Any, y: Any) -> _PassthroughScoreClassifier:  # pragma: no cover
+        return self
+
+    def predict_proba(self, x: Any) -> np.ndarray:
+        p = np.clip(np.asarray(x, dtype=float).ravel(), 0.0, 1.0)
+        return np.column_stack([1.0 - p, p])
+
+    def predict(self, x: Any) -> np.ndarray:
+        return (np.asarray(x, dtype=float).ravel() >= 0.5).astype(int)
+
+
+class MapieCalibratedClassifier:
+    """Conformal score calibration for the downside classifier (MAPIE 1.x).
+
+    Wraps the *validation-slice raw scores* of an already-fitted binary model
+    with MAPIE's inductive Venn-ABERS calibrator (``cv="prefit"``), giving
+    distribution-free calibrated probabilities. Same fit/transform surface as
+    the isotonic/Platt calibrator so ``_Calibrator`` can delegate to it.
+    """
+
+    def __init__(self) -> None:
+        self._calibrator: Any = None
+
+    @staticmethod
+    def available() -> bool:
+        try:
+            importlib.import_module("mapie.calibration")
+        except Exception:
+            return False
+        return True
+
+    def fit(self, raw_scores: np.ndarray, y_true: np.ndarray) -> MapieCalibratedClassifier:
+        calibration_mod = importlib.import_module("mapie.calibration")
+        calibrator = calibration_mod.VennAbersCalibrator(
+            estimator=_PassthroughScoreClassifier(), cv="prefit"
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            calibrator.fit(
+                np.asarray(raw_scores, dtype=float).reshape(-1, 1),
+                (np.asarray(y_true, dtype=float) > 0.5).astype(int),
+            )
+        self._calibrator = calibrator
+        return self
+
+    def transform(self, raw_scores: np.ndarray) -> np.ndarray:
+        assert self._calibrator is not None, "fit before transform"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            proba = self._calibrator.predict_proba(
+                np.asarray(raw_scores, dtype=float).reshape(-1, 1)
+            )
+        return np.clip(np.asarray(proba[:, 1], dtype=float), 0.0, 1.0)
 
 
 def _as_frame(x: Any) -> pd.DataFrame:
@@ -47,13 +118,24 @@ def _as_target(y: Any) -> np.ndarray:
 
 
 class _Calibrator:
-    """Isotonic on validation scores; Platt fallback below the positive floor."""
+    """Isotonic on validation scores; Platt fallback below the positive floor.
 
-    def __init__(self, min_isotonic_positives: int = MIN_ISOTONIC_POSITIVES) -> None:
+    ``preferred="mapie"`` delegates to :class:`MapieCalibratedClassifier`
+    (conformal Venn-ABERS) when mapie is importable and the slice is usable;
+    any failure falls back to the isotonic/Platt path — never an error.
+    """
+
+    def __init__(
+        self,
+        min_isotonic_positives: int = MIN_ISOTONIC_POSITIVES,
+        preferred: str = "isotonic",
+    ) -> None:
         self.min_isotonic_positives = min_isotonic_positives
+        self.preferred = preferred
         self.method: str = "identity"
         self._iso: Any = None
         self._platt: Any = None
+        self._mapie: MapieCalibratedClassifier | None = None
 
     def fit(self, raw_scores: np.ndarray, y_true: np.ndarray) -> _Calibrator:
         from sklearn.isotonic import IsotonicRegression
@@ -64,6 +146,13 @@ class _Calibrator:
         if positives == 0 or negatives == 0 or len(y_true) < 4:
             self.method = "identity"
             return self
+        if self.preferred == "mapie" and MapieCalibratedClassifier.available():
+            try:
+                self._mapie = MapieCalibratedClassifier().fit(raw_scores, y_true)
+                self.method = "mapie"
+                return self
+            except Exception:
+                self._mapie = None  # degrade to the isotonic/Platt path below
         if positives >= self.min_isotonic_positives:
             self._iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
             self._iso.fit(raw_scores, y_true)
@@ -75,6 +164,8 @@ class _Calibrator:
         return self
 
     def transform(self, raw_scores: np.ndarray) -> np.ndarray:
+        if self.method == "mapie" and self._mapie is not None:
+            return self._mapie.transform(raw_scores)
         if self.method == "isotonic":
             return np.asarray(self._iso.predict(raw_scores), dtype=float)
         if self.method == "platt":
@@ -152,8 +243,10 @@ class LightGBMModel:
         self._model = lgb.LGBMClassifier(objective="binary", **self._params())
         self._model.fit(x_fit, (y_fit > 0.5).astype(int))
         raw_valid = np.asarray(self._model.predict_proba(xv_frame)[:, 1])
+        # TrainConfig key: calibration = 'isotonic' (default) | 'mapie'.
         self._calibrator = _Calibrator(
-            int(cfg.get("min_isotonic_positives", MIN_ISOTONIC_POSITIVES))
+            int(cfg.get("min_isotonic_positives", MIN_ISOTONIC_POSITIVES)),
+            preferred=str(cfg.get("calibration", "isotonic")),
         ).fit(raw_valid, yv_arr)
         return self
 

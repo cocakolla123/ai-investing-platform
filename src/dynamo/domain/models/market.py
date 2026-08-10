@@ -126,6 +126,22 @@ class EarningsEvent(Frozen):
     call_transcript_ref: str | None = None
 
 
+class Transcript(Frozen):
+    """One earnings-call transcript (sources: ``alphavantage`` | ``defeatbeta``)."""
+
+    symbol: str
+    event_date: date
+    source: str
+    period: str | None = None  # e.g. "2026Q2"
+    content: str
+    speakers: tuple[dict[str, str], ...] | None = None
+
+    @property
+    def ref(self) -> str:
+        """The ``earnings_events.call_transcript_ref`` pointer for this row."""
+        return f"transcripts:{self.symbol}:{self.event_date.isoformat()}:{self.source}"
+
+
 class CorporateAction(Frozen):
     symbol: str
     ex_date: date

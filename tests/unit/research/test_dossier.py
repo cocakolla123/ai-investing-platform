@@ -96,3 +96,46 @@ def test_missing_optional_inputs_render_placeholders() -> None:
     )
     assert "no quant score available" in context
     assert context.count("none") >= 4
+
+
+def test_transcript_section_only_when_excerpt_provided() -> None:
+    from dynamo.research.dossier import transcript_excerpt
+
+    baseline = build()
+    assert "## Earnings call transcript" not in baseline  # byte-identical legacy path
+
+    excerpt = transcript_excerpt(
+        "CEO: Great quarter." * 3,
+        symbol="ACME",
+        event_date="2026-08-05",
+        source="alphavantage",
+    )
+    context = build(earnings_call_excerpt=excerpt)
+    section = context.index("## Earnings call transcript")
+    assert context.index("## Filing excerpts") < section < context.index("## News digest")
+    assert "[transcript ACME 2026-08-05 via alphavantage]" in context
+
+
+def test_transcript_excerpt_truncates_head_and_tail() -> None:
+    from dynamo.research.dossier import transcript_excerpt
+
+    content = "H" * 7000 + "M" * 5000 + "T" * 3000
+    excerpt = transcript_excerpt(
+        content,
+        symbol="ACME",
+        event_date="2026-08-05",
+        source="defeatbeta",
+        head_chars=6000,
+        tail_chars=2000,
+    )
+    assert excerpt.startswith("[transcript ACME 2026-08-05 via defeatbeta]\n" + "H" * 100)
+    assert "[... transcript truncated: middle omitted ...]" in excerpt
+    assert excerpt.endswith("T" * 2000)
+    # head + tail + labels only — the middle is gone
+    assert len(excerpt) < 6000 + 2000 + 200
+
+    short = transcript_excerpt(
+        "short call", symbol="ACME", event_date="2026-08-05", source="defeatbeta"
+    )
+    assert short.endswith("short call")
+    assert "truncated" not in short

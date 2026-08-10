@@ -179,6 +179,20 @@ earnings_events = Table(
     Column("fetched_at", DateTime(timezone=True)),
 )
 
+# Earnings-call transcripts (migration 0006). ``earnings_events`` rows point
+# here via call_transcript_ref = 'transcripts:{symbol}:{event_date}:{source}'.
+transcripts = Table(
+    "transcripts",
+    metadata,
+    Column("symbol", Text, primary_key=True),
+    Column("event_date", Date, primary_key=True),
+    Column("source", Text, primary_key=True),  # alphavantage | defeatbeta
+    Column("period", Text),
+    Column("content", Text, nullable=False),
+    Column("speakers", JSONB),
+    Column("fetched_at", DateTime(timezone=True)),
+)
+
 # --- Prediction markets (doc 02 §7; research-only) ---
 
 prediction_markets = Table(
