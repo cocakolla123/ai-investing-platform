@@ -20,6 +20,7 @@ from sqlalchemy import (
     SmallInteger,
     Table,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
@@ -290,6 +291,28 @@ pm_trades = Table(
     Column("kind", Text, nullable=False, default="fill"),  # fill | settlement
     Column("realized_pnl_cents", Float),
     Column("filled_at", DateTime(timezone=True), nullable=False),
+)
+
+# --- Polymarket shadow-trading sleeve — SIMULATED (ADR-0011; migration 0007) ---
+# Cash ledger for the internal sim bankroll: one seed deposit, one debit per
+# simulated fill, one credit per settlement. The bankroll is the seed plus the
+# signed sum of amounts; the (venue, kind, ref) uniqueness makes every
+# movement idempotent (re-running a fill sync or settlement is a no-op).
+# Orders/positions/trades reuse pm_* rows with venue='polymarket' — that venue
+# marks a row as SIMULATED (no real Polymarket execution path exists).
+
+pm_sim_ledger = Table(
+    "pm_sim_ledger",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("venue", Text, nullable=False, default="polymarket"),
+    Column("kind", Text, nullable=False),  # deposit | fill_debit | settlement_credit
+    Column("ref", Text, nullable=False),  # client_order_id / market_id / 'initial'
+    Column("market_id", Text, index=True),
+    Column("amount_cents", Float, nullable=False),  # signed: debits negative
+    Column("note", Text, nullable=False, default=""),
+    _ts(),
+    UniqueConstraint("venue", "kind", "ref", name="uq_pm_sim_ledger_movement"),
 )
 
 # --- Options trading — defined-risk sleeve (ADR-0010; migration 0003) ---

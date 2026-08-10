@@ -244,6 +244,34 @@ def test_trades_merged_across_sleeves_in_time_order() -> None:
     assert "+3.2 bps" in md
 
 
+def test_polymarket_sim_rows_are_labeled_simulated() -> None:
+    """ADR-0011: every rendering of the shadow sleeve says SIMULATED."""
+    source = FakeSource(
+        open_position_counts={"equities": 1, "options": 0, "kalshi": 1, "polymarket_sim": 2},
+        pm_trades=[
+            {"filled_at": _ts(13, 5), "venue": "kalshi", "market_id": "KXFED-26SEP-CUT",
+             "side": "yes", "contracts": 40, "price_cents": 42.0},
+            {"filled_at": _ts(13, 6), "venue": "polymarket", "market_id": "514729",
+             "side": "yes", "contracts": 20, "price_cents": 44.0},
+        ],
+    )
+    report = build_daily_report(source, DAY)
+    assert report.glance.open_polymarket_sim == 2
+    by_instrument = {t.instrument: t for t in report.trades}
+    assert by_instrument["KXFED-26SEP-CUT"].market == "kalshi"
+    assert by_instrument["514729"].market == "polymarket-sim"
+    assert by_instrument["514729"].sleeve == "polymarket (SIMULATED)"
+    md = render_markdown(report)
+    assert "2 Polymarket shadow (SIMULATED — tracked internally, no real orders sent)" in md
+    assert "Polymarket rows are SIMULATED — tracked internally, no real orders sent." in md
+
+
+def test_kalshi_only_glance_line_omits_sim_sleeve() -> None:
+    md = render_markdown(build_daily_report(full_day_source(), DAY))
+    assert "7 stocks, 2 options, 1 Kalshi event markets" in md
+    assert "SIMULATED" not in md  # nothing simulated happened, nothing rendered
+
+
 def test_cost_math_cache_and_batch_savings() -> None:
     report = build_daily_report(full_day_source(), DAY)
     c = report.cost

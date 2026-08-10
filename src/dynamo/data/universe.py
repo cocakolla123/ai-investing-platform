@@ -1,0 +1,286 @@
+"""Three-tier universe manager. Design: doc 02 §2.
+
+- Tier 1 (core): seeded from ``config/universe_seed.txt`` when present, else a
+  built-in liquid starter list (~40 mega/large caps + ~10 ETFs). The starter
+  list is deliberately small — expand it by editing the seed file; permanent
+  changes always require human approval (``approved_by``).
+- Tier 3 (promoted): temporary full treatment for a configurable window
+  (default 30 days), written with an explicit expiry.
+- Recommendations (add to core / demote) are *ackable alert rows* — the
+  platform never changes Tier 1 by itself; :meth:`approve_core_addition` /
+  :meth:`approve_core_removal` are the only write paths and both record
+  ``approved_by``.
+
+All membership transitions write ``universe_membership`` rows with reasons
+(point-in-time backbone for survivorship-safe backtests).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any, Protocol
+
+import structlog
+
+from dynamo.domain.models.market import Tier, UniverseMembership
+
+log = structlog.get_logger(__name__)
+
+DEFAULT_SEED_PATH = "config/universe_seed.txt"
+
+# Built-in starter list: ~40 liquid large caps. The real core universe
+# (~500-600 names, doc 02 §2) is grown from here via the seed file and
+# approved recommendations.
+STARTER_STOCKS: tuple[str, ...] = (
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "BRK.B", "JPM", "V",
+    "UNH", "JNJ", "XOM", "PG", "MA", "HD", "COST", "ABBV", "MRK", "AVGO",
+    "PEP", "KO", "WMT", "BAC", "CRM", "AMD", "ORCL", "NFLX", "LIN", "DIS",
+    "ADBE", "TMO", "CSCO", "ACN", "MCD", "ABT", "INTU", "CAT", "IBM", "TXN",
+)
+
+# ~10 ETFs: broad index, sector SPDRs sample, treasuries (doc 02 §2 curated set).
+STARTER_ETFS: tuple[str, ...] = (
+    "SPY", "QQQ", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "TLT",
+)
+
+
+class UniverseStore(Protocol):
+    """The slice of ``MarketDataRepository`` the manager reads/writes through."""
+
+    def universe_at(self, as_of: date, tier: Tier | None = None) -> list[UniverseMembership]: ...
+
+    def upsert_universe_membership(self, memberships: Any) -> int: ...
+
+    def close_membership(
+        self, symbol: str, valid_from: date, valid_to: date, *, approved_by: str | None = None
+    ) -> int: ...
+
+    def add_alert(
+        self,
+        *,
+        severity: str,
+        name: str,
+        message: str,
+        ackable: bool = True,
+        created_at: datetime | None = None,
+    ) -> None: ...
+
+
+class UniverseManager:
+    """Point-in-time three-tier universe operations (doc 02 §2)."""
+
+    def __init__(
+        self,
+        store: UniverseStore,
+        *,
+        seed_path: str = DEFAULT_SEED_PATH,
+        default_promotion_days: int = 30,
+    ) -> None:
+        self._store = store
+        self._seed_path = Path(seed_path)
+        self._default_promotion_days = default_promotion_days
+
+    # -- seeding -----------------------------------------------------------
+
+    def _seed_symbols(self) -> list[tuple[str, str]]:
+        """(symbol, origin) pairs from the seed file, else the built-in list."""
+        if self._seed_path.exists():
+            symbols = [
+                line.strip().upper()
+                for line in self._seed_path.read_text().splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+            return [(s, f"seed file {self._seed_path}") for s in symbols]
+        builtin = [(s, "built-in starter list") for s in (*STARTER_STOCKS, *STARTER_ETFS)]
+        return builtin
+
+    def seed_core(self, as_of: date) -> int:
+        """Seed Tier 1 once; idempotent (no-op when Tier 1 already populated)."""
+        if self._store.universe_at(as_of, Tier.CORE):
+            log.info("universe_seed_skipped_nonempty")
+            return 0
+        rows = [
+            UniverseMembership(
+                symbol=symbol,
+                tier=Tier.CORE,
+                valid_from=as_of,
+                valid_to=None,
+                reason=f"core seed: {origin}",
+                approved_by="seed",
+            )
+            for symbol, origin in self._seed_symbols()
+        ]
+        count = self._store.upsert_universe_membership(rows)
+        log.info("universe_seeded", symbols=len(rows))
+        return count
+
+    # -- point-in-time queries ---------------------------------------------
+
+    def members_at(self, as_of: date, tier: Tier | None = None) -> list[UniverseMembership]:
+        return self._store.universe_at(as_of, tier)
+
+    def active_symbols(self, as_of: date) -> set[str]:
+        """Symbols receiving full treatment: Tier 1 + live Tier-3 promotions."""
+        core = {m.symbol for m in self.members_at(as_of, Tier.CORE)}
+        promoted = {m.symbol for m in self.members_at(as_of, Tier.PROMOTED)}
+        return core | promoted
+
+    # -- Tier-3 promotion lifecycle ----------------------------------------
+
+    def promote(
+        self,
+        symbol: str,
+        *,
+        as_of: date,
+        reason: str,
+        window_days: int | None = None,
+    ) -> UniverseMembership:
+        """Temporary Tier-1 treatment for ``window_days`` (default 30, doc 02 §2).
+
+        Re-promoting an already-promoted symbol extends the window (continued
+        flags extend, per the design).
+        """
+        window = window_days or self._default_promotion_days
+        expiry = as_of + timedelta(days=window)
+        existing = [m for m in self.members_at(as_of, Tier.PROMOTED) if m.symbol == symbol]
+        if existing:
+            current = existing[0]
+            extended = UniverseMembership(
+                symbol=symbol,
+                tier=Tier.PROMOTED,
+                valid_from=current.valid_from,
+                valid_to=max(expiry, current.valid_to or expiry),
+                reason=f"{current.reason}; extended: {reason}",
+                approved_by=None,
+            )
+            self._store.upsert_universe_membership([extended])
+            log.info("promotion_extended", symbol=symbol, until=str(extended.valid_to))
+            return extended
+        membership = UniverseMembership(
+            symbol=symbol,
+            tier=Tier.PROMOTED,
+            valid_from=as_of,
+            valid_to=expiry,
+            reason=reason,
+            approved_by=None,  # temporary — no human approval needed
+        )
+        self._store.upsert_universe_membership([membership])
+        log.info("symbol_promoted", symbol=symbol, until=str(expiry), reason=reason)
+        return membership
+
+    def expire_promotions(self, as_of: date) -> list[str]:
+        """Close any Tier-3 rows past their window; returns lapsed symbols.
+
+        Exit path (a) in doc 02 §2: the window lapses quietly → back to Tier 2.
+        """
+        lapsed: list[str] = []
+        for m in self._store.universe_at(as_of, Tier.PROMOTED):
+            if m.valid_to is None:  # defensive: promotions always carry an expiry
+                self._store.close_membership(m.symbol, m.valid_from, as_of)
+                lapsed.append(m.symbol)
+        # Rows whose valid_to already passed are excluded by universe_at and
+        # need no write — they lapse naturally by interval semantics.
+        if lapsed:
+            log.info("promotions_expired", symbols=lapsed)
+        return lapsed
+
+    # -- recommendations (human-in-the-loop, doc 02 §2 exit paths b/c) -----
+
+    def recommend_addition(self, symbol: str, rationale: str, *, now: datetime) -> None:
+        """Sustained interest → ackable universe-change recommendation row."""
+        self._store.add_alert(
+            severity="info",
+            name="universe_change_recommendation",
+            message=f"ADD {symbol} to core universe: {rationale}",
+            ackable=True,
+            created_at=now,
+        )
+        log.info("universe_addition_recommended", symbol=symbol)
+
+    def recommend_demotion(
+        self,
+        symbol: str,
+        rationale: str,
+        *,
+        now: datetime,
+        suggested_replacement: str | None = None,
+    ) -> None:
+        """Tier-1 name failing floors for 60d → demotion recommendation."""
+        suffix = (
+            f" (suggested replacement: {suggested_replacement})" if suggested_replacement else ""
+        )
+        self._store.add_alert(
+            severity="info",
+            name="universe_change_recommendation",
+            message=f"DEMOTE {symbol} from core universe: {rationale}{suffix}",
+            ackable=True,
+            created_at=now,
+        )
+        log.info("universe_demotion_recommended", symbol=symbol)
+
+    # -- approved permanent changes (the ONLY tier-1 write paths) ----------
+
+    def approve_core_addition(
+        self, symbol: str, *, as_of: date, reason: str, approved_by: str
+    ) -> UniverseMembership:
+        """Permanent Tier-1 add; requires a human ``approved_by`` (doc 02 §2)."""
+        if not approved_by:
+            raise ValueError("permanent tier-1 changes require approved_by")
+        membership = UniverseMembership(
+            symbol=symbol,
+            tier=Tier.CORE,
+            valid_from=as_of,
+            valid_to=None,
+            reason=reason,
+            approved_by=approved_by,
+        )
+        self._store.upsert_universe_membership([membership])
+        log.info("core_addition_approved", symbol=symbol, approved_by=approved_by)
+        return membership
+
+    def approve_core_removal(
+        self, symbol: str, *, as_of: date, reason: str, approved_by: str
+    ) -> int:
+        """Permanent Tier-1 removal: closes the current interval with approval."""
+        if not approved_by:
+            raise ValueError("permanent tier-1 changes require approved_by")
+        closed = 0
+        for m in self._store.universe_at(as_of, Tier.CORE):
+            if m.symbol == symbol:
+                closed += self._store.close_membership(
+                    symbol, m.valid_from, as_of, approved_by=approved_by
+                )
+        log.info("core_removal_approved", symbol=symbol, approved_by=approved_by, rows=closed)
+        return closed
+
+
+def default_sector_etf_map(sectors: Mapping[str, str]) -> dict[str, str]:
+    """GICS sector → sector-SPDR map for the ``rel_strength`` detector.
+
+    ``sectors`` maps symbol → GICS sector name (from ``instruments``).
+    """
+    spdr: dict[str, str] = {
+        "Information Technology": "XLK",
+        "Financials": "XLF",
+        "Energy": "XLE",
+        "Health Care": "XLV",
+        "Industrials": "XLI",
+        "Consumer Discretionary": "XLY",
+        "Consumer Staples": "XLP",
+        "Utilities": "XLU",
+        "Materials": "XLB",
+        "Real Estate": "XLRE",
+        "Communication Services": "XLC",
+    }
+    return {
+        symbol: spdr[sector]
+        for symbol, sector in sectors.items()
+        if sector in spdr
+    }
+
+
+def seed_symbols_documented() -> Sequence[str]:
+    """The built-in starter universe (user-expandable via the seed file)."""
+    return (*STARTER_STOCKS, *STARTER_ETFS)

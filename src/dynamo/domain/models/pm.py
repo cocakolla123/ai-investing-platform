@@ -1,12 +1,19 @@
-"""Prediction-market trading domain entities (Kalshi sleeve). Design: ADR-0009.
+"""Prediction-market trading domain entities. Design: ADR-0009, ADR-0011.
 
-The sleeve reuses the equity order lifecycle (``OrderState`` +
+The sleeves reuse the equity order lifecycle (``OrderState`` +
 ``ORDER_TRANSITIONS`` from :mod:`dynamo.domain.models.portfolio`) so there is
 exactly one state machine to reason about. Prices are integer cents (Kalshi
 native); contracts are non-negative integers; every contract settles at $1
 (100 cents) when it resolves in the holder's favour, $0 otherwise.
 
-Polymarket has NO trading entities anywhere — it stays research-only.
+Two venues can appear in these entities:
+
+- ``kalshi`` — the real sleeve (demo/prod behind the live gate, ADR-0009);
+- ``polymarket`` — the shadow-trading sleeve (ADR-0011): decided by the same
+  pipeline but ALWAYS SIMULATED. Polymarket has no demo exchange, so fills are
+  simulated internally and no real order is ever sent. ``venue`` alone marks a
+  row as simulated (:func:`is_simulated_venue`); there is deliberately no real
+  Polymarket execution path anywhere in the codebase.
 """
 
 from __future__ import annotations
@@ -20,7 +27,21 @@ from dynamo.domain.models.market import Frozen
 from dynamo.domain.models.portfolio import OrderState
 
 PM_VENUE_KALSHI = "kalshi"
+PM_VENUE_POLYMARKET = "polymarket"
+# Venues whose executions are SIMULATED — internal fills only, no real orders.
+PM_SIM_VENUES = frozenset({PM_VENUE_POLYMARKET})
 CONTRACT_PAYOUT_CENTS = 100.0
+
+
+def is_simulated_venue(venue: str) -> bool:
+    """True when every execution on ``venue`` is simulated (ADR-0011).
+
+    The venue string IS the simulation marker: Polymarket has no real
+    execution path (no broker, no credentials, no CLOB endpoints), so any
+    order/trade/position row carrying ``venue='polymarket'`` is by
+    construction an internal simulation.
+    """
+    return venue in PM_SIM_VENUES
 
 
 class PMSide(StrEnum):
@@ -88,6 +109,24 @@ class PMTradeDecision(Frozen):
     price_cents: int = Field(ge=1, le=99)  # entry price per contract used for sizing
     rationale: str
     view_ref: str  # "{venue}:{market_id}:{as_of}"
+
+
+class PMSimLedgerEntry(Frozen):
+    """One idempotent cash movement on a SIMULATED sleeve's bankroll (ADR-0011).
+
+    ``(venue, kind, ref)`` is the idempotency key: the seed deposit uses
+    ``ref='initial'``, fill debits the client order id, settlement credits the
+    market id. Amounts are signed cents — debits negative, credits positive —
+    and the bankroll is the signed sum of all entries.
+    """
+
+    venue: str = PM_VENUE_POLYMARKET
+    kind: str  # deposit | fill_debit | settlement_credit
+    ref: str
+    market_id: str | None = None
+    amount_cents: float
+    note: str = ""
+    ts: datetime
 
 
 class CrossVenueSpread(Frozen):

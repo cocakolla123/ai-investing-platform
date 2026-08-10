@@ -71,6 +71,7 @@ def load_rsa_signer(private_key_path: str) -> RequestSigner | None:
         )
         from cryptography.hazmat.primitives.asymmetric import (  # pyright: ignore[reportMissingImports]
             padding,
+            rsa,
         )
     except ImportError:
         log.warning("kalshi_broker_cryptography_missing")
@@ -80,6 +81,9 @@ def load_rsa_signer(private_key_path: str) -> RequestSigner | None:
         key = serialization.load_pem_private_key(pem, password=None)
     except (OSError, ValueError) as exc:
         log.warning("kalshi_broker_key_load_failed", error=str(exc))
+        return None
+    if not isinstance(key, rsa.RSAPrivateKey):  # RSA-PSS is the only scheme Kalshi signs
+        log.warning("kalshi_broker_key_not_rsa")
         return None
 
     class _RsaPss:

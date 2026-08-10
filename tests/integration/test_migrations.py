@@ -20,16 +20,33 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0006() -> None:
+def test_revision_chain_is_linear_through_0007() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0006" in modules, "0006_transcripts migration missing"
+    assert "0007" in modules, "0007_polymarket_sim migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0006"}, f"expected 0006 as the single head, got {heads}"
+    assert heads == {"0007"}, f"expected 0007 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
+    assert down["0007"] == "0006"
+
+
+def test_0007_targets_sim_ledger_table() -> None:
+    from sqlalchemy import UniqueConstraint
+
+    from dynamo.persistence import schema
+
+    assert "pm_sim_ledger" in schema.metadata.tables
+    table = schema.metadata.tables["pm_sim_ledger"]
+    unique = [
+        c
+        for c in table.constraints
+        if isinstance(c, UniqueConstraint) and c.name == "uq_pm_sim_ledger_movement"
+    ]
+    assert len(unique) == 1
+    assert sorted(c.name for c in unique[0].columns) == ["kind", "ref", "venue"]
 
 
 def test_0005_targets_cross_venue_table() -> None:

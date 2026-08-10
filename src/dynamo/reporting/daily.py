@@ -85,6 +85,7 @@ class Glance(BaseModel):
     open_equities: int = 0
     open_options: int = 0
     open_kalshi: int = 0
+    open_polymarket_sim: int = 0  # SIMULATED sleeve (ADR-0011) — no real orders
     regime: str | None = None
     ladder_rung: str | None = None
     drawdown_pct: float | None = None
@@ -230,6 +231,7 @@ def _glance(source: ReportSource, day: date, verdicts: list[Row], cost: CostSumm
         open_equities=int(counts.get("equities", 0)),
         open_options=int(counts.get("options", 0)),
         open_kalshi=int(counts.get("kalshi", 0)),
+        open_polymarket_sim=int(counts.get("polymarket_sim", 0)),
         regime=str(regime["regime"]) if regime else None,
         ladder_rung=str(ladder["rung"]) if ladder else None,
         drawdown_pct=100.0 * _f(ladder["drawdown"]) if ladder else None,
@@ -304,17 +306,19 @@ def _trades(source: ReportSource, day: date) -> list[TradeLine]:
             )
         )
     for t in source.pm_trades_on(day):
+        venue = str(t.get("venue") or "kalshi")
+        simulated = venue != "kalshi"  # ADR-0011: polymarket rows are SIMULATED
         lines.append(
             TradeLine(
                 filled_at=t["filled_at"],
-                market="kalshi",
+                market="polymarket-sim" if simulated else "kalshi",
                 instrument=str(t["market_id"]),
                 side=str(t["side"]),
                 quantity=_f(t["contracts"]),
                 quantity_unit="contracts",
                 fill_price=_f(t["price_cents"]),
                 price_unit="cents",
-                sleeve=t.get("sleeve", "kalshi"),
+                sleeve="polymarket (SIMULATED)" if simulated else t.get("sleeve", "kalshi"),
             )
         )
     return sorted(lines, key=lambda ln: (ln.filled_at, ln.market, ln.instrument, ln.side))
@@ -501,10 +505,16 @@ def _render_glance(g: Glance, lines: list[str]) -> None:
         lines.append(f"- **Portfolio value:** {_usd(g.equity)}{change}")
     if g.cash_pct is not None:
         lines.append(f"- **Cash on hand:** {g.cash_pct:.1f}% of the portfolio")
-    lines.append(
+    positions_line = (
         f"- **Open positions:** {g.open_equities} stocks, {g.open_options} options, "
         f"{g.open_kalshi} Kalshi event markets"
     )
+    if g.open_polymarket_sim:
+        positions_line += (
+            f", {g.open_polymarket_sim} Polymarket shadow "
+            "(SIMULATED — tracked internally, no real orders sent)"
+        )
+    lines.append(positions_line)
     if g.regime is not None:
         lines.append(f"- **Market regime (overall market conditions):** {g.regime}")
     if g.ladder_rung is not None:
@@ -569,8 +579,13 @@ def _render_trades(trades: list[TradeLine], lines: list[str]) -> None:
         return
     lines.append(
         "Slippage compares the fill to the price when the decision was made "
-        "(in basis points; 100 bps = 1%). Kalshi prices are in cents per contract."
+        "(in basis points; 100 bps = 1%). Prediction-market prices are in cents "
+        "per contract."
     )
+    if any(t.market == "polymarket-sim" for t in trades):
+        lines.append(
+            "Polymarket rows are SIMULATED — tracked internally, no real orders sent."
+        )
     lines.append("")
     rows = [
         [

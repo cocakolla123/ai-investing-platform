@@ -32,6 +32,7 @@ dependencies = [
     "tenacity>=8.3",
     # Conformal probability calibration (sklearn-family, lightweight).
     "mapie>=1.0",
+    "cryptography>=50.0.0",
 ]
 
 [tool.uv]

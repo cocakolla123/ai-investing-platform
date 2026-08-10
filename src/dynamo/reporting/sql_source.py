@@ -62,7 +62,20 @@ class SqlReportSource:
                 or 0
             ),
             "kalshi": int(
-                self._scalar(select(func.count()).select_from(pm).where(pm.c.contracts != 0))
+                self._scalar(
+                    select(func.count())
+                    .select_from(pm)
+                    .where(pm.c.contracts != 0, pm.c.venue == "kalshi")
+                )
+                or 0
+            ),
+            # SIMULATED sleeve (ADR-0011): tracked internally, no real orders.
+            "polymarket_sim": int(
+                self._scalar(
+                    select(func.count())
+                    .select_from(pm)
+                    .where(pm.c.contracts != 0, pm.c.venue == "polymarket")
+                )
                 or 0
             ),
         }
@@ -149,7 +162,10 @@ class SqlReportSource:
     def pm_trades_on(self, day: date) -> list[Row]:
         t = schema.pm_trades
         return self._rows(
-            select(t.c.filled_at, t.c.market_id, t.c.side, t.c.contracts, t.c.price_cents)
+            select(
+                t.c.filled_at, t.c.venue, t.c.market_id, t.c.side, t.c.contracts,
+                t.c.price_cents,
+            )
             .where(t.c.filled_at >= _day_start(day), t.c.filled_at < _day_end(day))
             .order_by(t.c.filled_at, t.c.market_id)
         )

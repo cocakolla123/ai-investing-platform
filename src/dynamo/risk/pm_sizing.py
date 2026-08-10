@@ -1,15 +1,21 @@
-"""Prediction-market sleeve selection & sizing (Kalshi; ADR-0009).
+"""Prediction-market sleeve selection & sizing (ADR-0009; ADR-0011).
 
 Pure code with the doc 06 veto-contract philosophy: the risk engine — not the
 research view — decides what trades, and every rule here fails CLOSED. A market
 with any missing, non-finite, or out-of-range input is skipped with a recorded
 reason, never sized.
 
+One sleeve per call: ``PMSizingParams.venue`` names the single venue this
+pass may size (Kalshi by default; the Polymarket shadow sleeve passes
+``venue='polymarket'`` with the SIM bankroll as ``equity``). Views for any
+other venue are skipped, so the same rules gate both sleeves.
+
 Rules, in order:
 
-1. Eligibility filters: Kalshi only, trusted quote, |edge| >= min_edge against
-   the CURRENT price, confidence >= min_confidence, resolution within
-   ``max_days_to_resolution``, not already at the per-market cap.
+1. Eligibility filters: the params venue only, trusted quote, |edge| >=
+   min_edge against the CURRENT price, confidence >= min_confidence,
+   resolution within ``max_days_to_resolution``, not already at the
+   per-market cap.
 2. Binary-outcome Kelly from estimated vs current implied probability
    (YES: ``(q-p)/(1-p)``; NO: ``(p-q)/p``), scaled by ``kelly_fraction_cap``.
 3. Dollar caps: per-market cap, then the hard sleeve cap over existing + new
@@ -66,7 +72,8 @@ class PMSizingParams:
     max_days_to_resolution: int = 90
     kelly_fraction_cap: float = 0.25
     max_open_markets: int = 10
-    cross_venue_veto_gap: float = 0.10  # |polymarket - estimated| veto threshold
+    cross_venue_veto_gap: float = 0.10  # |other venue - estimated| veto threshold
+    venue: str = PM_VENUE_KALSHI  # the ONE venue this sizing pass may trade
 
 
 @dataclass(frozen=True)
@@ -123,7 +130,7 @@ def _eligible(
     Returns a sized candidate, or the skip reason (fail closed on anything
     missing or non-finite).
     """
-    if view.venue != PM_VENUE_KALSHI:
+    if view.venue != params.venue:
         return SKIP_VENUE_NOT_TRADABLE
     price = prices.get(view.market_id)
     if price is None:
@@ -150,18 +157,18 @@ def _eligible(
     if not 0.0 <= confidence <= 1.0 or confidence < params.min_confidence:
         return SKIP_CONFIDENCE_BELOW_FLOOR
 
-    # Cross-venue corroboration (additive; module docstring). ``polymarket``
-    # is the matched venue's YES price for the SAME question. Agreement with
-    # our direction vs the Kalshi price -> note; disagreement beyond the veto
-    # gap (both venues against our estimate) -> stand down. Anything missing,
-    # non-finite, or out of range changes nothing.
+    # Cross-venue corroboration (additive; module docstring). ``mirror_yes``
+    # is the matched OTHER venue's YES price for the SAME question. Agreement
+    # with our direction vs the current price -> note; disagreement beyond the
+    # veto gap (both venues against our estimate) -> stand down. Anything
+    # missing, non-finite, or out of range changes nothing.
     corroboration: str | None = None
-    polymarket = None if cross_venue is None else cross_venue.get(view.market_id)
-    if polymarket is not None and _finite(polymarket) and 0.0 <= polymarket <= 1.0:
-        ours, theirs = edge, polymarket - p
+    mirror_yes = None if cross_venue is None else cross_venue.get(view.market_id)
+    if mirror_yes is not None and _finite(mirror_yes) and 0.0 <= mirror_yes <= 1.0:
+        ours, theirs = edge, mirror_yes - p
         if ours * theirs > 0.0:
-            corroboration = f"cross-venue corroborated (polymarket yes {polymarket:.2f})"
-        elif theirs != 0.0 and abs(polymarket - q) > params.cross_venue_veto_gap:
+            corroboration = f"cross-venue corroborated (mirror yes {mirror_yes:.2f})"
+        elif theirs != 0.0 and abs(mirror_yes - q) > params.cross_venue_veto_gap:
             return SKIP_CROSS_VENUE_DISAGREEMENT
 
     side = PMSide.YES if edge > 0.0 else PMSide.NO

@@ -1,0 +1,74 @@
+"""Tiingo adapter parsing tests (adjClose, derived corp actions)."""
+
+from __future__ import annotations
+
+from datetime import UTC, date, datetime
+
+import httpx
+
+from dynamo.data.ratelimit import TokenBucket
+from dynamo.data.tiingo import TiingoClient
+
+PRICES = [
+    {
+        "date": "2026-07-30T00:00:00.000Z",
+        "open": 10.0, "high": 11.0, "low": 9.5, "close": 10.5,
+        "volume": 1000, "adjClose": 10.4, "splitFactor": 1.0, "divCash": 0.0,
+    },
+    {
+        "date": "2026-07-31T00:00:00.000Z",
+        "open": 10.5, "high": 12.0, "low": 10.0, "close": 11.0,
+        "volume": 2000, "adjClose": 11.0, "splitFactor": 2.0, "divCash": 0.25,
+    },
+]
+
+
+def make_client(handler: httpx.MockTransport) -> TiingoClient:
+    return TiingoClient(
+        "tok",
+        client=httpx.Client(transport=handler),
+        bucket=TokenBucket(rate=10_000.0, capacity=10_000.0),
+    )
+
+
+def test_daily_bars_parse_adj_close_and_provenance() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Token tok"
+        assert "/tiingo/daily/acme/prices" in str(request.url)
+        return httpx.Response(200, json=PRICES)
+
+    client = make_client(httpx.MockTransport(handler))
+    assert client.source == "tiingo"
+    bars = list(client.daily_bars(["ACME"], date(2026, 7, 30), date(2026, 7, 31)))
+    assert len(bars) == 2
+    assert bars[0].symbol == "ACME"
+    assert bars[0].ts == datetime(2026, 7, 30, tzinfo=UTC)
+    assert bars[0].adj_close == 10.4
+    assert bars[0].source == "tiingo"
+
+
+def test_corporate_actions_for_derives_splits_and_dividends() -> None:
+    client = make_client(
+        httpx.MockTransport(lambda req: httpx.Response(200, json=PRICES))
+    )
+    actions = list(client.corporate_actions_for(["ACME"], date(2026, 7, 30), date(2026, 7, 31)))
+    kinds = {(a.action_type, a.ex_date) for a in actions}
+    assert ("split", date(2026, 7, 31)) in kinds
+    assert ("dividend", date(2026, 7, 31)) in kinds
+    split = next(a for a in actions if a.action_type == "split")
+    assert split.ratio == 2.0
+    div = next(a for a in actions if a.action_type == "dividend")
+    assert div.amount == 0.25
+
+
+def test_latest_quotes_maps_tngo_last() -> None:
+    payload = [{"ticker": "acme", "tngoLast": 11.25}, {"ticker": "XYZ", "last": 5.0}]
+    client = make_client(httpx.MockTransport(lambda req: httpx.Response(200, json=payload)))
+    quotes = client.latest_quotes(["ACME", "XYZ"])
+    assert quotes == {"ACME": 11.25, "XYZ": 5.0}
+
+
+def test_market_wide_corp_actions_and_assets_are_noops() -> None:
+    client = make_client(httpx.MockTransport(lambda req: httpx.Response(200, json=[])))
+    assert list(client.corporate_actions(date(2026, 1, 1), date(2026, 2, 1))) == []
+    assert list(client.tradable_instruments()) == []

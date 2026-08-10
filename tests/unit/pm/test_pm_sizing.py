@@ -133,6 +133,35 @@ class TestFilters:
             assert ("*", SKIP_INVALID_EQUITY) in result.skipped
 
 
+class TestVenueParam:
+    """ADR-0011: ``params.venue`` names the ONE sleeve a sizing pass may trade."""
+
+    def test_polymarket_view_sized_under_polymarket_params(self) -> None:
+        view = make_view(venue="polymarket", estimated=0.60, implied=0.43)
+        result = run([view], params=PMSizingParams(venue="polymarket"))
+        assert len(result.decisions) == 1
+        d = result.decisions[0]
+        assert d.venue == "polymarket"
+        assert d.side is PMSide.YES
+
+    def test_kalshi_view_skipped_under_polymarket_params(self) -> None:
+        view = make_view()  # kalshi
+        result = run([view], params=PMSizingParams(venue="polymarket"))
+        assert result.decisions == ()
+        assert (view.market_id, SKIP_VENUE_NOT_TRADABLE) in result.skipped
+
+    def test_sim_bankroll_caps_bind_against_sim_equity(self) -> None:
+        # $1,000 SIM bankroll: per-market cap = $10 -> floor(10/0.43) = 23
+        # contracts, never more — the caps run against the sim bankroll, not
+        # the (much larger) portfolio equity.
+        view = make_view(venue="polymarket", estimated=0.60, implied=0.43)
+        result = run([view], equity=1_000.0, params=PMSizingParams(venue="polymarket"))
+        assert len(result.decisions) == 1
+        d = result.decisions[0]
+        assert d.contracts == 23
+        assert d.contracts * d.price_cents / 100.0 <= 0.01 * 1_000.0
+
+
 class TestGreedyAllocation:
     def test_sleeve_cap_binds_across_markets(self) -> None:
         views = [make_view(f"M{i}", estimated=0.60, implied=0.43) for i in range(8)]
@@ -182,7 +211,7 @@ class TestCrossVenueCorroboration:
         assert (d.side, d.contracts, d.price_cents, d.kelly_fraction) == (
             b.side, b.contracts, b.price_cents, b.kelly_fraction,
         )
-        assert "cross-venue corroborated (polymarket yes 0.55)" in d.rationale
+        assert "cross-venue corroborated (mirror yes 0.55)" in d.rationale
         assert "corroborated" not in b.rationale
 
     def test_disagreement_beyond_gap_skips(self) -> None:

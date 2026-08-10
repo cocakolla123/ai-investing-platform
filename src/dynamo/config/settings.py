@@ -95,6 +95,15 @@ class Settings(BaseSettings):
     pm_kelly_fraction_cap: float = 0.25  # fractional Kelly, same cap as equities
     pm_max_open_markets: int = 10
 
+    # --- Polymarket shadow-trading sleeve (ADR-0011; SIMULATED, never real) ---
+    # Polymarket has no demo exchange, so the sleeve simulates the broker
+    # internally: decisions run through the same pm_* gates against the sim
+    # bankroll, fills happen in our own tables at Gamma prices, and NO real
+    # order is ever sent (no credentials, no CLOB endpoints anywhere).
+    polymarket_sim_enabled: bool = True
+    polymarket_sim_bankroll_usd: float = 1000.0
+    polymarket_sim_slippage_cents: int = 1  # applied AGAINST us on every simulated fill
+
     # --- Options sleeve (ADR-0010; defined-risk only, paper first) ---
     # Hard caps enforced in code (risk/options_sizing.py + domain validators):
     # the sleeve trades ONLY long calls, long puts, covered calls, and

@@ -13,8 +13,8 @@ htmlcov/
 .env.*
 !.env.example
 
-# Data & artifacts
-data/
+# Data & artifacts (repo-root data dir only; src/dynamo/data is source code)
+/data/
 *.parquet
 *.duckdb
 models/artifacts/

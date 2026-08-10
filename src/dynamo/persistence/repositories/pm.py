@@ -1,9 +1,11 @@
-"""Prediction-market trading repositories — Kalshi sleeve (ADR-0009).
+"""Prediction-market trading repositories (ADR-0009; ADR-0011).
 
 ``PMOrderRepository`` satisfies the ``PMOrderStore`` protocol of the PM order
 manager and ``PMTradeRepository`` its ``PMTradeStore``; every state transition
 writes exactly one append-only ``pm_order_events`` row in the same transaction
-(the doc 09 §9 discipline, verbatim).
+(the doc 09 §9 discipline, verbatim). Both sleeves share these tables: Kalshi
+rows are real (demo/prod), ``venue='polymarket'`` rows are SIMULATED
+(ADR-0011). ``PMSimLedgerRepository`` holds the sim bankroll's cash ledger.
 """
 
 from __future__ import annotations
@@ -12,12 +14,25 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Engine, select, update
+from sqlalchemy import Engine, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from dynamo.domain.models.pm import PMOrder, PMPosition, PMSide, PMTrade
+from dynamo.domain.models.pm import (
+    PM_VENUE_POLYMARKET,
+    PMOrder,
+    PMPosition,
+    PMSide,
+    PMSimLedgerEntry,
+    PMTrade,
+)
 from dynamo.domain.models.portfolio import TERMINAL_ORDER_STATES, OrderState
-from dynamo.persistence.schema import pm_order_events, pm_orders, pm_positions, pm_trades
+from dynamo.persistence.schema import (
+    pm_order_events,
+    pm_orders,
+    pm_positions,
+    pm_sim_ledger,
+    pm_trades,
+)
 
 _TERMINAL_VALUES = tuple(s.value for s in TERMINAL_ORDER_STATES)
 
@@ -278,9 +293,15 @@ class PMPositionRepository:
                 )
             )
 
-    def open_positions(self) -> list[PMPosition]:
+    def open_positions(self, venue: str | None = None) -> list[PMPosition]:
+        """Open positions, optionally for ONE venue (Kalshi call sites must
+        pass their venue so SIMULATED Polymarket rows never leak into Kalshi
+        sizing or reconciliation)."""
+        stmt = select(pm_positions).where(pm_positions.c.contracts > 0)
+        if venue is not None:
+            stmt = stmt.where(pm_positions.c.venue == venue)
         with self._engine.connect() as cx:
-            rows = cx.execute(select(pm_positions).where(pm_positions.c.contracts > 0)).all()
+            rows = cx.execute(stmt).all()
         return [
             PMPosition(
                 venue=r.venue,
@@ -292,3 +313,67 @@ class PMPositionRepository:
             )
             for r in rows
         ]
+
+
+class PMSimLedgerRepository:
+    """Cash ledger for the SIMULATED Polymarket sleeve's bankroll (ADR-0011).
+
+    Satisfies the ``PMSimLedgerStore`` protocol of
+    :mod:`dynamo.execution.polymarket_sim`. Every movement is idempotent via
+    the (venue, kind, ref) unique key — ``append`` reports whether the row
+    was actually written, so a re-run debits/credits nothing twice.
+    """
+
+    def __init__(self, engine: Engine, venue: str = PM_VENUE_POLYMARKET) -> None:
+        self._engine = engine
+        self._venue = venue
+
+    def ensure_seeded(self, bankroll_cents: float, now: datetime) -> None:
+        """Write the one-time seed deposit (no-op once it exists)."""
+        self.append(
+            PMSimLedgerEntry(
+                venue=self._venue,
+                kind="deposit",
+                ref="initial",
+                market_id=None,
+                amount_cents=bankroll_cents,
+                note="simulated bankroll seed",
+                ts=now,
+            )
+        )
+
+    def append(self, entry: PMSimLedgerEntry) -> bool:
+        stmt = (
+            pg_insert(pm_sim_ledger)
+            .values(
+                venue=entry.venue,
+                kind=entry.kind,
+                ref=entry.ref,
+                market_id=entry.market_id,
+                amount_cents=entry.amount_cents,
+                note=entry.note,
+                ts=entry.ts,
+            )
+            .on_conflict_do_nothing(constraint="uq_pm_sim_ledger_movement")
+        )
+        with self._engine.begin() as cx:
+            result = cx.execute(stmt)
+        return bool(result.rowcount)
+
+    def cash_cents(self) -> float:
+        with self._engine.connect() as cx:
+            value = cx.execute(
+                select(func.coalesce(func.sum(pm_sim_ledger.c.amount_cents), 0.0)).where(
+                    pm_sim_ledger.c.venue == self._venue
+                )
+            ).scalar()
+        return float(value or 0.0)
+
+    def entries(self) -> list[dict[str, Any]]:
+        with self._engine.connect() as cx:
+            rows = cx.execute(
+                select(pm_sim_ledger)
+                .where(pm_sim_ledger.c.venue == self._venue)
+                .order_by(pm_sim_ledger.c.id)
+            ).all()
+        return [dict(r._mapping) for r in rows]

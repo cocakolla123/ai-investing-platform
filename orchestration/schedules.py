@@ -11,8 +11,8 @@
 | Earnings calendar | 07:00 daily |
 | Earnings-call transcripts | 07:30 daily |
 | Prediction-market snapshot (+ OddsPipe spreads) | 20:00 daily |
-| Kalshi PM trading (gated, demo-first) | 20:30 daily |
-| Kalshi PM resolution + calibration | 20:45 daily |
+| PM trading: Kalshi (gated, demo-first) + Polymarket shadow (SIMULATED) | 20:30 daily |
+| PM resolution: Kalshi + calibration, Polymarket sim settlement | 20:45 daily |
 | Kalshi PM reconciliation | every 15 min 09:30-16:00 market days |
 | Options trading (defined-risk, gated) | 00:45 daily |
 | Options reconciliation | every 15 min 09:30-16:00 market days |
@@ -85,7 +85,10 @@ prediction_market_job = define_asset_job(
     selection=AssetSelection.assets("prediction_market_snapshot", "oddspipe_spreads"),
 )
 pm_resolution_job = define_asset_job(
-    "pm_resolution_job", selection=AssetSelection.assets("pm_resolution")
+    "pm_resolution_job",
+    # Kalshi settlement + the SIMULATED Polymarket sleeve settlement (ADR-0011)
+    # run in the same 20:45 slot; the sim asset never touches a real venue.
+    selection=AssetSelection.assets("pm_resolution", "pm_sim_resolution"),
 )
 macro_digest_job = define_asset_job(
     "macro_digest_job", selection=AssetSelection.assets("macro_digest")

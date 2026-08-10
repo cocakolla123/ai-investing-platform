@@ -39,8 +39,10 @@ def test_expected_assets_present() -> None:
         # portfolio / risk (docs 06, 07)
         "risk_verdict",
         "target_portfolio",
-        # prediction markets — Kalshi sleeve (ADR-0009)
+        # prediction markets — Kalshi sleeve (ADR-0009) + SIMULATED Polymarket
+        # shadow sleeve (ADR-0011)
         "pm_resolution",
+        "pm_sim_resolution",
         # learning / ops (docs 10, 12)
         "post_trade_reviews",
         "calibration_update",
