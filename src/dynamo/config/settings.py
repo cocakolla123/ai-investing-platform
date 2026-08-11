@@ -144,6 +144,11 @@ class Settings(BaseSettings):
     # --- Learning loop (doc 10; journal retrieval feeds dossier contexts) ---
     journal_retrieval_enabled: bool = True
     experience_retrieval_top_k: int = 3  # journal hits per symbol in the dossier
+    # Hierarchical (scope-chain) calibration, plan Phase 2. Gates the
+    # hier-scope calibration_points emission AND the advisory calibrated-p
+    # logging onto decision_experience. ADVISORY ONLY — nothing consumes
+    # calibrated_probability for sizing.
+    hierarchical_calibration_enabled: bool = True
 
     # --- Social awareness (Reddit + StockTwits; detector input ONLY) ---
     # Social text is untrusted (pump-and-dump surface): it feeds the Tier-2

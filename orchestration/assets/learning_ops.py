@@ -504,58 +504,119 @@ def _calibration_observations(
     return observations
 
 
+def hier_calibration_inputs(exp_repo: Any, enabled: bool) -> tuple[list[Any], list[Any]]:
+    """Hierarchical-scope feedstock (plan Phase 2): resolved LIVE experiences
+    and one ``hier``-scope observation per chain prefix each. Gated by
+    ``hierarchical_calibration_enabled`` — off means empty AND unqueried."""
+    if not enabled:
+        return [], []
+    from dynamo.learning.hierarchy import hier_observations
+
+    experiences = list(exp_repo.resolved_live())
+    return experiences, hier_observations(experiences)
+
+
+def log_calibrated_probabilities(
+    experiences: Sequence[Any],
+    hier_obs: Sequence[Any],
+    update: Callable[[str, float, str], None],
+) -> int:
+    """Advisory calibrated-p logging (plan Phase 2): for each resolved live
+    experience not yet calibrated, run its conviction through the
+    :class:`~dynamo.learning.hierarchy.HierarchicalCalibrator` and persist
+    ``(value, scope_used)`` via ``update``. ADVISORY ONLY — nothing consumes
+    the logged probability for sizing.
+
+    v1 limitation (documented in the plan): the calibrator is built from
+    ALL current observations — including each experience's own outcome —
+    rather than strictly ``created_at < as_of`` prior ones. Acceptable for
+    advisory logging; the strictly-prior build lands with replay (Phase 4+),
+    which needs point-in-time reads anyway.
+    """
+    from dynamo.learning.hierarchy import HierarchicalCalibrator, experience_scope_key
+
+    calibrator = HierarchicalCalibrator.from_observations(list(hier_obs))
+    written = 0
+    for exp in experiences:
+        if exp.conviction is None or exp.calibrated_probability is not None:
+            continue
+        result = calibrator.calibrate(exp.conviction, experience_scope_key(exp))
+        update(exp.id, result.value, result.scope_used)
+        written += 1
+    return written
+
+
 @dagster_asset(group_name=LEARNING_GROUP, deps=["post_trade_reviews", "experience_resolution"])
 def calibration_update(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Conviction vs realized trade outcomes -> calibration_points, per scope
-    (committee/arbiter + strategy/<sleeve> + agent/<role>).
-
-    Ordered after ``experience_resolution`` (ordering-only dep, plan Phase 1)
-    so Phase 2 can switch this to consume ``decision_experience`` rows without
-    a scheduling change; today it still reads reviews directly."""
+    (committee/arbiter + strategy/<sleeve> + agent/<role>), plus — plan
+    Phase 2, gated by ``hierarchical_calibration_enabled`` — one ``hier``
+    scope per chain prefix of every resolved live ``decision_experience``
+    (path-string scope ids; ``calibration_points.scope_id`` is Text, so
+    arbitrary-length paths fit). After upserting, the hierarchical calibrator
+    logs an ADVISORY calibrated probability onto each new experience row —
+    nothing consumes it for sizing."""
     from dynamo.learning.calibration import compute_calibration
     from dynamo.persistence.repositories.learning import CalibrationRepository
 
     as_of = utcnow().date()
+    observations: list[Any] = []
     r, d, v = schema.post_trade_reviews, schema.decision_context, schema.committee_verdicts
     reviews = _read_df(dynamo, select(r.c.trade_id, r.c.decision_context_id, r.c.payload))
-    if reviews.empty:
-        return MaterializeResult(metadata={"observations": 0, "skipped": "no reviews"})
-    contexts = _read_df(
-        dynamo,
-        select(
-            d.c.id,
-            d.c.verdict_id,
-            d.c.symbol,
-            d.c.sleeve,
-            d.c.created_at,
-            d.c.expected_upside_pct,
-            d.c.expected_downside_pct,
-            d.c.horizon_days,
-        ),
+    if not reviews.empty:
+        contexts = _read_df(
+            dynamo,
+            select(
+                d.c.id,
+                d.c.verdict_id,
+                d.c.symbol,
+                d.c.sleeve,
+                d.c.created_at,
+                d.c.expected_upside_pct,
+                d.c.expected_downside_pct,
+                d.c.horizon_days,
+            ),
+        )
+        verdicts = _read_df(dynamo, select(v.c.id, v.c.conviction, v.c.symbol, v.c.as_of))
+        merged = reviews.merge(
+            contexts, left_on="decision_context_id", right_on="id", how="left"
+        ).merge(verdicts, left_on="verdict_id", right_on="id", how="left", suffixes=("", "_v"))
+        ao = schema.agent_opinions
+        opinions = _read_df(
+            dynamo,
+            select(ao.c.symbol, ao.c.as_of, ao.c.role, ao.c.payload).where(
+                ao.c.role.in_(AGENT_ROLES)
+            ),
+        )
+        observations = _calibration_observations(
+            merged.to_dict(orient="records"),
+            opinions.to_dict(orient="records"),
+            lambda row: _outcome_for(
+                row, lambda sym, start, horizon: _cum_returns_pct(dynamo, sym, start, horizon)
+            ),
+        )
+    exp_repo = dynamo.experience_repo()
+    experiences, hier_obs = hier_calibration_inputs(
+        exp_repo, dynamo.settings().hierarchical_calibration_enabled
     )
-    verdicts = _read_df(dynamo, select(v.c.id, v.c.conviction, v.c.symbol, v.c.as_of))
-    merged = reviews.merge(
-        contexts, left_on="decision_context_id", right_on="id", how="left"
-    ).merge(verdicts, left_on="verdict_id", right_on="id", how="left", suffixes=("", "_v"))
-    ao = schema.agent_opinions
-    opinions = _read_df(
-        dynamo,
-        select(ao.c.symbol, ao.c.as_of, ao.c.role, ao.c.payload).where(
-            ao.c.role.in_(AGENT_ROLES)
-        ),
-    )
-    observations = _calibration_observations(
-        merged.to_dict(orient="records"),
-        opinions.to_dict(orient="records"),
-        lambda row: _outcome_for(
-            row, lambda sym, start, horizon: _cum_returns_pct(dynamo, sym, start, horizon)
-        ),
-    )
-    if not observations:
-        return MaterializeResult(metadata={"observations": 0, "skipped": "no linked verdicts"})
-    points = compute_calibration(observations, as_of)
+    all_observations = observations + hier_obs
+    if not all_observations:
+        return MaterializeResult(metadata={"observations": 0, "skipped": "no resolved outcomes"})
+    points = compute_calibration(all_observations, as_of)
     CalibrationRepository(dynamo.engine()).upsert(points)
-    return MaterializeResult(metadata={"observations": len(observations), "points": len(points)})
+    calibrated = 0
+    if hier_obs:
+        calibrated = log_calibrated_probabilities(
+            experiences, hier_obs, exp_repo.update_calibration
+        )
+    return MaterializeResult(
+        metadata={
+            "observations": len(all_observations),
+            "points": len(points),
+            "hier_observations": len(hier_obs),
+            "calibrated_experiences": calibrated,
+        }
+    )
 
 
 @dagster_asset(group_name=LEARNING_GROUP)

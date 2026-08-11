@@ -861,6 +861,10 @@ decision_experience = Table(
     Column("cf_hold_to_horizon_pnl_pct", Float),
     Column("cf_obey_quant_veto_pnl_pct", Float),
     Column("ev_per_decision", Float),
+    # calibration (plan Phase 2; migration 0010) — ADVISORY ONLY, logged by
+    # calibration_update; nothing consumes calibrated_probability for sizing.
+    Column("calibrated_probability", Float),
+    Column("calibration_scope_used", Text),
     # review / label
     Column("failure_primary", Text),
     Column("label", Text),

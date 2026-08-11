@@ -12,7 +12,11 @@ from orchestration.assets.learning_ops import (
     _decision_context_for,
     _outcome_for,
     _trade_id,
+    hier_calibration_inputs,
+    log_calibrated_probabilities,
 )
+
+from dynamo.domain.models.learning import DecisionExperience
 
 NOW = datetime(2026, 8, 10, 20, 0, tzinfo=UTC)
 
@@ -187,3 +191,83 @@ def test_calibration_emits_agent_and_strategy_scopes() -> None:
 def test_calibration_skips_rows_without_linked_verdict() -> None:
     row = _dc_row(conviction=None)
     assert _calibration_observations([row], [], lambda r: True) == []
+
+
+# --- hierarchical scopes from decision_experience (plan Phase 2) ------------
+
+
+def _experience(i: int, **overrides: Any) -> DecisionExperience:
+    base: dict[str, Any] = {
+        "id": f"exp:live:dc-{i}",
+        "decision_context_id": f"dc-{i}",
+        "created_at": NOW,
+        "symbol": "AAPL",
+        "as_of": date(2026, 8, i),
+        "sleeve": "long_term",
+        "regime": "risk_off",
+        "sector": "tech",
+        "quant_alignment": "agree",
+        "conviction": 0.7,
+        "resolved": True,
+        "target_achieved": True,
+        "label": "win",
+    }
+    base.update(overrides)
+    return DecisionExperience.model_validate(base)
+
+
+class _FakeExpRepo:
+    def __init__(self, experiences: list[DecisionExperience]) -> None:
+        self._experiences = experiences
+        self.queried = False
+
+    def resolved_live(self) -> list[DecisionExperience]:
+        self.queried = True
+        return list(self._experiences)
+
+
+def test_hier_scopes_emitted_for_every_chain_prefix() -> None:
+    repo = _FakeExpRepo([_experience(1), _experience(2, sector=None)])
+    experiences, observations = hier_calibration_inputs(repo, enabled=True)
+    assert len(experiences) == 2
+    assert all(o.scope_type == "hier" for o in observations)
+    scope_ids = [o.scope_id for o in observations]
+    # Full key: 4 populated dims -> 5 prefixes; sector-less key -> 4.
+    assert scope_ids[:5] == [
+        "sleeve=long_term|regime=risk_off|sector=tech|quant_alignment=agree",
+        "sleeve=long_term|regime=risk_off|sector=tech",
+        "sleeve=long_term|regime=risk_off",
+        "sleeve=long_term",
+        "global",
+    ]
+    assert scope_ids[5:] == [
+        "sleeve=long_term|regime=risk_off|quant_alignment=agree",
+        "sleeve=long_term|regime=risk_off",
+        "sleeve=long_term",
+        "global",
+    ]
+
+
+def test_hier_scopes_gated_off_by_setting() -> None:
+    repo = _FakeExpRepo([_experience(1)])
+    experiences, observations = hier_calibration_inputs(repo, enabled=False)
+    assert experiences == [] and observations == []
+    assert repo.queried is False  # gate short-circuits before any read
+
+
+def test_log_calibrated_probabilities_writes_only_uncalibrated_rows() -> None:
+    experiences = [
+        _experience(1),
+        _experience(2, calibrated_probability=0.6, calibration_scope_used="global"),
+        _experience(3, conviction=None),
+    ]
+    _, observations = hier_calibration_inputs(_FakeExpRepo(experiences), enabled=True)
+    written: dict[str, tuple[float, str]] = {}
+    count = log_calibrated_probabilities(
+        experiences, observations, lambda i, p, s: written.__setitem__(i, (p, s))
+    )
+    # Row 2 already calibrated, row 3 has no conviction -> only row 1 logged.
+    assert count == 1 and set(written) == {"exp:live:dc-1"}
+    p, scope = written["exp:live:dc-1"]
+    assert 0.0 <= p <= 1.0
+    assert scope == "global"  # nodes are all below min_n=30 -> identity root

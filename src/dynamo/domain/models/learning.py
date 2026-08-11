@@ -161,6 +161,9 @@ class DecisionExperience(Frozen):
     cf_hold_to_horizon_pnl_pct: float | None = None
     cf_obey_quant_veto_pnl_pct: float | None = None
     ev_per_decision: float | None = None
+    # --- calibration (plan Phase 2) — ADVISORY ONLY, never sizing input ---
+    calibrated_probability: float | None = None
+    calibration_scope_used: str | None = None
     # --- review / label ---
     failure_primary: FailureClass | None = None
     label: str | None = None  # 'win' | 'loss' — Phase-3 classifier target

@@ -120,3 +120,47 @@ def test_live_readers_filter_source_and_resolution(engine) -> None:  # type: ign
     by_run = repo.by_run("run-a")
     assert [e.id for e in by_run] == ["exp:run-a:3"]
     assert by_run[0].source == "replay"
+
+
+def test_update_calibration_round_trip(engine) -> None:  # type: ignore[no-untyped-def]
+    from dynamo.persistence.repositories.experience import ExperienceRepository
+
+    repo = ExperienceRepository(engine)  # type: ignore[arg-type]
+    repo.insert(_exp(1))
+    resolved = repo.resolved_live()
+    assert resolved[0].calibrated_probability is None
+    assert resolved[0].calibration_scope_used is None
+
+    repo.update_calibration("exp:live:dc-1", 0.62, "sleeve=long_term|regime=neutral")
+    updated = repo.resolved_live()[0]
+    assert updated.calibrated_probability == 0.62
+    assert updated.calibration_scope_used == "sleeve=long_term|regime=neutral"
+
+
+def test_similar_hides_future_and_ranks_by_boosts(engine) -> None:  # type: ignore[no-untyped-def]
+    from dynamo.persistence.repositories.experience import ExperienceRepository
+
+    repo = ExperienceRepository(engine)  # type: ignore[arg-type]
+    query_as_of = date(2026, 8, 10)
+    # Same day as the query -> invisible (strictly as_of < query).
+    repo.insert(_exp(10, symbol="NVDA"))
+    # Unresolved and replay rows -> invisible regardless of date.
+    repo.insert(_exp(2, resolved=False, pnl_pct=None, label=None))
+    repo.insert(_exp(3, source="replay", id="exp:run-a:3", replay_run_id="run-a"))
+    # Prior live cases: same sector+regime beats a fresher mismatch.
+    repo.insert(_exp(4, symbol="AMD", sector="tech", regime="risk_off"))
+    repo.insert(_exp(5, symbol="XOM", sector="energy", regime="risk_on"))
+
+    cases = repo.similar(
+        symbol="NVDA", as_of=query_as_of, sector="tech", regime="risk_off", limit=5
+    )
+    assert [c.decision_context_id for c in cases] == ["dc-4", "dc-5"]
+    assert all(c.source == "live" and c.resolved for c in cases)
+    assert all(c.as_of < query_as_of for c in cases)
+
+    # Same-symbol boost outranks everything else.
+    repo.insert(_exp(6, symbol="NVDA", sector="tech", regime="risk_off"))
+    cases = repo.similar(
+        symbol="NVDA", as_of=query_as_of, sector="tech", regime="risk_off", limit=2
+    )
+    assert [c.symbol for c in cases] == ["NVDA", "AMD"]

@@ -20,19 +20,30 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0009() -> None:
+def test_revision_chain_is_linear_through_0010() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0009" in modules, "0009_decision_experience migration missing"
+    assert "0010" in modules, "0010_calibrated_p migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0009"}, f"expected 0009 as the single head, got {heads}"
+    assert heads == {"0010"}, f"expected 0010 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
     assert down["0007"] == "0006"
     assert down["0008"] == "0007"
     assert down["0009"] == "0008"
+    assert down["0010"] == "0009"
+
+
+def test_0010_targets_calibration_columns() -> None:
+    module = _load(VERSIONS / "0010_calibrated_p.py")
+    assert set(module.COLUMN_TYPES) == {"calibrated_probability", "calibration_scope_used"}
+    from dynamo.persistence import schema
+
+    table = schema.metadata.tables["decision_experience"]
+    assert table.c.calibrated_probability.nullable
+    assert table.c.calibration_scope_used.nullable
 
 
 def test_0009_targets_decision_experience_table() -> None:
@@ -108,11 +119,18 @@ def test_alembic_upgrade_head_creates_table(
     cfg = Config(str(ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "infra" / "migrations"))
     cfg.set_main_option("sqlalchemy.url", integration_db_url)
+    # Reused scratch DBs may sit at head with tables torn down by other
+    # fixtures — walk down to base first so the upgrade is exercised for real.
+    command.downgrade(cfg, "base")
     command.upgrade(cfg, "head")
 
     engine = create_engine(integration_db_url)
     try:
-        assert inspect(engine).has_table("pm_cross_venue_spreads")
+        inspector = inspect(engine)
+        assert inspector.has_table("pm_cross_venue_spreads")
+        # 0010: advisory calibration columns present after upgrade head.
+        experience_columns = {c["name"] for c in inspector.get_columns("decision_experience")}
+        assert {"calibrated_probability", "calibration_scope_used"} <= experience_columns
     finally:
         engine.dispose()
 

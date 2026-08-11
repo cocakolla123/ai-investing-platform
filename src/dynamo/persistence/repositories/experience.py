@@ -2,7 +2,8 @@
 
 FIREWALL DISCIPLINE (plan Phase 1, non-negotiable): live learning consumers
 read ONLY through :meth:`ExperienceRepository.resolved_live` /
-:meth:`ExperienceRepository.unresolved_live`, which filter ``source='live'``
+:meth:`ExperienceRepository.unresolved_live` /
+:meth:`ExperienceRepository.similar`, which filter ``source='live'``
 by design — replay rows can never leak into live calibration or training.
 :meth:`ExperienceRepository.by_run` is the SOLE replay read path, keyed by an
 explicit ``replay_run_id`` (opt-in, labeled). Any future reader added here
@@ -15,7 +16,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from sqlalchemy import Engine, func, select
+from sqlalchemy import Engine, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from dynamo.domain.models.learning import (
@@ -74,6 +75,62 @@ class ExperienceRepository:
         )
         return self._rows(stmt.order_by(decision_experience.c.created_at))
 
+    def similar(
+        self,
+        *,
+        symbol: str,
+        as_of: date,
+        sector: str | None = None,
+        regime: str | None = None,
+        sleeve: str | None = None,
+        limit: int = 3,
+    ) -> list[DecisionExperience]:
+        """Prior similar LIVE cases for dossier evidence (plan Phase 2).
+
+        Hard filters: ``source='live'``, resolved, and STRICTLY ``as_of <``
+        the query date — future experiences are invisible by construction
+        (replay-safe point-in-time). Candidates are fetched recency-first
+        SQL-side, then ranked in Python by :func:`similarity_score` (recency
+        decay + same-symbol/sector/regime/sleeve boosts). Experiences are
+        structured rows, so this needs no embeddings — a vector rank over
+        journal-style text can layer on later without changing callers.
+        """
+        candidate_cap = max(limit * 50, 200)
+        stmt = (
+            select(decision_experience)
+            .where(
+                decision_experience.c.source == "live",
+                decision_experience.c.resolved.is_(True),
+                decision_experience.c.as_of < as_of,
+            )
+            .order_by(decision_experience.c.as_of.desc(), decision_experience.c.id)
+            .limit(candidate_cap)
+        )
+        candidates = self._rows(stmt)
+        ranked = sorted(
+            candidates,
+            key=lambda e: (
+                -similarity_score(
+                    e, symbol=symbol, sector=sector, regime=regime, sleeve=sleeve, as_of=as_of
+                ),
+                e.id,
+            ),
+        )
+        return ranked[: max(limit, 0)]
+
+    def update_calibration(self, experience_id: str, probability: float, scope_used: str) -> None:
+        """Log the advisory calibrated probability (plan Phase 2). Nothing
+        reads it for sizing — surfacing/reporting only."""
+        with self._engine.begin() as cx:
+            cx.execute(
+                update(decision_experience)
+                .where(decision_experience.c.id == experience_id)
+                .values(
+                    calibrated_probability=float(probability),
+                    calibration_scope_used=scope_used,
+                )
+            )
+
     def by_run(self, replay_run_id: str) -> list[DecisionExperience]:
         """The ONLY replay read path — explicit run id, opt-in by construction."""
         stmt = select(decision_experience).where(
@@ -103,6 +160,39 @@ class ExperienceRepository:
         with self._engine.connect() as cx:
             rows = cx.execute(stmt).all()
         return [_from_row(r) for r in rows]
+
+
+RECENCY_HALF_LIFE_DAYS = 90.0
+SYMBOL_BOOST = 1.0
+SECTOR_BOOST = 0.5
+REGIME_BOOST = 0.5
+SLEEVE_BOOST = 0.25
+
+
+def similarity_score(
+    exp: DecisionExperience,
+    *,
+    symbol: str,
+    as_of: date,
+    sector: str | None = None,
+    regime: str | None = None,
+    sleeve: str | None = None,
+) -> float:
+    """Structured similarity for prior-case ranking: exponential recency decay
+    in (0, 1] plus additive boosts for matching symbol / sector / regime /
+    sleeve. Pure — unit-testable without a database. A vector rank over
+    text can replace this later without changing :meth:`similar`'s shape."""
+    age_days = max((as_of - exp.as_of).days, 0)
+    score = 0.5 ** (age_days / RECENCY_HALF_LIFE_DAYS)
+    if exp.symbol == symbol:
+        score += SYMBOL_BOOST
+    if sector is not None and exp.sector == sector:
+        score += SECTOR_BOOST
+    if regime is not None and exp.regime == regime:
+        score += REGIME_BOOST
+    if sleeve is not None and exp.sleeve == sleeve:
+        score += SLEEVE_BOOST
+    return score
 
 
 def _to_row(exp: DecisionExperience) -> dict[str, Any]:
@@ -163,6 +253,8 @@ def _from_row(r: Any) -> DecisionExperience:
         cf_hold_to_horizon_pnl_pct=m["cf_hold_to_horizon_pnl_pct"],
         cf_obey_quant_veto_pnl_pct=m["cf_obey_quant_veto_pnl_pct"],
         ev_per_decision=m["ev_per_decision"],
+        calibrated_probability=m["calibrated_probability"],
+        calibration_scope_used=m["calibration_scope_used"],
         failure_primary=FailureClass(m["failure_primary"]) if m["failure_primary"] else None,
         label=m["label"],
     )

@@ -742,10 +742,76 @@ def _write_journal_entries(dynamo: DynamoResource, entries: Sequence[Any]) -> in
     return len(entries)
 
 
+PRIOR_CASE_PREFIX = "Prior similar case (evidence, not rule): "
+
+
+def _prior_case_line(exp: Any) -> str:
+    """Compact evidence string for one prior experience. The 'evidence, not
+    rule' guidance is embedded in the text itself so the committee prompt
+    needs no change (plan Phase 2)."""
+    conviction = "n/a" if exp.conviction is None else f"{float(exp.conviction):.2f}"
+    pnl = "n/a" if exp.pnl_pct is None else f"{float(exp.pnl_pct):+.1f}%"
+    regime = exp.regime or "unknown-regime"
+    sector = exp.sector or "unknown-sector"
+    action = exp.action or "unknown-action"
+    outcome = exp.outcome_quality.value
+    return (
+        f"{PRIOR_CASE_PREFIX}{exp.symbol} {action} conviction {conviction} "
+        f"in {regime}/{sector} -> {outcome}, pnl {pnl} ({exp.as_of.isoformat()})"
+    )
+
+
+def _prior_case_hits(
+    exp_repo: Any,
+    symbols: Sequence[str],
+    as_of: date,
+    *,
+    top_k: int,
+    sector_for: Mapping[str, str | None],
+    regime: str | None,
+) -> dict[str, list[tuple[str, str]]]:
+    """Top-k prior similar experiences per symbol as (experience_id, evidence
+    line). Pure over the injected repository; ``similar()`` hard-filters
+    ``source='live'``, resolved, and strictly ``as_of <`` the query date."""
+    hits: dict[str, list[tuple[str, str]]] = {}
+    for sym in symbols:
+        cases = exp_repo.similar(
+            symbol=sym,
+            as_of=as_of,
+            sector=sector_for.get(sym),
+            regime=regime,
+            limit=top_k,
+        )
+        hits[sym] = [(c.id, _prior_case_line(c)) for c in cases]
+    return hits
+
+
+def _sectors_for(dynamo: DynamoResource, symbols: Sequence[str]) -> dict[str, str | None]:
+    inst = schema.instruments
+    frame = _read_df(
+        dynamo, select(inst.c.symbol, inst.c.sector).where(inst.c.symbol.in_(list(symbols)))
+    )
+    return {
+        str(r["symbol"]): (str(r["sector"]) if r["sector"] else None)
+        for r in frame.to_dict(orient="records")
+    }
+
+
+def _regime_at(dynamo: DynamoResource, as_of: date) -> str | None:
+    rs = schema.regime_states
+    frame = _read_df(
+        dynamo,
+        select(rs.c.regime).where(rs.c.as_of <= as_of).order_by(rs.c.as_of.desc()).limit(1),
+    )
+    return str(frame.iloc[0]["regime"]) if not frame.empty else None
+
+
 def _journal_hits_for(
     dynamo: DynamoResource, symbols: Sequence[str], as_of: date
 ) -> dict[str, list[tuple[str, str]]]:
-    """Similar-situation journal hits per symbol: (entry_id, text), best first.
+    """Similar-situation journal hits per symbol: (entry_id, text), best first,
+    followed by prior-similar-case evidence lines from ``decision_experience``
+    (plan Phase 2) under the same gate and top-k.
 
     Vector search (hash-fallback embedder keeps this functional without the
     embeddings extra) filtered to entries written on/before ``as_of`` — the
@@ -770,6 +836,19 @@ def _journal_hits_for(
             candidates, JournalFilters(symbols=frozenset({sym})), top_k=top_k
         )
         hits[sym] = [(r.entry.id, r.entry.text) for r in ranked]
+    # Prior similar cases (plan Phase 2): structured retrieval from resolved
+    # live experiences, appended through the SAME journal_hits channel so the
+    # dossier needs no new parameter.
+    prior = _prior_case_hits(
+        dynamo.experience_repo(),
+        symbols,
+        as_of,
+        top_k=top_k,
+        sector_for=_sectors_for(dynamo, symbols),
+        regime=_regime_at(dynamo, as_of),
+    )
+    for sym in symbols:
+        hits[sym].extend(prior.get(sym, []))
     return hits
 
 
