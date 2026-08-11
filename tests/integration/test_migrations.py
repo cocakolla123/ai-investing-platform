@@ -20,14 +20,14 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0012() -> None:
+def test_revision_chain_is_linear_through_0013() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0012" in modules, "0012_replay_runs migration missing"
+    assert "0013" in modules, "0013_replay_verdicts_generations migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0012"}, f"expected 0012 as the single head, got {heads}"
+    assert heads == {"0013"}, f"expected 0013 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
     assert down["0007"] == "0006"
@@ -36,6 +36,61 @@ def test_revision_chain_is_linear_through_0012() -> None:
     assert down["0010"] == "0009"
     assert down["0011"] == "0010"
     assert down["0012"] == "0011"
+    assert down["0013"] == "0012"
+
+
+def test_0013_targets_replay_verdicts_and_generation_tables() -> None:
+    from sqlalchemy import UniqueConstraint
+
+    from dynamo.persistence import schema
+
+    verdicts = schema.metadata.tables["replay_verdicts"]
+    assert [c.name for c in verdicts.primary_key.columns] == ["id"]
+    assert verdicts.c.run_id.index
+    assert {"symbol", "as_of", "action", "conviction", "disagreement_score", "payload"} <= set(
+        verdicts.c.keys()
+    )
+
+    claims = schema.metadata.tables["evaluation_claims"]
+    unique = [
+        c
+        for c in claims.constraints
+        if isinstance(c, UniqueConstraint) and c.name == "uq_evaluation_claims_period_purpose"
+    ]
+    assert len(unique) == 1
+    assert sorted(c.name for c in unique[0].columns) == [
+        "period_end",
+        "period_start",
+        "purpose",
+    ]
+
+    generations = schema.metadata.tables["generation_results"]
+    assert [c.name for c in generations.primary_key.columns] == ["id"]
+    assert {
+        "generation",
+        "train_start",
+        "train_end",
+        "test_start",
+        "test_end",
+        "model_version",
+        "n_train",
+        "n_test",
+        "brier_meta",
+        "brier_control",
+        "precision_meta",
+        "precision_control",
+        "ev_meta",
+        "ev_control",
+        "value_of_learning",
+        "payload",
+    } <= set(generations.c.keys())
+
+    module = _load(VERSIONS / "0013_replay_verdicts_generations.py")
+    assert {t.name for t in module.TABLES} == {
+        "replay_verdicts",
+        "evaluation_claims",
+        "generation_results",
+    }
 
 
 def test_0012_targets_replay_tables() -> None:
@@ -164,6 +219,10 @@ def test_alembic_upgrade_head_creates_table(
         # 0012: replay bookkeeping tables present after upgrade head.
         assert inspector.has_table("replay_runs")
         assert inspector.has_table("replay_decisions")
+        # 0013: committee-replay verdicts + generational-training tables.
+        assert inspector.has_table("replay_verdicts")
+        assert inspector.has_table("evaluation_claims")
+        assert inspector.has_table("generation_results")
     finally:
         engine.dispose()
 

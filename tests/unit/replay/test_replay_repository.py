@@ -17,18 +17,37 @@ pytestmark = [
 
 
 @pytest.fixture()
-def repo() -> Iterator[object]:
+def engine() -> Iterator[object]:
     from sqlalchemy import create_engine
 
-    from dynamo.persistence.repositories.replay import ReplayRepository
-    from dynamo.persistence.schema import metadata, replay_decisions, replay_runs
+    from dynamo.persistence.schema import (
+        evaluation_claims,
+        generation_results,
+        metadata,
+        replay_decisions,
+        replay_runs,
+        replay_verdicts,
+    )
 
     eng = create_engine(INTEGRATION_URL, future=True)
-    tables = [replay_runs, replay_decisions]
+    tables = [
+        replay_runs,
+        replay_decisions,
+        replay_verdicts,
+        evaluation_claims,
+        generation_results,
+    ]
     metadata.create_all(eng, tables=tables)
-    yield ReplayRepository(eng)
+    yield eng
     metadata.drop_all(eng, tables=tables)
     eng.dispose()
+
+
+@pytest.fixture()
+def repo(engine) -> Iterator[object]:  # type: ignore[no-untyped-def]
+    from dynamo.persistence.repositories.replay import ReplayRepository
+
+    yield ReplayRepository(engine)
 
 
 def _create(repo, run_id: str = "replay-abc", status: str = "running") -> None:  # type: ignore[no-untyped-def]
@@ -97,3 +116,88 @@ def test_decisions_upsert_idempotently(repo) -> None:  # type: ignore[no-untyped
     assert len(stored) == 1
     assert stored[0]["fill_price"] == 101.5
     assert repo.insert_decisions([]) == 0
+
+
+def test_verdicts_upsert_idempotently(repo) -> None:  # type: ignore[no-untyped-def]
+    _create(repo, run_id="replay-cmt", status="running")
+    rows = [
+        {
+            "id": "replay-cmt:AAPL-2026-06-01-deadbeef",
+            "run_id": "replay-cmt",
+            "symbol": "AAPL",
+            "as_of": date(2026, 6, 1),
+            "action": "buy",
+            "conviction": 0.8,
+            "disagreement_score": 0.2,
+            "payload": {"thesis": "x"},
+        }
+    ]
+    assert repo.insert_verdicts(rows) == 1
+    rows[0]["conviction"] = 0.85
+    repo.insert_verdicts(rows)  # re-run: updates in place, no duplicate
+    stored = repo.verdicts_for("replay-cmt")
+    assert len(stored) == 1
+    assert stored[0]["conviction"] == 0.85
+    assert repo.insert_verdicts([]) == 0
+    assert repo.verdicts_for("missing") == []
+
+
+def test_claim_period_first_wins_then_refuses(engine) -> None:  # type: ignore[no-untyped-def]
+    from dynamo.persistence.repositories.replay import GenerationsRepository
+
+    gens = GenerationsRepository(engine)
+    start, end = date(2026, 7, 1), date(2026, 7, 31)
+    assert gens.is_claimed(start, end, "final_holdout") is None
+    assert gens.claim_period(
+        period_start=start, period_end=end, purpose="final_holdout", config_hash="abc"
+    )
+    claim = gens.is_claimed(start, end, "final_holdout")
+    assert claim is not None and claim["config_hash"] == "abc"
+    # THE conflict refusal: the same period+purpose can never be claimed again,
+    # not even by the identical config.
+    assert not gens.claim_period(
+        period_start=start, period_end=end, purpose="final_holdout", config_hash="abc"
+    )
+    assert not gens.claim_period(
+        period_start=start, period_end=end, purpose="final_holdout", config_hash="other"
+    )
+    # A different purpose over the same window is a separate claim.
+    assert gens.claim_period(
+        period_start=start, period_end=end, purpose="something-else", config_hash="abc"
+    )
+
+
+def test_generation_results_upsert_and_list(engine) -> None:  # type: ignore[no-untyped-def]
+    from datetime import UTC, datetime
+
+    from dynamo.persistence.repositories.replay import GenerationsRepository
+
+    gens = GenerationsRepository(engine)
+    row = {
+        "id": "gen:abc123:001",
+        "created_at": datetime(2026, 8, 11, tzinfo=UTC),
+        "generation": 1,
+        "train_start": date(2026, 1, 1),
+        "train_end": date(2026, 1, 31),
+        "test_start": date(2026, 2, 1),
+        "test_end": date(2026, 2, 28),
+        "model_version": "meta-gen001-logistic",
+        "n_train": 160,
+        "n_test": 40,
+        "brier_meta": 0.18,
+        "brier_control": 0.25,
+        "precision_meta": {"precision_conviction_0.67_1.00": 0.7},
+        "precision_control": {},
+        "ev_meta": 0.5,
+        "ev_control": 0.1,
+        "value_of_learning": 0.07,
+        "payload": {"skipped": False},
+    }
+    gens.insert_generation(row)
+    row["brier_meta"] = 0.17
+    row["value_of_learning"] = 0.08
+    gens.insert_generation(row)  # idempotent upsert on id
+    stored = gens.list_generations()
+    assert len(stored) == 1
+    assert stored[0]["brier_meta"] == 0.17
+    assert stored[0]["value_of_learning"] == 0.08

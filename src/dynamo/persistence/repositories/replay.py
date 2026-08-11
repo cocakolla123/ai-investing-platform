@@ -1,9 +1,14 @@
-"""Replay bookkeeping repository (plan Phase 4).
+"""Replay bookkeeping repository (plan Phase 4; committee mode Phase 5).
 
-Owns ``replay_runs`` and ``replay_decisions`` — the only tables (besides
-``decision_experience`` rows with ``source='replay'``) a replay run is
-allowed to write. Everything is idempotent-upsert on deterministic ids so a
-re-run of the same configuration re-derives the same rows.
+Owns ``replay_runs``, ``replay_decisions`` and ``replay_verdicts`` — the only
+tables (besides ``decision_experience`` rows with ``source='replay'``) a
+replay run is allowed to write. Everything is idempotent-upsert on
+deterministic ids so a re-run of the same configuration re-derives the same
+rows.
+
+``GenerationsRepository`` (plan Phase 5) owns ``evaluation_claims`` — the
+durable freeze guard replacing the in-memory ``EvaluationRegistry`` for the
+generational trainer — and ``generation_results``.
 """
 
 from __future__ import annotations
@@ -15,7 +20,13 @@ from typing import Any
 from sqlalchemy import Engine, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from dynamo.persistence.schema import replay_decisions, replay_runs
+from dynamo.persistence.schema import (
+    evaluation_claims,
+    generation_results,
+    replay_decisions,
+    replay_runs,
+    replay_verdicts,
+)
 
 
 def _now() -> datetime:
@@ -128,6 +139,123 @@ class ReplayRepository:
             select(replay_decisions)
             .where(replay_decisions.c.run_id == run_id)
             .order_by(replay_decisions.c.as_of, replay_decisions.c.symbol)
+        )
+        with self._engine.connect() as cx:
+            return [dict(r._mapping) for r in cx.execute(stmt)]
+
+    # -- verdicts (committee mode, plan Phase 5) ---------------------------
+
+    def insert_verdicts(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        """Idempotent upsert into ``replay_verdicts`` — NEVER
+        ``committee_verdicts`` (the firewall extension)."""
+        if not rows:
+            return 0
+        stmt = pg_insert(replay_verdicts).values([dict(r) for r in rows])
+        updatable = {
+            c.name: stmt.excluded[c.name]
+            for c in replay_verdicts.columns
+            if c.name != "id" and c.name in rows[0]
+        }
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[replay_verdicts.c.id], set_=updatable
+        ).returning(replay_verdicts.c.id)
+        with self._engine.begin() as cx:
+            written = cx.execute(stmt).all()
+        return len(written)
+
+    def verdicts_for(self, run_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            select(replay_verdicts)
+            .where(replay_verdicts.c.run_id == run_id)
+            .order_by(replay_verdicts.c.as_of, replay_verdicts.c.symbol)
+        )
+        with self._engine.connect() as cx:
+            return [dict(r._mapping) for r in cx.execute(stmt)]
+
+
+class GenerationsRepository:
+    """``evaluation_claims`` + ``generation_results`` (plan Phase 5).
+
+    ``claim_period`` is the durable freeze guard: the FIRST claim of a
+    (period_start, period_end, purpose) wins; every later attempt returns the
+    existing claim so the caller can refuse — mirroring
+    ``EvaluationRegistry.claim`` but surviving process restarts.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    # -- evaluation claims -------------------------------------------------
+
+    def is_claimed(
+        self, period_start: date, period_end: date, purpose: str
+    ) -> dict[str, Any] | None:
+        """The existing claim row for (period, purpose), or ``None``."""
+        stmt = select(evaluation_claims).where(
+            evaluation_claims.c.period_start == period_start,
+            evaluation_claims.c.period_end == period_end,
+            evaluation_claims.c.purpose == purpose,
+        )
+        with self._engine.connect() as cx:
+            row = cx.execute(stmt).first()
+        return dict(row._mapping) if row is not None else None
+
+    def claim_period(
+        self,
+        *,
+        period_start: date,
+        period_end: date,
+        purpose: str,
+        config_hash: str = "",
+        claimed_at: datetime | None = None,
+    ) -> bool:
+        """True iff THIS call claimed the period (first claim wins).
+
+        ON CONFLICT DO NOTHING on the (period_start, period_end, purpose)
+        unique constraint — concurrent claimers race safely; exactly one wins.
+        """
+        row = {
+            "id": f"claim:{purpose}:{period_start.isoformat()}:{period_end.isoformat()}",
+            "period_start": period_start,
+            "period_end": period_end,
+            "purpose": purpose,
+            "config_hash": config_hash,
+            "claimed_at": claimed_at or _now(),
+        }
+        stmt = (
+            pg_insert(evaluation_claims)
+            .values(**row)
+            .on_conflict_do_nothing(
+                index_elements=[
+                    evaluation_claims.c.period_start,
+                    evaluation_claims.c.period_end,
+                    evaluation_claims.c.purpose,
+                ]
+            )
+            .returning(evaluation_claims.c.id)
+        )
+        with self._engine.begin() as cx:
+            inserted = cx.execute(stmt).first()
+        return inserted is not None
+
+    # -- generation results ------------------------------------------------
+
+    def insert_generation(self, row: Mapping[str, Any]) -> None:
+        """Idempotent upsert on the deterministic generation-result id."""
+        payload = dict(row)
+        stmt = pg_insert(generation_results).values(**payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[generation_results.c.id],
+            set_={k: stmt.excluded[k] for k in payload if k != "id"},
+        )
+        with self._engine.begin() as cx:
+            cx.execute(stmt)
+
+    def list_generations(self, limit: int = 100) -> list[dict[str, Any]]:
+        stmt = (
+            select(generation_results)
+            .order_by(generation_results.c.created_at.desc(), generation_results.c.generation)
+            .limit(limit)
         )
         with self._engine.connect() as cx:
             return [dict(r._mapping) for r in cx.execute(stmt)]

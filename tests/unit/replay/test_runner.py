@@ -181,8 +181,8 @@ def result(fixture_frames: Any) -> tuple[Any, FakeExperienceRepo, FakeRunRepo]:
     return _run(fixture_frames)
 
 
-def test_committee_mode_is_a_phase5_stub() -> None:
-    with pytest.raises(ValueError, match="Phase 5"):
+def test_runner_is_quant_only_committee_goes_through_committee_replay() -> None:
+    with pytest.raises(ValueError, match="quant-only"):
         ReplayRunner(
             gateway_factory=lambda d: None,  # type: ignore[arg-type,return-value]
             experience_repo=FakeExperienceRepo(),

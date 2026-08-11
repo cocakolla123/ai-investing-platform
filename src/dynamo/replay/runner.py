@@ -97,6 +97,8 @@ class ReplayConfig(BaseModel):
     initial_equity: float = Field(default=100_000.0, gt=0.0)
     horizon_sessions: int = Field(default=20, gt=0)
     quant_score_max_age_days: int = Field(default=5, ge=0)
+    # Committee mode only (plan Phase 5): per-day deep-dive shortlist cap.
+    committee_deep_dives_per_day: int = Field(default=4, gt=0)
     code_version: str = ""
 
     @property
@@ -291,6 +293,36 @@ def _is_na(value: Any) -> bool:
         return False
 
 
+class QuantScoreReads(Protocol):
+    """The two gateway reads :func:`quant_scores_for` needs — satisfied by
+    both the quant runner's gateway slice and committee replay's."""
+
+    def quant_scores(self, symbols: Sequence[str] | None = None) -> pd.DataFrame: ...
+    def feature_inputs(self, symbols: Sequence[str]) -> Any: ...
+
+
+def quant_scores_for(
+    gw: QuantScoreReads, universe: Sequence[str], day: date, max_age_days: int
+) -> dict[str, QuantScore]:
+    """Persisted historical scores where fresh; baseline-v0 for the rest.
+
+    Shared by the quant runner and committee replay (Phase 5) so the two
+    modes can never drift on what "the quant view at D" means. The baseline
+    path is production parity: ``score_universe`` with an empty
+    ``ModelBundle`` — all-None predictions, so unscored symbols synthesize
+    nothing (abstention)."""
+    universe = list(universe)
+    persisted = scores_from_frame(gw.quant_scores(universe), day, max_age_days)
+    missing = sorted(set(universe) - set(persisted))
+    if missing:
+        inputs = gw.feature_inputs(universe)
+        features = build_features(inputs, day, missing)
+        if not features.empty:
+            for s in score_universe(ModelBundle(model_version="baseline-v0"), features, day):
+                persisted[s.symbol] = s
+    return persisted
+
+
 # --------------------------------------------------------------------------
 # result records
 # --------------------------------------------------------------------------
@@ -399,7 +431,8 @@ class ReplayRunner:
     ) -> None:
         if config.mode != "quant":
             raise ValueError(
-                f"mode {config.mode!r} is not available: committee replay is Phase 5"
+                f"ReplayRunner is quant-only; mode {config.mode!r} runs through "
+                "dynamo.replay.committee.CommitteeReplay"
             )
         self._gateway_factory = gateway_factory
         self._experiences = experience_repo
@@ -652,22 +685,8 @@ class ReplayRunner:
     def _quant_scores(
         self, gw: ReplayGateway, universe: list[str], day: date
     ) -> dict[str, QuantScore]:
-        """Persisted historical scores where fresh; baseline-v0 for the rest.
-
-        The baseline path is production parity: ``score_universe`` with an
-        empty ``ModelBundle`` — all-None predictions, so unscored symbols
-        synthesize nothing (abstention)."""
-        persisted = scores_from_frame(
-            gw.quant_scores(universe), day, self.config.quant_score_max_age_days
-        )
-        missing = sorted(set(universe) - set(persisted))
-        if missing:
-            inputs = gw.feature_inputs(universe)
-            features = build_features(inputs, day, missing)
-            if not features.empty:
-                for s in score_universe(ModelBundle(model_version="baseline-v0"), features, day):
-                    persisted[s.symbol] = s
-        return persisted
+        """See :func:`quant_scores_for` (shared with committee replay)."""
+        return quant_scores_for(gw, universe, day, self.config.quant_score_max_age_days)
 
     def _with_horizon_exits(
         self,

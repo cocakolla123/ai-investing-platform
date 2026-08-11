@@ -28,6 +28,7 @@ import pandas as pd
 from sqlalchemy import Engine, select
 
 from dynamo.domain.models.learning import DecisionExperience, JournalEntry, JournalKind
+from dynamo.domain.models.market import Instrument, NewsItem
 from dynamo.domain.models.risk import Regime, RegimeState
 from dynamo.persistence import schema
 from dynamo.persistence.repositories.experience import ExperienceRepository
@@ -190,6 +191,47 @@ class HistoricalDataGateway:
             inputs=dict(m["inputs"] or {}),
             sessions_in_state=int(m["sessions_in_state"] or 0),
         )
+
+    def instruments(self, symbols: Sequence[str]) -> dict[str, Instrument]:
+        """symbol -> Instrument profile. NOT vintaged (same accepted fidelity
+        caveat as :meth:`sectors`): the profile reflects the current row, not
+        the classification at ``as_of``."""
+        inst = schema.instruments
+        stmt = select(inst).where(inst.c.symbol.in_(list(symbols)))
+        frame = self._read_df(stmt)
+        fields = set(Instrument.model_fields)
+        out: dict[str, Instrument] = {}
+        for r in frame.to_dict(orient="records"):
+            payload = {k: v for k, v in r.items() if k in fields and v is not None}
+            instrument = Instrument.model_validate(payload)
+            out[instrument.symbol] = instrument
+        return out
+
+    def news(
+        self, symbols: Sequence[str], lookback_days: int = 7
+    ) -> dict[str, list[NewsItem]]:
+        """symbol -> news items with ``published_at`` in
+        ``[as_of - lookback, as_of]`` — items published after ``as_of`` are
+        invisible. Sparse-history days simply return fewer (or no) items,
+        rendering as the same absent section a thin live dossier shows."""
+        n = schema.news
+        frame = self._read_df(
+            select(n).where(
+                n.c.published_at >= self._since(lookback_days),
+                n.c.published_at <= self._cutoff,
+            )
+        )
+        wanted = set(symbols)
+        out: dict[str, list[NewsItem]] = {sym: [] for sym in symbols}
+        fields = set(NewsItem.model_fields)
+        for r in frame.to_dict(orient="records"):
+            tagged = tuple(r.get("symbols") or ())
+            payload = {k: v for k, v in r.items() if k in fields and v is not None}
+            payload["symbols"] = tagged
+            for sym in tagged:
+                if sym in wanted:
+                    out[sym].append(NewsItem.model_validate(payload))
+        return out
 
     def sectors(self, symbols: Sequence[str] | None = None) -> dict[str, str]:
         """symbol -> sector from ``instruments``. NOT vintaged (accepted

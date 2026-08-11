@@ -245,3 +245,68 @@ def test_replay_never_touches_live_tables(engine) -> None:  # type: ignore[no-un
     assert {t: _count(engine, t) for t in LIVE_TABLES} == before
     assert exp_repo.count(source="replay") == len(result.experiences)
     assert result2.decisions == result.decisions
+
+
+def test_committee_replay_never_touches_live_tables(engine) -> None:  # type: ignore[no-untyped-def]
+    """Firewall extension (plan Phase 5): a committee replay (fake model, real
+    gateway + repositories) leaves committee_verdicts and every other live
+    table untouched; verdicts land in replay_verdicts only."""
+    from dynamo.persistence.repositories.experience import ExperienceRepository
+    from dynamo.persistence.repositories.replay import ReplayRepository
+    from dynamo.replay.budget import ReplayBudget
+    from dynamo.replay.committee import CommitteeReplay
+    from dynamo.replay.gateway import HistoricalDataGateway
+    from dynamo.replay.runner import ReplayConfig
+    from tests.unit.replay.test_committee import (
+        PROMPTS,
+        SCHEMAS,
+        TIER_MODELS,
+        FakeResearchModel,
+    )
+
+    _seed(engine)
+    before = {t: _count(engine, t) for t in LIVE_TABLES}
+    assert before["committee_verdicts"] == 1
+
+    sessions = nyse_sessions(END, HISTORY_SESSIONS)
+    window = sessions[-5:]
+    config = ReplayConfig(
+        start=window[0],
+        end=window[-1],
+        mode="committee",
+        label="committee-firewall",
+        horizon_sessions=2,
+        committee_deep_dives_per_day=2,
+    )
+    run_repo = ReplayRepository(engine)
+    budget = ReplayBudget(cap_usd=100.0, run_repo=run_repo, run_id=config.run_id)
+    replay = CommitteeReplay(
+        gateway_factory=lambda d: HistoricalDataGateway(engine, d),
+        research_model=FakeResearchModel(),
+        budget=budget,
+        run_repo=run_repo,
+        experience_repo=ExperienceRepository(engine),
+        config=config,
+        tier_models=TIER_MODELS,
+        prompts=PROMPTS,
+        schemas=SCHEMAS,
+        sleep_fn=lambda s: None,
+    )
+    result = replay.run()
+    assert result.status == "completed"
+    assert result.deep_dives, "the run should have produced deep dives"
+
+    # THE firewall: every live table count is unchanged — especially
+    # committee_verdicts.
+    after = {t: _count(engine, t) for t in LIVE_TABLES}
+    assert after == before
+
+    # Replay-side rows landed where they belong.
+    verdicts = run_repo.verdicts_for(config.run_id)
+    assert len(verdicts) == len(result.deep_dives)
+    assert _count(engine, "replay_verdicts") == len(verdicts)
+    exp_repo = ExperienceRepository(engine)
+    assert {e.id for e in exp_repo.by_run(config.run_id)} == {
+        e.id for e in result.experiences
+    }
+    assert exp_repo.count(source="live") == 0

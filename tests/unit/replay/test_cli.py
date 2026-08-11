@@ -30,9 +30,47 @@ def test_replay_run_requires_start_end_and_label() -> None:
     assert args.universe_tier is None
 
 
-def test_replay_committee_mode_is_phase5_stub(capsys: pytest.CaptureFixture[str]) -> None:
-    """The mode is accepted as an argument but exits before touching any
-    engine, database, or (especially) LLM."""
+def test_replay_committee_mode_requires_max_usd(capsys: pytest.CaptureFixture[str]) -> None:
+    """--mode committee without --max-usd is an argparse ERROR (exit 2) —
+    there is no default cap, ever. Fails before touching engine/DB/LLM."""
+    with pytest.raises(SystemExit) as exc:
+        replay_cli.main(
+            [
+                "run",
+                "--start", "2026-06-01",
+                "--end", "2026-06-10",
+                "--mode", "committee",
+                "--run-label", "x",
+            ]
+        )
+    assert exc.value.code == 2
+    assert "--max-usd" in capsys.readouterr().err
+
+
+def test_replay_committee_max_usd_must_be_positive() -> None:
+    with pytest.raises(SystemExit):
+        replay_cli.main(
+            [
+                "run",
+                "--start", "2026-06-01",
+                "--end", "2026-06-10",
+                "--mode", "committee",
+                "--run-label", "x",
+                "--max-usd", "0",
+            ]
+        )
+
+
+def test_replay_committee_refuses_without_api_key(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With a cap but no ANTHROPIC_API_KEY the committee run refuses before
+    touching the database or constructing any client."""
+
+    class KeylessSettings:
+        anthropic_api_key = ""
+
+    monkeypatch.setattr("dynamo.config.settings.Settings", lambda: KeylessSettings())
     rc = replay_cli.main(
         [
             "run",
@@ -40,12 +78,45 @@ def test_replay_committee_mode_is_phase5_stub(capsys: pytest.CaptureFixture[str]
             "--end", "2026-06-10",
             "--mode", "committee",
             "--run-label", "x",
+            "--max-usd", "5.0",
         ]
     )
     assert rc == 2
+    assert "ANTHROPIC_API_KEY" in capsys.readouterr().out
+
+
+def test_estimate_prints_projection_without_any_api_call(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The estimator is pure math over on-disk prompt sizes + the pricing
+    table — no client is constructed, no request object even built."""
+    rc = replay_cli.main(
+        ["estimate", "--start", "2026-06-01", "--end", "2026-06-10"]
+    )
+    assert rc == 0
     out = capsys.readouterr().out
-    assert "Phase 5" in out
-    assert "quant" in out
+    assert "NO API calls" in out
+    assert "projected total:" in out
+    assert "$" in out
+
+
+def test_estimate_scales_with_deep_dive_cap(capsys: pytest.CaptureFixture[str]) -> None:
+    def total_for(cap: str) -> float:
+        rc = replay_cli.main(
+            [
+                "estimate",
+                "--start", "2026-06-01",
+                "--end", "2026-06-10",
+                "--deep-dives-per-day", cap,
+            ]
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        line = next(ln for ln in out.splitlines() if "projected total:" in ln)
+        return float(line.split("$")[-1])
+
+    # Printed at 2 decimals — allow rounding slack around the exact 2x.
+    assert total_for("8") == pytest.approx(2.0 * total_for("4"), abs=0.03)
 
 
 def test_replay_rejects_unknown_mode() -> None:

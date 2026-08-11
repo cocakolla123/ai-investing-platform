@@ -338,6 +338,47 @@ def test_sectors_reads_instruments_only(engine, gateway) -> None:  # type: ignor
     assert gateway.sectors(["AAPL"]) == {"AAPL": "tech"}
 
 
+def test_news_hides_future_items(engine, gateway) -> None:  # type: ignore[no-untyped-def]
+    from dynamo.domain.models.market import NewsItem
+
+    _repo(engine).upsert_news(
+        [
+            NewsItem(
+                id="n-before",
+                symbols=("AAPL",),
+                headline="knowable headline",
+                source="test",
+                published_at=_dt(BEFORE),
+            ),
+            NewsItem(
+                id="n-after",
+                symbols=("AAPL",),
+                headline="FUTURE headline",
+                source="test",
+                published_at=_dt(AFTER),
+            ),
+        ]
+    )
+    by_symbol = gateway.news(["AAPL"], lookback_days=30)
+    assert [n.id for n in by_symbol["AAPL"]] == ["n-before"]
+
+
+def test_instruments_scoped_to_requested_symbols(engine, gateway) -> None:  # type: ignore[no-untyped-def]
+    """``instruments`` shares the sectors caveat (not vintaged) — assert
+    symbol scoping, the only axis it has."""
+    from dynamo.domain.models.market import Instrument
+
+    _repo(engine).upsert_instruments(
+        [
+            Instrument(symbol="AAPL", name="Apple", sector="tech"),
+            Instrument(symbol="XOM", name="Exxon", sector="energy"),
+        ]
+    )
+    out = gateway.instruments(["AAPL"])
+    assert set(out) == {"AAPL"}
+    assert out["AAPL"].sector == "tech"
+
+
 def test_gateway_has_no_write_methods() -> None:
     """The gateway is read-only by construction: no public method name that
     suggests a write path may ever appear on it."""

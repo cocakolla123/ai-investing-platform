@@ -143,3 +143,73 @@ if not empty_note(
         )
         if len(monthly):
             st.line_chart(monthly[["meta_brier", "raw_brier"]])
+
+# --- generational training vs frozen control (plan Phase 5) -----------------
+
+st.subheader("Generational training vs frozen control")
+gr = schema.generation_results
+generations = safe_df(
+    select(
+        gr.c.generation,
+        gr.c.train_start,
+        gr.c.train_end,
+        gr.c.test_start,
+        gr.c.test_end,
+        gr.c.model_version,
+        gr.c.n_train,
+        gr.c.n_test,
+        gr.c.brier_meta,
+        gr.c.brier_control,
+        gr.c.ev_meta,
+        gr.c.ev_control,
+        gr.c.value_of_learning,
+        gr.c.created_at,
+    ).order_by(gr.c.created_at.desc(), gr.c.generation)
+)
+if not empty_note(
+    generations,
+    "No generation results yet — run dynamo.cli.generations once enough "
+    "monthly experience history exists.",
+):
+    st.caption(
+        "value_of_learning = brier_control - brier_meta: POSITIVE means the "
+        "learned meta-model beats the frozen control (raw conviction, "
+        "identity calibration) on the identical test decisions."
+    )
+    latest_batch = generations[generations["created_at"] == generations["created_at"].max()]
+    st.dataframe(
+        latest_batch.drop(columns=["created_at"]).sort_values("generation"),
+        width="stretch",
+        hide_index=True,
+    )
+    trained = latest_batch.dropna(subset=["value_of_learning"]).sort_values("generation")
+    if len(trained):
+        st.line_chart(trained.set_index("generation")[["brier_meta", "brier_control"]])
+
+# --- replay runs (plan Phases 4-5) ------------------------------------------
+
+st.subheader("Replay runs")
+rr = schema.replay_runs
+replay_runs = safe_df(
+    select(
+        rr.c.id,
+        rr.c.mode,
+        rr.c.status,
+        rr.c.start_as_of,
+        rr.c.end_as_of,
+        rr.c.label,
+        rr.c.budget_usd,
+        rr.c.spent_usd,
+        rr.c.created_at,
+    ).order_by(rr.c.created_at.desc())
+)
+if not empty_note(
+    replay_runs,
+    "No replay runs yet — dynamo.cli.replay run is manual only (committee "
+    "mode requires --max-usd).",
+):
+    st.caption(
+        "Replay experiences are firewalled (source='replay') and enter "
+        "training ONLY via dynamo.cli.generations --include-replay <run_id>."
+    )
+    st.dataframe(replay_runs, width="stretch", hide_index=True)

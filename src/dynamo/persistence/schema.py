@@ -935,6 +935,69 @@ replay_decisions = Table(
     Column("payload", JSONB, nullable=False, default={}),
 )
 
+# Committee-replay verdicts (plan Phase 5; migration 0013). Same shape as
+# committee_verdicts plus the run_id — replay verdicts NEVER land in
+# committee_verdicts (firewall), so live journal/calibration/learning readers
+# can never see them by accident.
+replay_verdicts = Table(
+    "replay_verdicts",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("run_id", Text, nullable=False, index=True),
+    Column("symbol", Text, nullable=False),
+    Column("as_of", Date, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("conviction", Float, nullable=False),
+    Column("disagreement_score", Float, nullable=False, default=0.0),
+    Column("payload", JSONB, nullable=False),  # full CommitteeVerdict (+ stage payloads)
+)
+
+# Durable evaluation-period claims (plan Phase 5; migration 0013) — the
+# database-backed sibling of backtest.walkforward.EvaluationRegistry. A
+# (period, purpose) is claimed ONCE; any later claim attempt refuses, so the
+# generational trainer's final holdout can never leak into training or be
+# evaluated twice.
+evaluation_claims = Table(
+    "evaluation_claims",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("period_start", Date, nullable=False),
+    Column("period_end", Date, nullable=False),
+    Column("purpose", Text, nullable=False),
+    Column("config_hash", Text, nullable=False, default=""),
+    Column("claimed_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "period_start", "period_end", "purpose", name="uq_evaluation_claims_period_purpose"
+    ),
+)
+
+# Generational-training results (plan Phase 5; migration 0013): one row per
+# generation — meta-model vs frozen control (raw conviction, identity
+# calibration) on the identical test decisions. value_of_learning =
+# brier_control - brier_meta (positive = the learned model beats the control).
+generation_results = Table(
+    "generation_results",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("generation", Integer, nullable=False),
+    Column("train_start", Date),
+    Column("train_end", Date),
+    Column("test_start", Date),
+    Column("test_end", Date),
+    Column("model_version", Text, nullable=False, default=""),
+    Column("n_train", Integer, nullable=False, default=0),
+    Column("n_test", Integer, nullable=False, default=0),
+    Column("brier_meta", Float),
+    Column("brier_control", Float),
+    Column("precision_meta", JSONB, nullable=False, default={}),
+    Column("precision_control", JSONB, nullable=False, default={}),
+    Column("ev_meta", Float),
+    Column("ev_control", Float),
+    Column("value_of_learning", Float),
+    Column("payload", JSONB, nullable=False, default={}),
+)
+
 calibration_points = Table(
     "calibration_points",
     metadata,
