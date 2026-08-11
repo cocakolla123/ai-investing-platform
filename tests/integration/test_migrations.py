@@ -20,18 +20,39 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0008() -> None:
+def test_revision_chain_is_linear_through_0009() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0008" in modules, "0008_dc_id_repair migration missing"
+    assert "0009" in modules, "0009_decision_experience migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0008"}, f"expected 0008 as the single head, got {heads}"
+    assert heads == {"0009"}, f"expected 0009 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
     assert down["0007"] == "0006"
     assert down["0008"] == "0007"
+    assert down["0009"] == "0008"
+
+
+def test_0009_targets_decision_experience_table() -> None:
+    from sqlalchemy import Index
+
+    from dynamo.persistence import schema
+
+    assert "decision_experience" in schema.metadata.tables
+    table = schema.metadata.tables["decision_experience"]
+    assert [c.name for c in table.primary_key.columns] == ["id"]
+    indexes = {str(i.name): i for i in table.indexes if isinstance(i, Index)}
+    assert {
+        "ix_decision_experience_source_resolved_created",
+        "ix_decision_experience_symbol_as_of",
+        "ix_decision_experience_regime_sector",
+        "uq_decision_experience_live_context",
+    } <= set(indexes)
+    live_unique = indexes["uq_decision_experience_live_context"]
+    assert live_unique.unique  # partial: WHERE source='live'
+    assert "source = 'live'" in str(live_unique.dialect_options["postgresql"]["where"])
 
 
 def test_0008_repairs_every_order_table_and_is_data_only() -> None:

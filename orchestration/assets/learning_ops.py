@@ -6,7 +6,7 @@ everything else here is LLM-free and runs in degraded mode too.
 
 import os
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -150,6 +150,255 @@ def post_trade_reviews(context: AssetExecutionContext, dynamo: DynamoResource) -
     )
 
 
+# --- decision-experience resolution (plan Phase 1) --------------------------
+
+BENCHMARK_SYMBOL = "SPY"
+DEFAULT_HORIZON_DAYS = 20
+
+
+def build_experiences(
+    *,
+    closed_trades: Sequence[Any],
+    review_for: Callable[[str], Any],
+    decision_context_for: Callable[[Any], Any],
+    verdict_for: Callable[[str | None], Any],
+    quant_for: Callable[[str, date], Any],
+    regime_for: Callable[[date], Any],
+    vix_for: Callable[[date], float | None],
+    sector_for: Callable[[str], str | None],
+    path_for: Callable[[Any, int | None], Any],
+    existing_dc_ids: frozenset[str],
+    insert: Callable[[Any], bool],
+    now: datetime,
+    log: Any,
+) -> dict[str, int]:
+    """For each reviewed closed trade lacking an experience row: join the
+    decision spine, build the ``DecisionExperience``, insert (idempotent).
+
+    Broken joins (no review / no decision context) skip gracefully; a single
+    bad trade NEVER fails the run — logged and counted. Pure over the injected
+    callables so the asset test drives it with in-memory fakes.
+    """
+    from dynamo.learning.experience import TradeFacts, build_experience
+
+    built = skipped = existing = failed = 0
+    for closed in closed_trades:
+        trade_id = _trade_id(closed)
+        try:
+            review = review_for(trade_id)
+            if review is None:
+                skipped += 1
+                continue
+            dc = decision_context_for(closed)
+            if dc is None:
+                log.warning("experience_resolution: no decision context for %s", trade_id)
+                skipped += 1
+                continue
+            if dc.id in existing_dc_ids:
+                existing += 1
+                continue
+            verdict = verdict_for(dc.verdict_id)
+            horizon = _horizon_for(dc, verdict)
+            decided = dc.created_at.date()
+            exp = build_experience(
+                trade=TradeFacts(
+                    trade_id=trade_id,
+                    symbol=closed.symbol,
+                    qty=closed.qty,
+                    opened_at=closed.opened_at,
+                    closed_at=closed.closed_at,
+                    entry_price=closed.entry_avg_price,
+                    exit_price=closed.exit_avg_price,
+                    pnl_pct=closed.pnl_pct,
+                    holding_days=closed.holding_days,
+                ),
+                now=now,
+                decision_context=dc,
+                verdict=verdict,
+                quant=quant_for(closed.symbol, decided),
+                regime=regime_for(decided),
+                review=review,
+                path=path_for(closed, horizon),
+                sector=sector_for(closed.symbol),
+                vix=vix_for(decided),
+                source="live",
+            )
+            if insert(exp):
+                built += 1
+        except Exception as exc:  # one bad trade must never fail the run
+            log.error("experience_resolution: %s failed (%s) — continuing", trade_id, exc)
+            failed += 1
+    return {"built": built, "skipped": skipped, "existing": existing, "failed": failed}
+
+
+def _horizon_for(dc: Any, verdict: Any) -> int:
+    """Bar-window horizon: the frozen context first, verdict fallback, then
+    the platform default (pre-repair rows hardcoded zeros)."""
+    for source_obj in (dc, verdict):
+        horizon = int(getattr(source_obj, "horizon_days", 0) or 0)
+        if horizon > 0:
+            return horizon
+    return DEFAULT_HORIZON_DAYS
+
+
+def resolve_experiences(dynamo: DynamoResource, log: Any) -> dict[str, int]:
+    """Live wiring for :func:`build_experiences` over the repaired decision
+    spine (decision_context → orders → trades → FIFO closed trades + verdicts
+    + quant scores + regime states + reviews + bar paths). Shared by the
+    ``experience_resolution`` asset and the backfill CLI."""
+    from sqlalchemy import select as sa_select
+
+    from dynamo.domain.models.research import CommitteeVerdict, QuantScore
+    from dynamo.domain.models.risk import Regime, RegimeState
+    from dynamo.learning.experience import PathInputs
+    from dynamo.persistence.repositories.execution import (
+        OrderRepository,
+        TradeRepository,
+    )
+    from dynamo.persistence.repositories.learning import (
+        DecisionContextRepository,
+        ReviewRepository,
+    )
+
+    engine = dynamo.engine()
+    trades_repo = TradeRepository(engine)
+    orders_repo = OrderRepository(engine)
+    dc_repo = DecisionContextRepository(engine)
+    reviews_repo = ReviewRepository(engine)
+    exp_repo = dynamo.experience_repo()
+
+    def verdict_for(verdict_id: str | None) -> CommitteeVerdict | None:
+        if not verdict_id:
+            return None
+        v = schema.committee_verdicts
+        with engine.connect() as cx:
+            row = cx.execute(sa_select(v.c.payload).where(v.c.id == verdict_id)).first()
+        if row is None:
+            return None
+        try:
+            return CommitteeVerdict.model_validate(row.payload)
+        except Exception:  # malformed historical payload — degrade per-field
+            log.warning("experience_resolution: unparsable verdict payload %s", verdict_id)
+            return None
+
+    def quant_for(symbol: str, as_of: date) -> QuantScore | None:
+        q = schema.quant_scores
+        with engine.connect() as cx:
+            row = cx.execute(
+                sa_select(q)
+                .where(q.c.symbol == symbol, q.c.as_of <= as_of)
+                .order_by(q.c.as_of.desc())
+                .limit(1)
+            ).first()
+        if row is None:
+            return None
+        return QuantScore(
+            symbol=row.symbol,
+            as_of=row.as_of,
+            model_version=row.model_version,
+            expected_excess_return=row.expected_excess_return,
+            downside_prob=row.downside_prob,
+            vol_forecast=row.vol_forecast,
+            rank=row.rank,
+            confidence=row.confidence,
+            feature_coverage=row.feature_coverage,
+        )
+
+    def regime_for(as_of: date) -> RegimeState | None:
+        rs = schema.regime_states
+        with engine.connect() as cx:
+            row = cx.execute(
+                sa_select(rs).where(rs.c.as_of <= as_of).order_by(rs.c.as_of.desc()).limit(1)
+            ).first()
+        if row is None:
+            return None
+        return RegimeState(
+            as_of=row.as_of,
+            regime=Regime(row.regime),
+            composite_score=row.composite_score,
+            inputs=row.inputs or {},
+            sessions_in_state=row.sessions_in_state,
+        )
+
+    def vix_for(as_of: date) -> float | None:
+        m = schema.macro_series
+        with engine.connect() as cx:
+            row = cx.execute(
+                sa_select(m.c.value)
+                .where(m.c.series_id == "VIXCLS", m.c.ts <= as_of)
+                .order_by(m.c.ts.desc(), m.c.vintage_ts.desc())
+                .limit(1)
+            ).first()
+        return float(row.value) if row is not None else None
+
+    def sector_for(symbol: str) -> str | None:
+        inst = schema.instruments
+        with engine.connect() as cx:
+            row = cx.execute(sa_select(inst.c.sector).where(inst.c.symbol == symbol)).first()
+        return row.sector if row is not None else None
+
+    def path_for(closed: Any, horizon: int | None) -> PathInputs | None:
+        """Session bars entry → exit + horizon (calendar buffer over sessions),
+        plus benchmark closes over the holding window."""
+        days = horizon or DEFAULT_HORIZON_DAYS
+        start = closed.opened_at.date()
+        end = closed.closed_at.date() + timedelta(days=days * 2 + 10)
+        frame = dynamo.market_repo().bars_frame([closed.symbol, BENCHMARK_SYMBOL], start, end)
+        if frame.empty:
+            return None
+        from typing import cast as _cast
+
+        exit_ts = pd.Timestamp(closed.closed_at)
+        sym = _cast(pd.DataFrame, frame[frame["symbol"] == closed.symbol]).sort_values("ts")
+        if sym.empty:
+            return None
+        exit_index = int((pd.to_datetime(sym["ts"], utc=True) <= exit_ts).sum()) - 1
+        if exit_index < 0:
+            return None
+        bench = _cast(pd.DataFrame, frame[frame["symbol"] == BENCHMARK_SYMBOL]).sort_values("ts")
+        bench = _cast(pd.DataFrame, bench[pd.to_datetime(bench["ts"], utc=True) <= exit_ts])
+        return PathInputs(
+            opens=tuple(float(x) for x in sym["open"]),
+            highs=tuple(float(x) for x in sym["high"]),
+            lows=tuple(float(x) for x in sym["low"]),
+            closes=tuple(float(x) for x in sym["close"]),
+            exit_session_index=exit_index,
+            benchmark_closes=tuple(float(x) for x in bench["close"]),
+        )
+
+    return build_experiences(
+        closed_trades=trades_repo.closed_trades(),
+        review_for=reviews_repo.get,
+        decision_context_for=lambda closed: _decision_context_for(
+            closed, trades_repo, orders_repo, dc_repo
+        ),
+        verdict_for=verdict_for,
+        quant_for=quant_for,
+        regime_for=regime_for,
+        vix_for=vix_for,
+        sector_for=sector_for,
+        path_for=path_for,
+        existing_dc_ids=exp_repo.live_decision_context_ids(),
+        insert=exp_repo.insert,
+        now=utcnow(),
+        log=log,
+    )
+
+
+@dagster_asset(name="experience_resolution", group_name=LEARNING_GROUP, deps=["post_trade_reviews"])
+def experience_resolution(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """Reviewed closed trades lacking an experience row → decision-spine join
+    → ``decision_experience`` rows with ``source='live'`` (plan Phase 1).
+
+    LLM-free; incomplete joins skip gracefully and one bad trade never fails
+    the run (see :func:`build_experiences`).
+    """
+    counts = resolve_experiences(dynamo, context.log)
+    return MaterializeResult(metadata={k: v for k, v in counts.items()})
+
+
 def _date_key(value: Any) -> str:
     """Normalize date-ish values (date, Timestamp, str) to an ISO day string."""
     return str(pd.Timestamp(value).date())
@@ -255,10 +504,14 @@ def _calibration_observations(
     return observations
 
 
-@dagster_asset(group_name=LEARNING_GROUP, deps=["post_trade_reviews"])
+@dagster_asset(group_name=LEARNING_GROUP, deps=["post_trade_reviews", "experience_resolution"])
 def calibration_update(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Conviction vs realized trade outcomes -> calibration_points, per scope
-    (committee/arbiter + strategy/<sleeve> + agent/<role>)."""
+    (committee/arbiter + strategy/<sleeve> + agent/<role>).
+
+    Ordered after ``experience_resolution`` (ordering-only dep, plan Phase 1)
+    so Phase 2 can switch this to consume ``decision_experience`` rows without
+    a scheduling change; today it still reads reviews directly."""
     from dynamo.learning.calibration import compute_calibration
     from dynamo.persistence.repositories.learning import CalibrationRepository
 
@@ -530,6 +783,7 @@ def healthcheck_job() -> None:
 
 LEARNING_ASSETS = [
     post_trade_reviews,
+    experience_resolution,
     calibration_update,
     drift_monitors,
     metrics_daily_asset,

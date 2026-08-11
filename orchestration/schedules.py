@@ -27,7 +27,7 @@
 | Daily activity report | 02:15 daily |
 | Chain verify + experience completeness | 02:20 daily |
 | Healthcheck dead-man ping | 02:30 daily |
-| Post-trade reviews + calibration + drift | Sunday 08:00 |
+| Post-trade reviews + experiences + calibration + drift | Sunday 08:00 |
 """
 
 from dagster import (
@@ -122,7 +122,11 @@ daily_report_job = define_asset_job(
 )
 weekly_learning_job = define_asset_job(
     "weekly_learning_job",
-    selection=AssetSelection.assets("post_trade_reviews", "calibration_update", "drift_monitors"),
+    # Deps order the chain: post_trade_reviews -> experience_resolution ->
+    # calibration_update (plan Phase 1); drift_monitors is independent.
+    selection=AssetSelection.assets(
+        "post_trade_reviews", "experience_resolution", "calibration_update", "drift_monitors"
+    ),
 )
 safety_checks_job = define_asset_job(
     "safety_checks_job",

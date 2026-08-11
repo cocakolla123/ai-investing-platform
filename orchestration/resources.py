@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from dynamo.data.transcripts_defeatbeta import DefeatBetaTranscripts
     from dynamo.llm.anthropic_client import AnthropicClient
     from dynamo.llm.cost_meter import CostMeter
+    from dynamo.persistence.repositories.experience import ExperienceRepository
     from dynamo.persistence.repositories.market import MarketDataRepository
     from dynamo.research.committee import CommitteeEngine
 
@@ -96,6 +97,11 @@ class DynamoResource(ConfigurableResource):
         from dynamo.persistence.repositories.market import MarketDataRepository
 
         return MarketDataRepository(self.engine())
+
+    def experience_repo(self) -> ExperienceRepository:
+        from dynamo.persistence.repositories.experience import ExperienceRepository
+
+        return ExperienceRepository(self.engine())
 
     def cost_meter(self) -> CostMeter:
         if self._cost_meter is None:

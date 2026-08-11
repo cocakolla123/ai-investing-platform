@@ -43,8 +43,9 @@ def test_expected_assets_present() -> None:
         # shadow sleeve (ADR-0011)
         "pm_resolution",
         "pm_sim_resolution",
-        # learning / ops (docs 10, 12)
+        # learning / ops (docs 10, 12; plan Phase 1)
         "post_trade_reviews",
+        "experience_resolution",
         "calibration_update",
         "drift_monitors",
         "metrics_daily",

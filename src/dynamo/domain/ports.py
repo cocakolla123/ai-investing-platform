@@ -10,6 +10,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from typing import Any, Protocol, runtime_checkable
 
+from dynamo.domain.models.learning import DecisionExperience
 from dynamo.domain.models.market import (
     Bar,
     CorporateAction,
@@ -184,6 +185,26 @@ class ForecastModel(Protocol):
     def predict(self, x: Any) -> Any: ...
 
     def feature_importances(self) -> dict[str, float]: ...
+
+
+class ExperienceStore(Protocol):
+    """``decision_experience`` persistence (plan Phase 1).
+
+    Firewall discipline: live learning consumers read ONLY through
+    ``resolved_live``/``unresolved_live`` (which filter ``source='live'`` by
+    design); ``by_run`` is the sole replay read path. ``insert`` is idempotent
+    for live rows (one experience per decision context).
+    """
+
+    def insert(self, exp: DecisionExperience) -> bool: ...  # True iff a row was written
+
+    def resolved_live(self, since: date | None = None) -> list[DecisionExperience]: ...
+
+    def unresolved_live(self) -> list[DecisionExperience]: ...
+
+    def by_run(self, replay_run_id: str) -> list[DecisionExperience]: ...
+
+    def count(self, source: str | None = None) -> int: ...
 
 
 class EmbeddingModel(Protocol):

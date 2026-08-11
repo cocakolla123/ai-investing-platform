@@ -15,12 +15,14 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
+    Index,
     Integer,
     MetaData,
     SmallInteger,
     Table,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
@@ -799,6 +801,78 @@ improvement_proposals = Table(
     Column("expected_effect", Text, nullable=False, default=""),
     Column("proposed_change", JSONB, nullable=False, default={}),
     Column("status", Text, nullable=False, default="open"),
+)
+
+# The decision → outcome learning dataset (plan Phase 1; migration 0009).
+# ``source`` is the replay firewall column: live learning consumers filter
+# source='live'; replay rows carry replay_run_id and are read opt-in only.
+# The partial unique index makes live inserts idempotent per decision context
+# (replay may legitimately revisit the same context many times).
+decision_experience = Table(
+    "decision_experience",
+    metadata,
+    # identity
+    Column("id", Text, primary_key=True),
+    Column("decision_context_id", Text),
+    Column("trade_id", Text),
+    Column("source", Text, nullable=False, default="live"),  # live | replay
+    Column("replay_run_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("symbol", Text, nullable=False),
+    Column("as_of", Date, nullable=False),
+    Column("sleeve", Text),
+    # context
+    Column("regime", Text),
+    Column("sector", Text),
+    Column("vix", Float),
+    Column("quant_expected_excess_return", Float),
+    Column("quant_downside_prob", Float),
+    Column("quant_vol_forecast", Float),
+    Column("quant_confidence", Float),
+    # committee
+    Column("action", Text),
+    Column("conviction", Float),
+    Column("disagreement_score", Float),
+    Column("quant_alignment", Text),
+    Column("expected_upside_pct", Float),
+    Column("expected_downside_pct", Float),
+    Column("horizon_days", Integer),
+    # decision / execution
+    Column("entry_at", DateTime(timezone=True)),
+    Column("exit_at", DateTime(timezone=True)),
+    Column("entry_price", Float),
+    Column("exit_price", Float),
+    Column("qty", Float),
+    Column("holding_days", Integer),
+    # outcome
+    Column("resolved", Boolean, nullable=False, default=False),
+    Column("pnl_pct", Float),
+    Column("benchmark_excess_pct", Float),
+    Column("mae_pct", Float),
+    Column("mfe_pct", Float),
+    Column("target_achieved", Boolean),
+    Column("forecast_quality", Text, nullable=False, default="unknown"),
+    Column("decision_quality", Text, nullable=False, default="unknown"),
+    Column("outcome_quality", Text, nullable=False, default="unknown"),
+    # counterfactuals
+    Column("cf_hold_pnl_pct", Float),
+    Column("cf_half_size_pnl_pct", Float),
+    Column("cf_delayed_entry_pnl_pct", Float),
+    Column("cf_hold_to_horizon_pnl_pct", Float),
+    Column("cf_obey_quant_veto_pnl_pct", Float),
+    Column("ev_per_decision", Float),
+    # review / label
+    Column("failure_primary", Text),
+    Column("label", Text),
+    Index("ix_decision_experience_source_resolved_created", "source", "resolved", "created_at"),
+    Index("ix_decision_experience_symbol_as_of", "symbol", "as_of"),
+    Index("ix_decision_experience_regime_sector", "regime", "sector"),
+    Index(
+        "uq_decision_experience_live_context",
+        "decision_context_id",
+        unique=True,
+        postgresql_where=text("source = 'live'"),
+    ),
 )
 
 calibration_points = Table(

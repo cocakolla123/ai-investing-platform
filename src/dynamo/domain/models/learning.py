@@ -64,6 +64,108 @@ class PostTradeReview(Frozen):
     lessons: tuple[str, ...] = ()
 
 
+class ForecastQuality(StrEnum):
+    """Was the stated conviction right about THIS realized path?
+
+    A per-decision cut of calibration: ``accurate`` when a confident forecast
+    (conviction >= 0.5) saw its target achieved — or an unconfident one did
+    not; ``inaccurate`` otherwise. Population-level calibration (Brier,
+    reliability buckets) lives in ``learning/calibration.py``.
+    """
+
+    ACCURATE = "accurate"
+    INACCURATE = "inaccurate"
+    UNKNOWN = "unknown"
+
+
+class DecisionQuality(StrEnum):
+    """Was the decision defensible given ONLY what was knowable then?
+
+    Deterministic rubric (see ``learning/experience.py:score_decision_quality``):
+    entering against a quant conflict or with unrebutted risks is unsound;
+    everything else — including consistent abstention — is sound. Independent
+    of the outcome by construction.
+    """
+
+    SOUND = "sound"
+    UNSOUND = "unsound"
+    UNKNOWN = "unknown"
+
+
+class OutcomeQuality(StrEnum):
+    """The realized label. ``normal_uncertainty`` preserves the doc 10 insight
+    that a sound decision losing within its expected downside is NOT a failure
+    — it must never be folded into ``loss`` (plan Phase 1)."""
+
+    WIN = "win"
+    LOSS = "loss"
+    NORMAL_UNCERTAINTY = "normal_uncertainty"  # sound decision, loss within expected downside
+    UNKNOWN = "unknown"
+
+
+class DecisionExperience(Frozen):
+    """One decision → outcome row of the learning dataset (plan Phase 1).
+
+    The ``source`` column is the replay firewall: live learning consumers MUST
+    filter ``source='live'``; replay rows (``source='replay'`` +
+    ``replay_run_id``) are opt-in only, read via their run id.
+    """
+
+    # --- identity ---
+    id: str
+    decision_context_id: str | None = None
+    trade_id: str | None = None
+    source: str = "live"  # 'live' | 'replay' — the firewall column
+    replay_run_id: str | None = None
+    created_at: datetime
+    symbol: str
+    as_of: date  # decision date
+    sleeve: str | None = None
+    # --- context (market state at decision time) ---
+    regime: str | None = None
+    sector: str | None = None
+    vix: float | None = None
+    quant_expected_excess_return: float | None = None
+    quant_downside_prob: float | None = None
+    quant_vol_forecast: float | None = None
+    quant_confidence: float | None = None
+    # --- committee ---
+    action: str | None = None
+    conviction: float | None = None
+    disagreement_score: float | None = None
+    quant_alignment: str | None = None
+    expected_upside_pct: float | None = None
+    expected_downside_pct: float | None = None
+    horizon_days: int | None = None
+    # --- decision / execution ---
+    entry_at: datetime | None = None
+    exit_at: datetime | None = None
+    entry_price: float | None = None
+    exit_price: float | None = None
+    qty: float | None = None
+    holding_days: int | None = None
+    # --- outcome ---
+    resolved: bool = False
+    pnl_pct: float | None = None
+    benchmark_excess_pct: float | None = None
+    mae_pct: float | None = None  # max adverse excursion vs entry, holding window
+    mfe_pct: float | None = None  # max favorable excursion vs entry, holding window
+    target_achieved: bool | None = None
+    forecast_quality: ForecastQuality = ForecastQuality.UNKNOWN
+    decision_quality: DecisionQuality = DecisionQuality.UNKNOWN
+    outcome_quality: OutcomeQuality = OutcomeQuality.UNKNOWN
+    # --- counterfactuals (learning/counterfactuals.py path-walkers) ---
+    cf_hold_pnl_pct: float | None = None
+    cf_half_size_pnl_pct: float | None = None
+    cf_delayed_entry_pnl_pct: float | None = None
+    cf_hold_to_horizon_pnl_pct: float | None = None
+    cf_obey_quant_veto_pnl_pct: float | None = None
+    ev_per_decision: float | None = None
+    # --- review / label ---
+    failure_primary: FailureClass | None = None
+    label: str | None = None  # 'win' | 'loss' — Phase-3 classifier target
+
+
 class JournalKind(StrEnum):
     THESIS = "thesis"
     REVIEW = "review"
