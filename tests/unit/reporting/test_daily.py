@@ -104,6 +104,12 @@ class FakeSource:
     def meta_scores_on(self, day: date) -> list[dict[str, Any]]:
         return self._get("meta_scores", [])
 
+    def learning_metrics_on(self, day: date) -> list[dict[str, Any]]:
+        return self._get("learning_metrics", [])
+
+    def open_proposal_count(self) -> int:
+        return self._get("open_proposals", 0)
+
 
 def _verdict(symbol: str, action: str, conviction: float, **payload: Any) -> dict[str, Any]:
     return {
@@ -206,6 +212,14 @@ def full_day_source() -> FakeSource:
             {"symbol": "TSM", "conviction": 0.80, "effective_probability": 0.74,
              "model_version": "meta-gradient_boosting-20260810"},
         ],
+        learning_metrics=[
+            {"metric": "learning.brier", "value": 0.21},
+            {"metric": "learning.success_rate", "value": 0.55},
+            {"metric": "learning.abstention_rate", "value": 0.4},
+            {"metric": "learning.ev_per_decision", "value": 1.25},
+            {"metric": "learning.n_scored", "value": 20.0},
+        ],
+        open_proposals=3,
     )
 
 
@@ -356,3 +370,24 @@ def test_meta_scores_render_advisory_table() -> None:
 def test_meta_scores_absent_renders_nothing_meta() -> None:
     md = render_markdown(build_daily_report(FakeSource(), DAY))
     assert "Meta-model advisory scores" not in md
+
+
+def test_learning_metrics_render_headline_lines() -> None:
+    """Plan Phase 6: the weekly learning.* headline metrics + open-proposal
+    count appear in the Learning section, plain-language and deterministic."""
+    report = build_daily_report(full_day_source(), DAY)
+    assert report.learning.metrics["learning.brier"] == pytest.approx(0.21)
+    assert report.learning.open_proposals == 3
+    md = render_markdown(report)
+    assert "Learning health — weekly metrics on resolved decisions (over 20 scored" in md
+    assert "Brier score (confidence vs reality; lower is better): 0.210" in md
+    assert "Success rate (scored decisions that worked out): 55%" in md
+    assert "Abstention rate (committee chose to sit out): 40%" in md
+    assert "EV per decision (avg realized pnl): +1.25%" in md
+    assert "Improvement proposals open (awaiting your review, nothing auto-applies): 3" in md
+
+
+def test_learning_metrics_absent_render_nothing() -> None:
+    md = render_markdown(build_daily_report(FakeSource(), DAY))
+    assert "Learning health" not in md
+    assert "Improvement proposals open" not in md

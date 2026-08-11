@@ -12,8 +12,10 @@ from typing import Any
 import pandas as pd
 from dagster import (
     AssetExecutionContext,
+    AssetSelection,
     MaterializeResult,
     OpExecutionContext,
+    define_asset_job,
     job,
     op,
 )
@@ -890,11 +892,26 @@ def meta_scoring(context: AssetExecutionContext, dynamo: DynamoResource) -> Mate
 
 @dagster_asset(group_name=LEARNING_GROUP)
 def drift_monitors(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
-    """Slippage / incident-trend / IC-decay monitors -> improvement_proposals."""
+    """Slippage / incident-trend / IC-decay / PSI / strategy-expectation
+    monitors -> improvement_proposals.
+
+    The PSI and strategy-expectation monitors (dormant since doc 10 §7) are
+    wired with HONEST inputs only (plan Phase 6): they read the
+    ``metrics_daily`` rows a trainer/backtest is expected to record
+    (``feature_psi`` per model:feature, ``strategy_perf`` per strategy) and
+    the expectation metadata on registry rows. TODAY nothing records those
+    inputs — the quant model is baseline-v0 with no training distribution and
+    no strategy writes a rolling performance metric — so both monitors see
+    empty inputs and emit NOTHING. That is deliberate: the plumbing is live,
+    and the first trainer that records real inputs arms it without changes
+    here. No inputs are ever fabricated.
+    """
     from dynamo.learning.drift import (
+        feature_psi_monitor,
         ic_decay_monitor,
         incident_trend_monitor,
         slippage_monitor,
+        strategy_expectation_monitor,
     )
     from dynamo.persistence.repositories.learning import ProposalRepository
 
@@ -951,10 +968,291 @@ def drift_monitors(context: AssetExecutionContext, dynamo: DynamoResource) -> Ma
             if p is not None:
                 proposals.append(p)
 
+    # PSI per top-importance feature (honest inputs; see docstring). Expected
+    # rows: metric='feature_psi', scope_type='model',
+    # scope_id='<model_id>:<feature>'; latest value per (model, feature) wins.
+    psi_rows = _read_df(
+        dynamo,
+        select(m.c.scope_id, m.c.as_of, m.c.value)
+        .where(m.c.metric == "feature_psi", m.c.scope_type == "model")
+        .order_by(m.c.as_of),
+    )
+    if not psi_rows.empty and not promoted.empty:
+        latest_psi: dict[tuple[str, str], float] = {}
+        for psi_row in psi_rows.to_dict(orient="records"):
+            model_id, _, feature = str(psi_row["scope_id"]).partition(":")
+            if feature:
+                latest_psi[(model_id, feature)] = float(psi_row["value"])
+        for row in promoted.to_dict(orient="records"):
+            model_id = str(row["id"])
+            psi_by_feature = {f: v for (mid, f), v in latest_psi.items() if mid == model_id}
+            if not psi_by_feature:
+                continue
+            # top_features from training metadata; when absent, every recorded
+            # feature counts as top-importance (conservative, still honest).
+            top = list((row["metrics"] or {}).get("top_features") or sorted(psi_by_feature))
+            p = feature_psi_monitor(psi_by_feature, top, model_id, as_of, now)
+            if p is not None:
+                proposals.append(p)
+
+    # Strategy performance vs its backtest expectation band (honest inputs).
+    # Expected rows: metric='strategy_perf', scope_type='strategy'; the band
+    # comes from the strategy's registry metrics (expectation_low/high).
+    strat_rows = _read_df(
+        dynamo,
+        select(m.c.scope_id, m.c.as_of, m.c.value)
+        .where(m.c.metric == "strategy_perf", m.c.scope_type == "strategy")
+        .order_by(m.c.as_of),
+    )
+    strat_models = _read_df(
+        dynamo,
+        select(mv.c.id, mv.c.metrics).where(
+            mv.c.model_type == "strategy", mv.c.status == "production"
+        ),
+    )
+    if not strat_rows.empty and not strat_models.empty:
+        for row in strat_models.to_dict(orient="records"):
+            strategy_id = str(row["id"])
+            meta = row["metrics"] or {}
+            low, high = meta.get("expectation_low"), meta.get("expectation_high")
+            series = strat_rows[strat_rows["scope_id"] == strategy_id]["value"].tolist()
+            if low is None or high is None or not series:
+                continue
+            p = strategy_expectation_monitor(
+                [float(x) for x in series], (float(low), float(high)), strategy_id, as_of, now
+            )
+            if p is not None:
+                proposals.append(p)
+
     repo = ProposalRepository(dynamo.engine())
     for proposal in proposals:
         repo.insert(proposal)
     return MaterializeResult(metadata={"proposals": len(proposals)})
+
+
+# --- learning-metrics suite (plan Phase 6; weekly after calibration_update) --
+
+
+def upsert_learning_metrics(
+    metric_rows: Sequence[tuple[str, str, str, float]],
+    upsert: Callable[[str, str, str, date, float], None],
+    as_of: date,
+) -> int:
+    """Write the ``learning.*`` rows through a MetricsRepository-shaped
+    callable (pure over the injection so the asset test drives fakes)."""
+    for metric, scope_type, scope_id, value in metric_rows:
+        upsert(metric, scope_type, scope_id, as_of, value)
+    return len(metric_rows)
+
+
+@dagster_asset(
+    name="learning_metrics", group_name=LEARNING_GROUP, deps=["calibration_update"]
+)
+def learning_metrics_asset(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """Weekly learning-metrics suite over resolved LIVE experiences →
+    ``metrics_daily`` rows namespaced ``learning.*`` (plan Phase 6).
+
+    All computation happens in the pure ``dynamo.learning.metrics`` module;
+    this asset only joins the inputs: resolved live experiences (the replay
+    firewall applies — ``resolved_live()`` filters ``source='live'``),
+    all-time committee_verdicts action counts (the decisions-considered
+    denominator experiences alone cannot supply), and generation_results
+    rows for the value-of-learning passthrough. LLM-free.
+    """
+    from dynamo.learning.metrics import learning_metric_rows
+    from dynamo.persistence.repositories.learning import MetricsRepository
+
+    as_of = utcnow().date()
+    experiences = dynamo.experience_repo().resolved_live()
+
+    v = schema.committee_verdicts
+    actions = _read_df(
+        dynamo, select(v.c.action, func.count().label("n")).group_by(v.c.action)
+    )
+    action_counts = (
+        {str(r["action"]): int(r["n"]) for r in actions.to_dict(orient="records")}
+        if not actions.empty
+        else {}
+    )
+
+    gr = schema.generation_results
+    generations = _read_df(
+        dynamo, select(gr.c.generation, gr.c.value_of_learning, gr.c.n_test)
+    )
+    generation_rows = generations.to_dict(orient="records") if not generations.empty else []
+
+    rows = learning_metric_rows(experiences, action_counts, generation_rows)
+    written = upsert_learning_metrics(
+        rows, MetricsRepository(dynamo.engine()).upsert_metric, as_of
+    )
+    headline = {
+        metric: value for metric, scope_type, _, value in rows if scope_type == "platform"
+    }
+    return MaterializeResult(
+        metadata={
+            "rows_upserted": written,
+            "n_resolved": int(headline.get("learning.n_resolved", 0.0)),
+            **{k: round(val, 6) for k, val in headline.items()},
+        }
+    )
+
+
+# --- failure clustering (plan Phase 6; sensor-triggered) ---------------------
+
+CLUSTER_WATERMARK_METRIC = "learning.cluster_watermark"
+
+
+def run_failure_clustering(
+    *,
+    failures: Sequence[Any],
+    review_text_for: Callable[[str | None], str],
+    embed: Callable[[Sequence[str]], Sequence[Sequence[float]]],
+    insert_proposal: Callable[[Any], bool],
+    replace_clusters: Callable[[Sequence[Any], Sequence[Any]], int],
+    upsert_metric: Callable[[str, str, str, date, float], None],
+    as_of: date,
+    now: datetime,
+) -> dict[str, int]:
+    """Asset core, pure over injected callables (test-driven with fakes).
+
+    Builds one :class:`~dynamo.learning.clustering.FailureCase` per failed
+    experience (review text via ``review_text_for``; embeddings via the
+    injected embedder — the pure clustering module never embeds), clusters,
+    inserts OPEN proposals for clusters >= min size (idempotent via
+    ``insert_proposal`` returning False on an existing id), persists cluster
+    rows for the dashboard, and advances the durable watermark: the
+    ``metrics_daily`` row ``learning.cluster_watermark`` records how many
+    failure experiences had been seen at this run — the sensor triggers on
+    (current count - max recorded watermark) >= threshold.
+    """
+    from dynamo.learning.clustering import (
+        FailureCase,
+        cluster_failures,
+        proposals_from_clusters,
+    )
+
+    texts = [review_text_for(getattr(exp, "trade_id", None)) or "" for exp in failures]
+    vectors = list(embed(texts)) if texts else []
+    cases = [
+        FailureCase(
+            case_id=exp.id,
+            symbol=exp.symbol,
+            as_of=exp.as_of,
+            failure_class=exp.failure_primary,
+            text=text,
+            embedding=tuple(float(x) for x in vector) if vector is not None else None,
+        )
+        for exp, text, vector in zip(failures, texts, vectors, strict=True)
+    ]
+    clusters = cluster_failures(cases)
+    proposals = proposals_from_clusters(clusters, as_of, now)
+    inserted = sum(1 for p in proposals if insert_proposal(p))
+    stored = replace_clusters(clusters, proposals)
+    upsert_metric(CLUSTER_WATERMARK_METRIC, "platform", "all", as_of, float(len(failures)))
+    return {
+        "failures": len(failures),
+        "clusters": len(clusters),
+        "proposals": len(proposals),
+        "proposals_inserted": inserted,
+        "cluster_rows": stored,
+    }
+
+
+@dagster_asset(name="failure_clustering", group_name=LEARNING_GROUP)
+def failure_clustering_asset(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """Cluster failed LIVE experiences into shared failure modes →
+    ``failure_clusters`` rows + OPEN ``improvement_proposals`` (plan Phase 6).
+
+    Triggered by ``failure_clustering_sensor`` every ~150 new resolved
+    failures (manual materialization works too). LLM-free: review texts are
+    embedded locally (bge-small or the deterministic hash fallback). Proposals
+    are ONLY ever opened for a human to review — nothing auto-applies.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from dynamo.domain.models.learning import FailureClass
+    from dynamo.llm.embeddings import LocalEmbedder
+    from dynamo.persistence.repositories.learning import (
+        MetricsRepository,
+        ProposalRepository,
+    )
+
+    as_of = utcnow().date()
+    now = utcnow()
+    failures = [
+        e
+        for e in dynamo.experience_repo().resolved_live()
+        if e.failure_primary is not None
+        and e.failure_primary != FailureClass.NORMAL_UNCERTAINTY
+    ]
+
+    r = schema.post_trade_reviews
+    reviews = _read_df(dynamo, select(r.c.trade_id, r.c.payload))
+    text_by_trade: dict[str, str] = {}
+    if not reviews.empty:
+        for row in reviews.to_dict(orient="records"):
+            payload = row.get("payload") or {}
+            parts = [*(payload.get("what_failed") or ()), *(payload.get("lessons") or ())]
+            text_by_trade[str(row["trade_id"])] = " ".join(str(p) for p in parts)
+
+    proposal_repo = ProposalRepository(dynamo.engine())
+
+    def insert_proposal(proposal: Any) -> bool:
+        try:
+            proposal_repo.insert(proposal)
+        except IntegrityError:
+            return False  # deterministic id already inserted by an earlier run
+        return True
+
+    def replace_clusters(clusters: Sequence[Any], proposals: Sequence[Any]) -> int:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        proposal_by_target = {p.target: p.id for p in proposals}
+        t = schema.failure_clusters
+        written = 0
+        with dynamo.engine().begin() as cx:
+            cx.execute(t.delete().where(t.c.run_as_of == as_of))
+            for cluster in clusters:
+                stmt = pg_insert(t).values(
+                    id=f"fc:{as_of.isoformat()}:{cluster.label}",
+                    run_as_of=as_of,
+                    created_at=now,
+                    label=cluster.label,
+                    failure_class=cluster.failure_class.value,
+                    size=cluster.size,
+                    example_refs=list(cluster.example_refs),
+                    suggested_kind=cluster.suggested_kind.value,
+                    proposal_id=proposal_by_target.get(cluster.label),
+                )
+                cx.execute(stmt.on_conflict_do_nothing(index_elements=[t.c.id]))
+                written += 1
+        return written
+
+    embedder = LocalEmbedder()
+    counts = run_failure_clustering(
+        failures=failures,
+        review_text_for=lambda trade_id: text_by_trade.get(trade_id or "", ""),
+        embed=embedder.embed,
+        insert_proposal=insert_proposal,
+        replace_clusters=replace_clusters,
+        upsert_metric=MetricsRepository(dynamo.engine()).upsert_metric,
+        as_of=as_of,
+        now=now,
+    )
+    context.log.info("failure_clustering: %s (embedder=%s)", counts, embedder.backend)
+    return MaterializeResult(metadata={**counts, "embedder": embedder.backend})
+
+
+failure_clustering_job = define_asset_job(
+    "failure_clustering_job",
+    # Sensor target (plan Phase 6): requested by failure_clustering_sensor
+    # when >= 150 new resolved failures accumulate; never scheduled.
+    selection=AssetSelection.assets("failure_clustering"),
+)
 
 
 @dagster_asset(name="metrics_daily", group_name=LEARNING_GROUP)
@@ -1117,6 +1415,8 @@ LEARNING_ASSETS = [
     calibration_update,
     meta_scoring,
     drift_monitors,
+    learning_metrics_asset,
+    failure_clustering_asset,
     metrics_daily_asset,
     equity_curve_asset,
     parquet_export_asset,

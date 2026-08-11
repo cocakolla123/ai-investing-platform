@@ -20,14 +20,14 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0013() -> None:
+def test_revision_chain_is_linear_through_0014() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0013" in modules, "0013_replay_verdicts_generations migration missing"
+    assert "0014" in modules, "0014_failure_clusters migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0013"}, f"expected 0013 as the single head, got {heads}"
+    assert heads == {"0014"}, f"expected 0014 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
     assert down["0007"] == "0006"
@@ -37,6 +37,27 @@ def test_revision_chain_is_linear_through_0013() -> None:
     assert down["0011"] == "0010"
     assert down["0012"] == "0011"
     assert down["0013"] == "0012"
+    assert down["0014"] == "0013"
+
+
+def test_0014_targets_failure_clusters_table() -> None:
+    from dynamo.persistence import schema
+
+    assert "failure_clusters" in schema.metadata.tables
+    table = schema.metadata.tables["failure_clusters"]
+    assert [c.name for c in table.primary_key.columns] == ["id"]
+    assert table.c.run_as_of.index
+    assert {
+        "label",
+        "failure_class",
+        "size",
+        "example_refs",
+        "suggested_kind",
+        "proposal_id",
+    } <= set(table.c.keys())
+    assert table.c.proposal_id.nullable  # thin clusters open no proposal
+    module = _load(VERSIONS / "0014_failure_clusters.py")
+    assert {t.name for t in module.TABLES} == {"failure_clusters"}
 
 
 def test_0013_targets_replay_verdicts_and_generation_tables() -> None:
@@ -223,6 +244,8 @@ def test_alembic_upgrade_head_creates_table(
         assert inspector.has_table("replay_verdicts")
         assert inspector.has_table("evaluation_claims")
         assert inspector.has_table("generation_results")
+        # 0014: failure-cluster provenance (plan Phase 6).
+        assert inspector.has_table("failure_clusters")
     finally:
         engine.dispose()
 

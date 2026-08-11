@@ -28,7 +28,8 @@
 | Daily activity report | 02:15 daily |
 | Chain verify + experience completeness | 02:20 daily |
 | Healthcheck dead-man ping | 02:30 daily |
-| Post-trade reviews + experiences + calibration + drift | Sunday 08:00 |
+| Post-trade reviews + experiences + calibration + drift + learning metrics | Sunday 08:00 |
+| Failure clustering | sensor-triggered (~150 new resolved failures), never scheduled |
 """
 
 from dagster import (
@@ -42,7 +43,7 @@ from dagster import (
 
 from orchestration.assets.ingestion import filings_poll_job
 from orchestration.assets.intraday import intraday_entries_job
-from orchestration.assets.learning_ops import healthcheck_job
+from orchestration.assets.learning_ops import failure_clustering_job, healthcheck_job
 from orchestration.assets.options_trading import (
     options_reconciliation_job,
     options_trading_job,
@@ -131,9 +132,14 @@ daily_report_job = define_asset_job(
 weekly_learning_job = define_asset_job(
     "weekly_learning_job",
     # Deps order the chain: post_trade_reviews -> experience_resolution ->
-    # calibration_update (plan Phase 1); drift_monitors is independent.
+    # calibration_update -> learning_metrics (plan Phases 1 + 6);
+    # drift_monitors is independent.
     selection=AssetSelection.assets(
-        "post_trade_reviews", "experience_resolution", "calibration_update", "drift_monitors"
+        "post_trade_reviews",
+        "experience_resolution",
+        "calibration_update",
+        "drift_monitors",
+        "learning_metrics",
     ),
 )
 safety_checks_job = define_asset_job(
@@ -333,6 +339,8 @@ ALL_JOBS = [
     daily_report_job,
     weekly_learning_job,
     safety_checks_job,
+    # Sensor target only (failure_clustering_sensor) — deliberately unscheduled.
+    failure_clustering_job,
 ]
 
 ALL_SCHEDULES = [

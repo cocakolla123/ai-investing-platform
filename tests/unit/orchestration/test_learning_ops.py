@@ -271,3 +271,113 @@ def test_log_calibrated_probabilities_writes_only_uncalibrated_rows() -> None:
     p, scope = written["exp:live:dc-1"]
     assert 0.0 <= p <= 1.0
     assert scope == "global"  # nodes are all below min_n=30 -> identity root
+
+
+# --- learning_metrics + failure_clustering asset cores (plan Phase 6) --------
+
+
+def test_upsert_learning_metrics_writes_namespaced_rows() -> None:
+    from orchestration.assets.learning_ops import upsert_learning_metrics
+
+    from dynamo.learning.metrics import learning_metric_rows
+
+    experiences = [
+        _experience(1, pnl_pct=2.0, label="win"),
+        _experience(2, pnl_pct=-1.0, label="loss", target_achieved=False),
+    ]
+    rows = learning_metric_rows(experiences, {"buy": 4, "no_action": 1}, [])
+    upserts: list[tuple[str, str, str, date, float]] = []
+    as_of = date(2026, 8, 9)
+    written = upsert_learning_metrics(
+        rows, lambda m, st, sid, d, v: upserts.append((m, st, sid, d, v)), as_of
+    )
+    assert written == len(rows) == len(upserts)
+    assert all(m.startswith("learning.") for m, _, _, _, _ in upserts)
+    assert all(d == as_of for _, _, _, d, _ in upserts)
+    by_key = {(m, st, sid): v for m, st, sid, _, v in upserts}
+    assert by_key[("learning.n_resolved", "platform", "all")] == 2.0
+    assert by_key[("learning.abstention_rate", "platform", "all")] == 0.2
+    assert ("learning.win_rate", "sleeve", "long_term") in by_key
+
+
+def test_run_failure_clustering_inserts_proposals_and_advances_watermark() -> None:
+    from orchestration.assets.learning_ops import (
+        CLUSTER_WATERMARK_METRIC,
+        run_failure_clustering,
+    )
+
+    from dynamo.domain.models.learning import FailureClass, ProposalKind
+
+    failures = [
+        _experience(
+            i,
+            trade_id=f"T-{i}",
+            label="loss",
+            target_achieved=False,
+            failure_primary=FailureClass.QUANT_MODEL,
+        )
+        for i in range(1, 7)  # 6 failures, one shared failure mode
+    ]
+    inserted: list[Any] = []
+    cluster_rows: list[tuple[list[Any], list[Any]]] = []
+    metrics: list[tuple[str, str, str, date, float]] = []
+
+    def embed(texts: Any) -> list[list[float]]:
+        return [[1.0, 0.0, 0.0] for _ in texts]  # one semantic direction
+
+    counts = run_failure_clustering(
+        failures=failures,
+        review_text_for=lambda trade_id: f"review for {trade_id}",
+        embed=embed,
+        insert_proposal=lambda p: (inserted.append(p), True)[1],
+        replace_clusters=lambda clusters, proposals: (
+            cluster_rows.append((list(clusters), list(proposals))),
+            len(list(clusters)),
+        )[1],
+        upsert_metric=lambda m, st, sid, d, v: metrics.append((m, st, sid, d, v)),
+        as_of=date(2026, 8, 9),
+        now=NOW,
+    )
+    assert counts["failures"] == 6
+    assert counts["clusters"] == 1
+    assert counts["proposals"] == counts["proposals_inserted"] == 1
+    [proposal] = inserted
+    assert proposal.kind == ProposalKind.RETRAIN  # quant_model -> retrain
+    assert proposal.target == "quant_model/c1"
+    [(clusters, proposals)] = cluster_rows
+    assert clusters[0].size == 6 and proposals == [proposal]
+    [(metric, scope_type, scope_id, _, value)] = metrics
+    assert (metric, scope_type, scope_id) == (CLUSTER_WATERMARK_METRIC, "platform", "all")
+    assert value == 6.0  # the watermark advances to the count seen
+
+
+def test_run_failure_clustering_below_min_size_opens_nothing() -> None:
+    from orchestration.assets.learning_ops import run_failure_clustering
+
+    from dynamo.domain.models.learning import FailureClass
+
+    failures = [
+        _experience(
+            i,
+            trade_id=f"T-{i}",
+            label="loss",
+            target_achieved=False,
+            failure_primary=FailureClass.CLAUDE_REASONING,
+        )
+        for i in range(1, 4)  # only 3 failures — below min_cluster_size=5
+    ]
+    inserted: list[Any] = []
+    metrics: list[float] = []
+    counts = run_failure_clustering(
+        failures=failures,
+        review_text_for=lambda trade_id: "",
+        embed=lambda texts: [[0.0, 1.0, 0.0] for _ in texts],
+        insert_proposal=lambda p: (inserted.append(p), True)[1],
+        replace_clusters=lambda clusters, proposals: len(list(clusters)),
+        upsert_metric=lambda m, st, sid, d, v: metrics.append(v),
+        as_of=date(2026, 8, 9),
+        now=NOW,
+    )
+    assert counts["clusters"] == 1 and counts["proposals"] == 0
+    assert inserted == []
+    assert metrics == [3.0]  # the watermark still advances — no re-trigger loop

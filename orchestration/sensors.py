@@ -16,6 +16,7 @@ from dagster import (
     sensor,
 )
 
+from orchestration.assets.learning_ops import failure_clustering_job
 from orchestration.assets.research import committee_advance_job
 from orchestration.resources import DynamoResource, utcnow
 
@@ -24,6 +25,7 @@ BATCH_EXPIRY = timedelta(hours=24)
 QUARANTINE_SYSTEMIC_THRESHOLD = 20
 BUDGET_WARN = 0.7
 BUDGET_PAGE = 1.0
+CLUSTERING_TRIGGER = 150  # new resolved failures between clustering runs
 
 
 def advance_run_request(batch_id: str, stage: str) -> RunRequest:
@@ -123,4 +125,38 @@ def budget_sensor(context: SensorEvaluationContext, dynamo: DynamoResource) -> S
     return None
 
 
-ALL_SENSORS = [batch_completion_sensor, quarantine_alert_sensor, budget_sensor]
+@sensor(job=failure_clustering_job, minimum_interval_seconds=3600)
+def failure_clustering_sensor(
+    context: SensorEvaluationContext, dynamo: DynamoResource
+) -> SensorResult | SkipReason:
+    """Trigger failure clustering every ~150 new resolved failures (plan
+    Phase 6).
+
+    Watermark contract: the failure_clustering asset records how many failure
+    experiences it saw as the durable ``metrics_daily`` row
+    ``learning.cluster_watermark`` (read back via
+    ``DynamoResource.cluster_watermark``, max over runs). This sensor fires
+    when (current failure count - watermark) reaches the threshold; the
+    count-keyed ``run_key`` makes repeated evaluations before the run
+    completes idempotent (Dagster dedupes identical run keys), and once the
+    asset advances the watermark the sensor goes quiet again. The triggered
+    job only ever OPENS ImprovementProposals — a human approves them in the
+    dashboard, nothing auto-applies.
+    """
+    count = dynamo.failure_experience_count()
+    watermark = dynamo.cluster_watermark()
+    new = count - watermark
+    if new < CLUSTERING_TRIGGER:
+        return SkipReason(
+            f"{new} new resolved failures since last clustering "
+            f"(< {CLUSTERING_TRIGGER}; total {count}, watermark {watermark})"
+        )
+    return SensorResult(run_requests=[RunRequest(run_key=f"failure-clustering-{count}")])
+
+
+ALL_SENSORS = [
+    batch_completion_sensor,
+    quarantine_alert_sensor,
+    budget_sensor,
+    failure_clustering_sensor,
+]

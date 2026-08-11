@@ -43,12 +43,14 @@ def test_expected_assets_present() -> None:
         # shadow sleeve (ADR-0011)
         "pm_resolution",
         "pm_sim_resolution",
-        # learning / ops (docs 10, 12; plan Phase 1)
+        # learning / ops (docs 10, 12; plan Phases 1 + 6)
         "post_trade_reviews",
         "experience_resolution",
         "calibration_update",
         "meta_scoring",
         "drift_monitors",
+        "learning_metrics",
+        "failure_clustering",
         "metrics_daily",
         "equity_curve",
         "parquet_export",
@@ -70,10 +72,16 @@ def test_op_jobs_resolve() -> None:
         "pm_trading_job",
         "pm_reconciliation_job",
         "healthcheck_job",
+        "failure_clustering_job",
     ):
         assert defs.get_job_def(name).name == name
 
 
 def test_sensors_registered() -> None:
     names = {s.name for s in defs.sensors or []}
-    assert {"batch_completion_sensor", "quarantine_alert_sensor", "budget_sensor"} <= names
+    assert {
+        "batch_completion_sensor",
+        "quarantine_alert_sensor",
+        "budget_sensor",
+        "failure_clustering_sensor",
+    } <= names

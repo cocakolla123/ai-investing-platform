@@ -998,6 +998,26 @@ generation_results = Table(
     Column("payload", JSONB, nullable=False, default={}),
 )
 
+# Failure-cluster provenance (plan Phase 6; migration 0014): one row per
+# cluster per clustering run. Needed because ImprovementProposals only capture
+# clusters at/above the min size — the dashboard (12_Failure_Clusters) browses
+# ALL of the latest run's clusters, including the thin ones that opened
+# nothing. proposal_id links a cluster to the proposal it opened (NULL below
+# the threshold or when the proposal predates this run).
+failure_clusters = Table(
+    "failure_clusters",
+    metadata,
+    Column("id", Text, primary_key=True),  # fc:<run_as_of>:<label>
+    Column("run_as_of", Date, nullable=False, index=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("label", Text, nullable=False),
+    Column("failure_class", Text, nullable=False),
+    Column("size", Integer, nullable=False),
+    Column("example_refs", JSONB, nullable=False, default=[]),
+    Column("suggested_kind", Text, nullable=False),
+    Column("proposal_id", Text),
+)
+
 calibration_points = Table(
     "calibration_points",
     metadata,

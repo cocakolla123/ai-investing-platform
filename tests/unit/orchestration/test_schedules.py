@@ -51,3 +51,28 @@ def test_every_schedule_has_expected_cron() -> None:
 @pytest.mark.parametrize("name", sorted(EXPECTED_CRONS))
 def test_every_schedule_runs_in_eastern_time(name: str) -> None:
     assert BY_NAME[name].execution_timezone == TZ
+
+
+def test_weekly_learning_job_includes_learning_metrics() -> None:
+    """Plan Phase 6: the weekly Sunday chain now ends in learning_metrics
+    (deps order it after calibration_update)."""
+    from dagster import AssetSelection
+    from orchestration.schedules import weekly_learning_job
+
+    assert weekly_learning_job.selection == AssetSelection.assets(
+        "post_trade_reviews",
+        "experience_resolution",
+        "calibration_update",
+        "drift_monitors",
+        "learning_metrics",
+    )
+
+
+def test_failure_clustering_job_registered_but_never_scheduled() -> None:
+    """The clustering job is sensor-triggered only (plan Phase 6)."""
+    from orchestration.schedules import ALL_JOBS
+
+    names = {j.name for j in ALL_JOBS}
+    assert "failure_clustering_job" in names
+    scheduled_jobs = {s.job.name for s in ALL_SCHEDULES}
+    assert "failure_clustering_job" not in scheduled_jobs

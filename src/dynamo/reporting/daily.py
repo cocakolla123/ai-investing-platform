@@ -75,6 +75,11 @@ class ReportSource(Protocol):
     # Advisory meta-model scores for the day (plan Phase 3): rows with
     # symbol, conviction (raw), effective_probability, model_version.
     def meta_scores_on(self, day: date) -> list[Row]: ...
+    # Headline learning.* metrics (plan Phase 6): rows with metric, value —
+    # the latest weekly value at or before the report day per metric.
+    def learning_metrics_on(self, day: date) -> list[Row]: ...
+    # Open improvement proposals awaiting human review (clustering + drift).
+    def open_proposal_count(self) -> int: ...
 
 
 # --- Report model -----------------------------------------------------------
@@ -192,6 +197,11 @@ class Learning(BaseModel):
     # Advisory meta-model scores (plan Phase 3) — reported, never sizing
     # input while meta_sizing_enabled is False.
     meta_scores: list[Row] = []
+    # Headline learning.* metrics from the weekly suite (plan Phase 6):
+    # {metric name: latest value at or before the report day}.
+    metrics: dict[str, float] = {}
+    # Improvement proposals currently OPEN (awaiting human review).
+    open_proposals: int = 0
 
 
 class DailyReport(BaseModel):
@@ -471,6 +481,12 @@ def build_daily_report(source: ReportSource, day: date) -> DailyReport:
             calibration=source.calibration_on(day),
             proposals=source.proposals_on(day),
             meta_scores=source.meta_scores_on(day),
+            metrics={
+                str(m["metric"]): _f(m.get("value"))
+                for m in source.learning_metrics_on(day)
+                if m.get("value") is not None
+            },
+            open_proposals=int(source.open_proposal_count()),
         ),
     )
 
@@ -763,6 +779,15 @@ def _render_alerts(a: AlertsIssues, lines: list[str]) -> None:
         lines.append("")
 
 
+# Headline learning.* metrics (plan Phase 6): (metric, label, format).
+_LEARNING_METRIC_LINES: tuple[tuple[str, str, str], ...] = (
+    ("learning.brier", "Brier score (confidence vs reality; lower is better)", "{:.3f}"),
+    ("learning.success_rate", "Success rate (scored decisions that worked out)", "{:.0%}"),
+    ("learning.abstention_rate", "Abstention rate (committee chose to sit out)", "{:.0%}"),
+    ("learning.ev_per_decision", "EV per decision (avg realized pnl)", "{:+.2f}%"),
+)
+
+
 def _render_learning(learning: Learning, lines: list[str]) -> None:
     lines.append("## Learning")
     if (
@@ -770,6 +795,8 @@ def _render_learning(learning: Learning, lines: list[str]) -> None:
         and not learning.calibration
         and not learning.proposals
         and not learning.meta_scores
+        and not learning.metrics
+        and not learning.open_proposals
     ):
         _none_today(lines)
         return
@@ -815,6 +842,25 @@ def _render_learning(learning: Learning, lines: list[str]) -> None:
             )
         )
         lines.append("")
+    rendered_metrics = [
+        (label, fmt.format(learning.metrics[name]))
+        for name, label, fmt in _LEARNING_METRIC_LINES
+        if name in learning.metrics
+    ]
+    if rendered_metrics:
+        n_scored = learning.metrics.get("learning.n_scored")
+        suffix = f" (over {n_scored:.0f} scored decisions)" if n_scored is not None else ""
+        lines.append(f"Learning health — weekly metrics on resolved decisions{suffix}:")
+        lines.extend(f"- {label}: {value}" for label, value in rendered_metrics)
+        lines.append("")
+    if learning.open_proposals:
+        lines.extend(
+            [
+                f"Improvement proposals open (awaiting your review, nothing "
+                f"auto-applies): {learning.open_proposals}",
+                "",
+            ]
+        )
 
 
 def render_markdown(report: DailyReport) -> str:

@@ -129,6 +129,8 @@ class FakeState:
     reporters: list[dict[str, Any]] = field(default_factory=list)
     av_transcripts: dict[str, Any] | None = None  # None -> AV key unset
     defeatbeta_transcripts: list[Any] | None = None  # None -> extra not installed
+    failure_count: int = 0  # failure_clustering_sensor feedstock count
+    clustering_watermark: int = 0  # last recorded learning.cluster_watermark
 
 
 _STATE: dict[str, FakeState] = {}
@@ -226,6 +228,12 @@ class FakeDynamo(DynamoResource):
 
     def quarantine_count_24h(self) -> int:
         return self.st.quarantine_count
+
+    def failure_experience_count(self) -> int:
+        return self.st.failure_count
+
+    def cluster_watermark(self) -> int:
+        return self.st.clustering_watermark
 
 
 @pytest.fixture

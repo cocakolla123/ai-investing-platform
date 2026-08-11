@@ -323,6 +323,40 @@ class SqlReportSource:
             .order_by(t.c.symbol)
         )
 
+    _LEARNING_HEADLINE_METRICS = (
+        "learning.brier",
+        "learning.success_rate",
+        "learning.abstention_rate",
+        "learning.ev_per_decision",
+        "learning.n_scored",
+    )
+
+    def learning_metrics_on(self, day: date) -> list[Row]:
+        """Latest weekly ``learning.*`` headline values at or before the
+        report day (plan Phase 6; the suite runs Sundays, the report daily)."""
+        m = schema.metrics_daily
+        rows = self._rows(
+            select(m.c.metric, m.c.value)
+            .where(
+                m.c.metric.in_(self._LEARNING_HEADLINE_METRICS),
+                m.c.scope_type == "platform",
+                m.c.scope_id == "all",
+                m.c.as_of <= day,
+            )
+            .order_by(m.c.metric, m.c.as_of)
+        )
+        latest: dict[str, Row] = {str(r["metric"]): r for r in rows}  # later as_of wins
+        return [latest[metric] for metric in sorted(latest)]
+
+    def open_proposal_count(self) -> int:
+        t = schema.improvement_proposals
+        return int(
+            self._scalar(
+                select(func.count()).select_from(t).where(t.c.status == "open")
+            )
+            or 0
+        )
+
 
 def build_daily_report_for_engine(
     engine: Engine, day: date, monthly_budget_usd: float

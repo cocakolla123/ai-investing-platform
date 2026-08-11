@@ -283,6 +283,49 @@ class DynamoResource(ConfigurableResource):
                 or 0
             )
 
+    def failure_experience_count(self) -> int:
+        """Resolved LIVE experiences carrying a REAL failure class — the
+        failure-clustering feedstock count (plan Phase 6). Excludes
+        ``normal_uncertainty`` (a sound decision losing within its expected
+        downside is not a failure, doc 10 §4) and replay rows (firewall)."""
+        from sqlalchemy import func, select
+
+        from dynamo.persistence import schema
+
+        e = schema.decision_experience
+        with self.engine().connect() as conn:
+            return int(
+                conn.execute(
+                    select(func.count()).where(
+                        e.c.source == "live",
+                        e.c.resolved.is_(True),
+                        e.c.failure_primary.is_not(None),
+                        e.c.failure_primary != "normal_uncertainty",
+                    )
+                ).scalar()
+                or 0
+            )
+
+    def cluster_watermark(self) -> int:
+        """How many failure experiences the last clustering run had seen —
+        the durable watermark the failure_clustering asset records as the
+        ``metrics_daily`` row ``learning.cluster_watermark`` (max over runs;
+        0 before the first run)."""
+        from sqlalchemy import func, select
+
+        from dynamo.persistence import schema
+
+        m = schema.metrics_daily
+        with self.engine().connect() as conn:
+            value = conn.execute(
+                select(func.max(m.c.value)).where(
+                    m.c.metric == "learning.cluster_watermark",
+                    m.c.scope_type == "platform",
+                    m.c.scope_id == "all",
+                )
+            ).scalar()
+        return int(value or 0)
+
     def earnings_reporters(self, start: date, end: date) -> list[dict[str, Any]]:
         """earnings_events rows with event_date in [start, end] (transcripts asset)."""
         from sqlalchemy import select
