@@ -27,6 +27,7 @@ EXPECTED_CRONS = {
     "social_schedule": "10 22 * * 1-5",
     "scores_schedule": "0 23 * * 1-5",
     "committee_schedule": "30 23 * * 1-5",
+    "meta_scoring_schedule": "45 23 * * 1-5",
     "risk_portfolio_schedule": "30 0 * * *",
     "paper_execution_schedule": "35 9 * * 1-5",
     "reconciliation_schedule": "*/15 9-16 * * 1-5",

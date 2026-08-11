@@ -22,6 +22,7 @@ from orchestration.assets.portfolio_exec import (
     _broker,
     _execution_ready,
     _latest_risk_verdict,
+    _meta_effective_probability,
     _order_manager,
     _portfolio_state,
 )
@@ -182,6 +183,9 @@ def intraday_evaluate_entries(context: OpExecutionContext, dynamo: DynamoResourc
         for r in inst_df.to_dict(orient="records")
     }
 
+    # {} unless meta_sizing_enabled (dark path, plan Phase 3): absent symbols
+    # -> None -> the sizing tilt uses raw conviction, bit-identical to before.
+    effective_probability = _meta_effective_probability(dynamo, as_of)
     sizing_candidates: dict[str, SizingCandidate] = {}
     for symbol in symbols:
         if symbol not in sigma_annual or symbol not in adv:
@@ -197,6 +201,7 @@ def intraday_evaluate_entries(context: OpExecutionContext, dynamo: DynamoResourc
             conviction=verdict.conviction if verdict is not None else 0.5,
             sigma_annual=sigma_annual[symbol],
             adv_dollar_20d=adv[symbol],
+            effective_probability=effective_probability.get(symbol),
             expected_excess_return=(
                 float(quant["expected_excess_return"])
                 if quant is not None and quant["expected_excess_return"] is not None

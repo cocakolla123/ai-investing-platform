@@ -49,6 +49,11 @@ class SizingCandidate:
     vol_forecast_annual: float | None = None  # quant vol forecast (for Kelly)
     sector: str | None = None
     cluster_id: str | None = None
+    # Meta-model calibrated P(win) (plan Phase 3). DARK by default: None
+    # everywhere until meta_sizing_enabled is flipped post-promotion; when
+    # present (and finite) it replaces conviction in the tilt formula ONLY —
+    # the formula and every cap stay unchanged.
+    effective_probability: float | None = None
 
 
 @dataclass(frozen=True)
@@ -166,8 +171,17 @@ def size_positions(
 
         clamps: list[str] = []
         base = budget * inv_sigmas[i] / inv_total if inv_total > 0.0 else 0.0
+        # Tilt input: the meta-model's effective probability when present
+        # (dark path, plan Phase 3), raw conviction otherwise — formula
+        # unchanged either way. Non-finite advice falls back to conviction.
+        p = (
+            candidate.effective_probability
+            if candidate.effective_probability is not None
+            and _finite(candidate.effective_probability)
+            else candidate.conviction
+        )
         tilt = min(
-            max(0.5 + candidate.conviction, config.conviction_tilt_min),
+            max(0.5 + p, config.conviction_tilt_min),
             config.conviction_tilt_max,
         )
         weight = base * tilt

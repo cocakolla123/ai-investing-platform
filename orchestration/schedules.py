@@ -20,6 +20,7 @@
 | Tier-2 detectors + triage (after data quality) | 22:30 market days |
 | Features -> scores -> signals -> regime -> selection | 23:00 market days |
 | Committee batch submission | 23:30 market days |
+| Meta-model advisory scoring | 23:45 market days |
 | Risk verdict + target portfolio | 00:30 daily |
 | Paper execution | 09:35 market days |
 | Reconciliation + stops | every 15 min 09:30-16:00 market days |
@@ -111,6 +112,13 @@ scores_job = define_asset_job(
 risk_portfolio_job = define_asset_job(
     "risk_portfolio_job",
     selection=AssetSelection.assets("risk_verdict", "target_portfolio"),
+)
+meta_scoring_job = define_asset_job(
+    "meta_scoring_job",
+    # 23:45 ET — after the committee batch (23:30), before risk/portfolio
+    # (00:30). target_portfolio also declares meta_scoring as a lineage dep;
+    # the schedule-time ordering here is the operational guarantee.
+    selection=AssetSelection.assets("meta_scoring"),
 )
 nightly_rollup_job = define_asset_job(
     "nightly_rollup_job",
@@ -244,6 +252,12 @@ committee_schedule = ScheduleDefinition(
     job=committee_job,
     execution_timezone=TZ,
 )
+meta_scoring_schedule = ScheduleDefinition(
+    name="meta_scoring_schedule",
+    cron_schedule=f"45 23 * * {MARKET_DAYS}",
+    job=meta_scoring_job,
+    execution_timezone=TZ,
+)
 risk_portfolio_schedule = ScheduleDefinition(
     name="risk_portfolio_schedule",
     cron_schedule="30 0 * * *",
@@ -313,6 +327,7 @@ ALL_JOBS = [
     tier2_job,
     social_job,
     scores_job,
+    meta_scoring_job,
     risk_portfolio_job,
     nightly_rollup_job,
     daily_report_job,
@@ -340,6 +355,7 @@ ALL_SCHEDULES = [
     social_schedule,
     scores_schedule,
     committee_schedule,
+    meta_scoring_schedule,
     risk_portfolio_schedule,
     paper_execution_schedule,
     reconciliation_schedule,

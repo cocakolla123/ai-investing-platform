@@ -407,6 +407,48 @@ class ModelRegistryRepository:
             ).first()
         return RegistryStatus(r.status) if r is not None else None
 
+    def latest_production(self, model_type: str) -> ModelVersion | None:
+        """Most recently promoted production model of ``model_type`` (e.g.
+        'meta'), or ``None`` — the normal state for months (plan Phase 3)."""
+        with self._engine.connect() as cx:
+            r = cx.execute(
+                select(model_versions)
+                .where(
+                    model_versions.c.model_type == model_type,
+                    model_versions.c.status == RegistryStatus.PRODUCTION.value,
+                )
+                .order_by(
+                    model_versions.c.promoted_at.desc().nulls_last(),
+                    model_versions.c.created_at.desc(),
+                )
+                .limit(1)
+            ).first()
+        if r is None:
+            return None
+        return ModelVersion(
+            id=r.id,
+            model_type=r.model_type,
+            algo=r.algo,
+            features_hash=r.features_hash,
+            train_start=r.train_start,
+            train_end=r.train_end,
+            hyperparams=r.hyperparams or {},
+            metrics=r.metrics or {},
+            artifact_path=r.artifact_path,
+            status=RegistryStatus(r.status),
+            created_at=r.created_at,
+            promoted_at=r.promoted_at,
+            promoted_by=r.promoted_by,
+        )
+
+    def trial_count(self, family: str) -> int:
+        """Read-only trial counter (DB-mode promotion CLI; doc 08)."""
+        with self._engine.connect() as cx:
+            r = cx.execute(
+                select(trial_counter.c.trials).where(trial_counter.c.family == family)
+            ).first()
+        return int(r.trials) if r is not None else 0
+
     def apply_promotion(self, record: PromotionRecord) -> None:
         """The ONLY path that mutates registry status. Verifies the record
         matches the stored current status and a legal transition."""

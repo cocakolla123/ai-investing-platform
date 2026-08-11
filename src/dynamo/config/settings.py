@@ -149,6 +149,18 @@ class Settings(BaseSettings):
     # logging onto decision_experience. ADVISORY ONLY — nothing consumes
     # calibrated_probability for sizing.
     hierarchical_calibration_enabled: bool = True
+    # --- Meta-model sizing consumption (plan Phase 3; ADVISORY-FIRST) ---
+    # The nightly meta_scoring asset logs effective_probability rows to
+    # meta_decision_scores whenever a PRODUCTION-stage meta-model exists in
+    # the registry — that logging is always on and always advisory. THIS flag
+    # gates the only consumption path: sizing tilts prefer the meta-model's
+    # effective_probability over raw conviction. Flipping it to True requires
+    # ALL of: a meta-model promoted to production through the full doc 08 §7
+    # pipeline (candidate → validating → paper → shadow → production, signed
+    # human approval at the gate), and a deliberate config change here.
+    # Nothing in code ever flips it; False means the dark path stays dark and
+    # sizing is bit-identical to the pre-meta platform.
+    meta_sizing_enabled: bool = False
 
     # --- Social awareness (Reddit + StockTwits; detector input ONLY) ---
     # Social text is untrusted (pump-and-dump surface): it feeds the Tier-2

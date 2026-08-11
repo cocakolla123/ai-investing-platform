@@ -879,6 +879,26 @@ decision_experience = Table(
     ),
 )
 
+# Advisory meta-model scores (plan Phase 3; migration 0011). One row per
+# scored decision per night: the production meta-model's calibrated P(win)
+# (``effective_probability``) next to the raw verdict. ADVISORY-FIRST —
+# sizing reads these rows ONLY behind ``meta_sizing_enabled`` (default off).
+meta_decision_scores = Table(
+    "meta_decision_scores",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("as_of", Date, nullable=False),
+    Column("symbol", Text, nullable=False),
+    Column("verdict_id", Text),
+    Column("model_version", Text, nullable=False),
+    Column("meta_score", Float, nullable=False),
+    Column("effective_probability", Float, nullable=False),
+    Column("features_hash", Text, nullable=False, default=""),
+    Column("source", Text, nullable=False, default="live"),
+    Index("ix_meta_decision_scores_as_of_symbol", "as_of", "symbol"),
+)
+
 calibration_points = Table(
     "calibration_points",
     metadata,

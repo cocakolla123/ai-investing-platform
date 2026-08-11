@@ -20,20 +20,34 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0010() -> None:
+def test_revision_chain_is_linear_through_0011() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0010" in modules, "0010_calibrated_p migration missing"
+    assert "0011" in modules, "0011_meta_registry migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0010"}, f"expected 0010 as the single head, got {heads}"
+    assert heads == {"0011"}, f"expected 0011 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
     assert down["0007"] == "0006"
     assert down["0008"] == "0007"
     assert down["0009"] == "0008"
     assert down["0010"] == "0009"
+    assert down["0011"] == "0010"
+
+
+def test_0011_targets_meta_decision_scores_table() -> None:
+    from sqlalchemy import Index
+
+    from dynamo.persistence import schema
+
+    assert "meta_decision_scores" in schema.metadata.tables
+    table = schema.metadata.tables["meta_decision_scores"]
+    assert [c.name for c in table.primary_key.columns] == ["id"]
+    index_names = {str(i.name) for i in table.indexes if isinstance(i, Index)}
+    assert "ix_meta_decision_scores_as_of_symbol" in index_names
+    assert table.c.source.default is not None  # 'live' default (advisory rows)
 
 
 def test_0010_targets_calibration_columns() -> None:

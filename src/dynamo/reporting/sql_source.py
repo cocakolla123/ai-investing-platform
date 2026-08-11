@@ -307,6 +307,22 @@ class SqlReportSource:
             .order_by(t.c.id)
         )
 
+    def meta_scores_on(self, day: date) -> list[Row]:
+        """Advisory meta-model scores for the day, with the raw verdict
+        conviction joined in for the side-by-side (plan Phase 3)."""
+        t, v = schema.meta_decision_scores, schema.committee_verdicts
+        return self._rows(
+            select(
+                t.c.symbol,
+                t.c.effective_probability,
+                t.c.model_version,
+                v.c.conviction,
+            )
+            .join_from(t, v, t.c.verdict_id == v.c.id, isouter=True)
+            .where(t.c.as_of == day, t.c.source == "live")
+            .order_by(t.c.symbol)
+        )
+
 
 def build_daily_report_for_engine(
     engine: Engine, day: date, monthly_budget_usd: float

@@ -101,6 +101,9 @@ class FakeSource:
     def proposals_on(self, day: date) -> list[dict[str, Any]]:
         return self._get("proposals", [])
 
+    def meta_scores_on(self, day: date) -> list[dict[str, Any]]:
+        return self._get("meta_scores", [])
+
 
 def _verdict(symbol: str, action: str, conviction: float, **payload: Any) -> dict[str, Any]:
     return {
@@ -197,6 +200,12 @@ def full_day_source() -> FakeSource:
         calibration=[{"scope_id": "arbiter", "brier": 0.18, "n": 24}],
         proposals=[{"kind": "threshold_change", "target": "slippage_model",
                     "expected_effect": "Reduce modeled slippage error"}],
+        meta_scores=[
+            {"symbol": "AAPL", "conviction": 0.72, "effective_probability": 0.61,
+             "model_version": "meta-gradient_boosting-20260810"},
+            {"symbol": "TSM", "conviction": 0.80, "effective_probability": 0.74,
+             "model_version": "meta-gradient_boosting-20260810"},
+        ],
     )
 
 
@@ -332,3 +341,18 @@ def test_report_json_round_trips() -> None:
     assert payload["day"] == "2026-08-04"
     restored = type(report).model_validate(payload)
     assert render_markdown(restored) == render_markdown(report)
+
+
+def test_meta_scores_render_advisory_table() -> None:
+    """Plan Phase 3: meta rows appear in Learning, clearly labeled advisory."""
+    report = build_daily_report(full_day_source(), DAY)
+    assert len(report.learning.meta_scores) == 2
+    md = render_markdown(report)
+    assert "ADVISORY only, not used for sizing" in md
+    assert "| AAPL | 0.72 | 0.61 | meta-gradient_boosting-20260810 |" in md
+    assert "| TSM | 0.80 | 0.74 | meta-gradient_boosting-20260810 |" in md
+
+
+def test_meta_scores_absent_renders_nothing_meta() -> None:
+    md = render_markdown(build_daily_report(FakeSource(), DAY))
+    assert "Meta-model advisory scores" not in md

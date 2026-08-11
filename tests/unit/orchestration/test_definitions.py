@@ -47,6 +47,7 @@ def test_expected_assets_present() -> None:
         "post_trade_reviews",
         "experience_resolution",
         "calibration_update",
+        "meta_scoring",
         "drift_monitors",
         "metrics_daily",
         "equity_curve",

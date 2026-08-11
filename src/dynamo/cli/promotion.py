@@ -7,10 +7,19 @@ Usage:
         [--approval approvals/promotion-my-strategy.yaml] \
         [--evidence-bundle artifacts/backtests/run-123/]
 
+Registry backends (plan Phase 3 — registry adoption):
+
+- **Database (default when DATABASE_URL is set, or ``--registry-db``)**: the
+  real ``model_versions`` / ``promotion_records`` / ``trial_counter`` tables
+  via ``ModelRegistryRepository`` — the registry the meta-model trainer
+  writes candidates into.
+- **JSON file (``--registry <path>``)**: the original file-backed registry,
+  kept for backward compatibility; an explicit ``--registry`` always wins.
+
 The core stage logic lives in ``dynamo.backtest.promotion`` (pure); this
-module wires a JSON-file registry repository and the git-tree check at
-runtime. There is no ``--force``: a dirty tree, a missing approval artifact,
-or an illegal transition is a refusal, not a warning.
+module wires a registry repository and the git-tree check at runtime. There
+is no ``--force``: a dirty tree, a missing approval artifact, or an illegal
+transition is a refusal, not a warning.
 """
 
 from __future__ import annotations
@@ -18,6 +27,34 @@ from __future__ import annotations
 import argparse
 import sys
 from typing import Any
+
+
+class DbRegistry:
+    """``RegistryRepository`` protocol over the real database registry.
+
+    Thin adapter: reads via ``ModelRegistryRepository`` (unknown targets read
+    as ``candidate``, mirroring the JSON registry); every status mutation
+    goes through ``apply_promotion`` — the one legal write path.
+    """
+
+    def __init__(self, engine: Any) -> None:
+        from dynamo.persistence.repositories.learning import ModelRegistryRepository
+
+        self._repo = ModelRegistryRepository(engine)
+
+    def current_status(self, target_id: str) -> Any:
+        from dynamo.domain.models.learning import RegistryStatus
+
+        return self._repo.status_of(target_id) or RegistryStatus.CANDIDATE
+
+    def apply(self, record: Any) -> None:
+        self._repo.apply_promotion(record)
+
+    def trial_count(self, family: str) -> int:
+        return self._repo.trial_count(family)
+
+    def increment_trial(self, family: str) -> int:
+        return self._repo.increment_trials(family)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -32,7 +69,16 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--target", required=True, help="registry target id")
     run.add_argument("--stage", required=True, type=int, help="stage number (1-7)")
     run.add_argument("--evidence", required=True, help="path to evidence JSON")
-    run.add_argument("--registry", required=True, help="path to registry JSON file")
+    run.add_argument(
+        "--registry",
+        default=None,
+        help="path to a JSON registry file (backward compat; overrides DB mode)",
+    )
+    run.add_argument(
+        "--registry-db",
+        action="store_true",
+        help="use the database registry via DATABASE_URL (default when the env var is set)",
+    )
     run.add_argument("--actor", required=True, help="who is running the promotion")
     run.add_argument("--family", default=None, help="strategy family for trial counting")
     run.add_argument("--approval", default=None, help="signed approval artifact path")
@@ -150,7 +196,25 @@ def main(argv: list[str] | None = None) -> int:
     clean_tree, commit = git_state()
     approval, approval_valid = load_approval(args.approval)
 
-    repo = JsonFileRegistry(Path(args.registry))
+    # Registry selection: explicit --registry <json> wins (backward compat);
+    # otherwise DB mode via DATABASE_URL (--registry-db forces it and refuses
+    # loudly when the URL is missing rather than silently using a file).
+    import os
+
+    repo: Any
+    if args.registry is not None:
+        repo = JsonFileRegistry(Path(args.registry))
+    else:
+        database_url = os.environ.get("DATABASE_URL", "")
+        if not database_url:
+            print(
+                "refused: no registry backend — pass --registry <json> "
+                "or set DATABASE_URL (see --registry-db)"
+            )
+            return 2
+        from dynamo.persistence.db import make_engine
+
+        repo = DbRegistry(make_engine(database_url))
     try:
         result = run_stage(
             args.target,
@@ -167,7 +231,9 @@ def main(argv: list[str] | None = None) -> int:
             git_commit=commit,
             config_hash=str(evidence.get("config_hash", "")),
         )
-    except PromotionError as exc:
+    except (PromotionError, LookupError, ValueError) as exc:
+        # LookupError/ValueError surface DB-registry refusals (unknown target,
+        # stale record) the same way stage-gate refusals print.
         print(f"refused: {exc}")
         return 2
 

@@ -619,6 +619,275 @@ def calibration_update(context: AssetExecutionContext, dynamo: DynamoResource) -
     )
 
 
+# --- advisory meta-model scoring (plan Phase 3; 23:45 ET) -------------------
+
+META_NEIGHBORS = 3  # k nearest prior experiences per scored decision
+
+
+def build_meta_score_rows(
+    model: Any,
+    model_version: str,
+    decisions: Sequence[tuple[str, str | None, Any, Any, Sequence[Any]]],
+    now: datetime,
+    as_of: date,
+) -> list[dict[str, Any]]:
+    """meta_decision_scores rows for tonight's decisions (pure over inputs).
+
+    ``decisions``: ``(symbol, verdict_id, snapshot, calib, neighbors)`` per
+    verdict. ``meta_score`` and ``effective_probability`` are both the
+    model's calibrated P(win) — ``MetaModel.predict_proba`` already includes
+    the calibration head, and ``effective_probability`` is DEFINED as that
+    output (plan Phase 3). Deterministic ids make re-runs idempotent.
+    """
+    import hashlib as _hashlib
+    import json as _json
+
+    from dynamo.learning.meta_model import build_features
+
+    rows: list[dict[str, Any]] = []
+    if not decisions:
+        return rows
+    features = [
+        build_features(snapshot, calib, neighbors)
+        for (_, _, snapshot, calib, neighbors) in decisions
+    ]
+    probs = model.predict_proba(features)
+    for (symbol, verdict_id, _, _, _), feature_row, p in zip(
+        decisions, features, probs, strict=True
+    ):
+        canonical = _json.dumps(feature_row, sort_keys=True)
+        rows.append(
+            {
+                "id": f"mds:{as_of.isoformat()}:{symbol}:{model_version}",
+                "created_at": now,
+                "as_of": as_of,
+                "symbol": symbol,
+                "verdict_id": verdict_id,
+                "model_version": model_version,
+                "meta_score": float(p),
+                "effective_probability": float(p),
+                "features_hash": _hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16],
+                "source": "live",
+            }
+        )
+    return rows
+
+
+def run_meta_scoring(
+    *,
+    production: Any,
+    load: Callable[[Any], Any],
+    decisions: Callable[[], Sequence[tuple[str, str | None, Any, Any, Sequence[Any]]]],
+    insert: Callable[[dict[str, Any]], bool],
+    now: datetime,
+    as_of: date,
+    log: Any,
+) -> dict[str, Any]:
+    """Asset core, pure over injected callables (test-driven with fakes).
+
+    No production-stage meta-model — the NORMAL state until one survives the
+    full promotion pipeline — is a silent, successful skip, never an error.
+    """
+    if production is None:
+        return {"skipped": "no production meta-model", "scored": 0}
+    from dynamo.learning.artifacts import ArtifactIntegrityError
+
+    try:
+        model = load(production)
+    except (ArtifactIntegrityError, FileNotFoundError) as exc:
+        log.error("meta_scoring: cannot load %s: %s", production.id, exc)
+        return {"skipped": f"artifact unusable: {exc}", "scored": 0}
+    rows = build_meta_score_rows(model, production.id, list(decisions()), now, as_of)
+    written = sum(1 for row in rows if insert(row))
+    return {"scored": len(rows), "written": written, "model_version": production.id}
+
+
+def _tonights_decisions(
+    dynamo: DynamoResource, as_of: date, log: Any
+) -> list[tuple[str, str | None, Any, Any, Sequence[Any]]]:
+    """(symbol, verdict_id, snapshot, calib, neighbors) for today's verdicts.
+
+    The experience row does not exist yet at decision time, so snapshots are
+    built straight from the verdict + quant + regime (shared builder:
+    ``dynamo.learning.meta_model.snapshot_from_decision``).
+    """
+    from sqlalchemy import select as sa_select
+
+    from dynamo.domain.models.research import CommitteeVerdict, QuantScore
+    from dynamo.domain.models.risk import Regime, RegimeState
+    from dynamo.learning.hierarchy import HierarchicalCalibrator, ScopeKey
+    from dynamo.learning.meta_model import snapshot_from_decision
+    from orchestration.assets.research import _pydate
+
+    engine = dynamo.engine()
+    v = schema.committee_verdicts
+    verdicts: list[CommitteeVerdict] = []
+    with engine.connect() as cx:
+        for row in cx.execute(sa_select(v.c.payload).where(v.c.as_of == as_of)).all():
+            try:
+                verdicts.append(CommitteeVerdict.model_validate(row.payload))
+            except Exception:
+                log.warning("meta_scoring: unparsable verdict payload — skipping one row")
+    if not verdicts:
+        return []
+
+    symbols = sorted({vd.symbol for vd in verdicts})
+    quant_by_symbol: dict[str, QuantScore] = {}
+    qf = dynamo.market_repo().latest_quant_scores(symbols)
+    if not qf.empty:
+        for r in qf.to_dict(orient="records"):
+            quant_by_symbol[str(r["symbol"])] = QuantScore(
+                symbol=str(r["symbol"]),
+                as_of=_pydate(r["as_of"]),
+                model_version=str(r["model_version"]),
+                expected_excess_return=r["expected_excess_return"],
+                downside_prob=r["downside_prob"],
+                vol_forecast=r["vol_forecast"],
+                rank=r["rank"],
+                confidence=float(r["confidence"] or 0.0),
+                feature_coverage=float(r["feature_coverage"] or 1.0),
+            )
+
+    rs = schema.regime_states
+    regime: RegimeState | None = None
+    with engine.connect() as cx:
+        r = cx.execute(
+            sa_select(rs).where(rs.c.as_of <= as_of).order_by(rs.c.as_of.desc()).limit(1)
+        ).first()
+    if r is not None:
+        regime = RegimeState(
+            as_of=r.as_of,
+            regime=Regime(r.regime),
+            composite_score=r.composite_score,
+            inputs=r.inputs or {},
+            sessions_in_state=r.sessions_in_state,
+        )
+
+    m = schema.macro_series
+    with engine.connect() as cx:
+        vix_row = cx.execute(
+            sa_select(m.c.value)
+            .where(m.c.series_id == "VIXCLS", m.c.ts <= as_of)
+            .order_by(m.c.ts.desc(), m.c.vintage_ts.desc())
+            .limit(1)
+        ).first()
+    vix = float(vix_row.value) if vix_row is not None else None
+
+    spy = dynamo.bars_window(["SPY"], as_of, 60)
+    spy_ret_20d: float | None = None
+    if not spy.empty:
+        closes = [float(x) for x in spy.sort_values("ts")["close"]]
+        if len(closes) >= 21 and closes[-21] > 0:
+            spy_ret_20d = closes[-1] / closes[-21] - 1.0
+
+    inst = schema.instruments
+    with engine.connect() as cx:
+        sector_by_symbol = {
+            str(r.symbol): r.sector
+            for r in cx.execute(
+                sa_select(inst.c.symbol, inst.c.sector).where(inst.c.symbol.in_(symbols))
+            ).all()
+        }
+    wl = schema.watchlist
+    with engine.connect() as cx:
+        sleeve_by_symbol = {
+            str(r.symbol): str(r.sleeve)
+            for r in cx.execute(
+                sa_select(wl.c.symbol, wl.c.sleeve).where(
+                    wl.c.as_of == as_of, wl.c.symbol.in_(symbols)
+                )
+            ).all()
+        }
+
+    exp_repo = dynamo.experience_repo()
+    calibrator: HierarchicalCalibrator | None = None
+    _, hier_obs = hier_calibration_inputs(
+        exp_repo, dynamo.settings().hierarchical_calibration_enabled
+    )
+    if hier_obs:
+        calibrator = HierarchicalCalibrator.from_observations(hier_obs)
+
+    decisions: list[tuple[str, str | None, Any, Any, Sequence[Any]]] = []
+    for vd in verdicts:
+        sector = sector_by_symbol.get(vd.symbol)
+        sleeve = sleeve_by_symbol.get(vd.symbol)
+        calib = None
+        if calibrator is not None:
+            calib = calibrator.calibrate(
+                vd.conviction,
+                ScopeKey(
+                    sleeve=sleeve,
+                    regime=regime.regime.value if regime is not None else None,
+                    sector=sector,
+                    quant_alignment=vd.quant_alignment.value,
+                ),
+            )
+        neighbors = exp_repo.similar(
+            symbol=vd.symbol,
+            as_of=as_of,
+            sector=sector,
+            regime=regime.regime.value if regime is not None else None,
+            sleeve=sleeve,
+            limit=META_NEIGHBORS,
+        )
+        snapshot = snapshot_from_decision(
+            vd,
+            quant=quant_by_symbol.get(vd.symbol),
+            regime=regime,
+            sector=sector,
+            sleeve=sleeve,
+            vix=vix,
+            spy_ret_20d=spy_ret_20d,
+        )
+        decisions.append((vd.symbol, vd.id, snapshot, calib, neighbors))
+    return decisions
+
+
+@dagster_asset(name="meta_scoring", group_name=LEARNING_GROUP)
+def meta_scoring(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
+    """Score tonight's committee verdicts with the PRODUCTION-stage advisory
+    meta-model → ``meta_decision_scores`` rows (plan Phase 3; 23:45 ET).
+
+    ADVISORY-FIRST: with no production meta-model in the registry (the normal
+    state for months) this skips silently. Written scores are consumed for
+    sizing ONLY behind ``meta_sizing_enabled`` (default False). LLM-free.
+    """
+    from pathlib import Path
+
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from dynamo.learning.artifacts import load_model
+    from dynamo.persistence.repositories.learning import ModelRegistryRepository
+
+    as_of = utcnow().date()
+    production = ModelRegistryRepository(dynamo.engine()).latest_production("meta")
+
+    def _load(mv: Any) -> Any:
+        artifact = Path(mv.artifact_path)
+        expected = (mv.metrics or {}).get("artifact_sha256")
+        return load_model(
+            artifact.parent, mv.id, expected_sha=str(expected) if expected else None
+        )
+
+    def _insert(row: dict[str, Any]) -> bool:
+        t = schema.meta_decision_scores
+        stmt = pg_insert(t).values(**row).on_conflict_do_nothing(index_elements=[t.c.id])
+        with dynamo.engine().begin() as cx:
+            inserted = cx.execute(stmt.returning(t.c.id)).first()
+        return inserted is not None
+
+    result = run_meta_scoring(
+        production=production,
+        load=_load,
+        decisions=lambda: _tonights_decisions(dynamo, as_of, context.log),
+        insert=_insert,
+        now=utcnow(),
+        as_of=as_of,
+        log=context.log,
+    )
+    return MaterializeResult(metadata={k: v for k, v in result.items()})
+
+
 @dagster_asset(group_name=LEARNING_GROUP)
 def drift_monitors(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Slippage / incident-trend / IC-decay monitors -> improvement_proposals."""
@@ -846,6 +1115,7 @@ LEARNING_ASSETS = [
     post_trade_reviews,
     experience_resolution,
     calibration_update,
+    meta_scoring,
     drift_monitors,
     metrics_daily_asset,
     equity_curve_asset,

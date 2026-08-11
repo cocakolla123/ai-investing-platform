@@ -72,6 +72,9 @@ class ReportSource(Protocol):
     def reviews_on(self, day: date) -> list[Row]: ...
     def calibration_on(self, day: date) -> list[Row]: ...
     def proposals_on(self, day: date) -> list[Row]: ...
+    # Advisory meta-model scores for the day (plan Phase 3): rows with
+    # symbol, conviction (raw), effective_probability, model_version.
+    def meta_scores_on(self, day: date) -> list[Row]: ...
 
 
 # --- Report model -----------------------------------------------------------
@@ -186,6 +189,9 @@ class Learning(BaseModel):
     reviews: list[Row] = []
     calibration: list[Row] = []
     proposals: list[Row] = []
+    # Advisory meta-model scores (plan Phase 3) — reported, never sizing
+    # input while meta_sizing_enabled is False.
+    meta_scores: list[Row] = []
 
 
 class DailyReport(BaseModel):
@@ -464,6 +470,7 @@ def build_daily_report(source: ReportSource, day: date) -> DailyReport:
             reviews=source.reviews_on(day),
             calibration=source.calibration_on(day),
             proposals=source.proposals_on(day),
+            meta_scores=source.meta_scores_on(day),
         ),
     )
 
@@ -758,7 +765,12 @@ def _render_alerts(a: AlertsIssues, lines: list[str]) -> None:
 
 def _render_learning(learning: Learning, lines: list[str]) -> None:
     lines.append("## Learning")
-    if not learning.reviews and not learning.calibration and not learning.proposals:
+    if (
+        not learning.reviews
+        and not learning.calibration
+        and not learning.proposals
+        and not learning.meta_scores
+    ):
         _none_today(lines)
         return
     if learning.reviews:
@@ -782,6 +794,26 @@ def _render_learning(learning: Learning, lines: list[str]) -> None:
         for p in learning.proposals:
             effect = p.get("expected_effect") or "no expected effect stated"
             lines.append(f"- {p.get('kind')} on `{p.get('target')}` — {effect}")
+        lines.append("")
+    if learning.meta_scores:
+        lines.append(
+            "Meta-model advisory scores (a second opinion on each decision's "
+            "win probability — ADVISORY only, not used for sizing):"
+        )
+        lines.extend(
+            _table(
+                ["Symbol", "Raw conviction", "Meta win probability", "Model"],
+                [
+                    [
+                        str(m.get("symbol")),
+                        "—" if m.get("conviction") is None else f"{_f(m.get('conviction')):.2f}",
+                        f"{_f(m.get('effective_probability')):.2f}",
+                        str(m.get("model_version") or ""),
+                    ]
+                    for m in learning.meta_scores
+                ],
+            )
+        )
         lines.append("")
 
 

@@ -69,6 +69,10 @@ class AdvisoryInputs:
     sigma_annual: Mapping[str, float] = field(default_factory=dict)
     adv_dollar_20d: Mapping[str, float] = field(default_factory=dict)
     sector_by_symbol: Mapping[str, str] = field(default_factory=dict)
+    # Meta-model calibrated P(win) per symbol (plan Phase 3). DARK by
+    # default: empty unless meta_sizing_enabled is True post-promotion; an
+    # empty mapping leaves construction bit-identical to the pre-meta path.
+    effective_probability: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -551,6 +555,9 @@ class RuleBasedConstructor:
                     vol_forecast_annual=quant.vol_forecast if quant is not None else None,
                     sector=inputs.sector_by_symbol.get(lot.symbol),
                     cluster_id=verdict.clusters.get(lot.symbol),
+                    # Dark meta path (plan Phase 3): absent from the mapping
+                    # -> None -> the tilt uses raw conviction, unchanged.
+                    effective_probability=inputs.effective_probability.get(lot.symbol),
                 )
             )
         ctx = SizingContext(

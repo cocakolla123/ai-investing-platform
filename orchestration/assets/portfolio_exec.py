@@ -81,6 +81,36 @@ def _latest_prices(dynamo: DynamoResource, symbols: list[str], as_of: date) -> d
     return {str(r["symbol"]): float(r["close"]) for r in latest.to_dict(orient="records")}
 
 
+def _meta_effective_probability(dynamo: DynamoResource, as_of: date) -> dict[str, float]:
+    """symbol -> meta-model effective_probability for tonight's decisions.
+
+    DARK PATH (plan Phase 3): returns {} — leaving sizing bit-identical to
+    the pre-meta platform — unless ``meta_sizing_enabled`` is True, which is
+    legitimate ONLY after a meta-model survives the full promotion pipeline
+    with signed human approval. When enabled, reads the most recent
+    ``meta_decision_scores`` night within 3 days (23:45 ET scoring vs the
+    00:30 ET construction run crosses a calendar day).
+    """
+    if not dynamo.settings().meta_sizing_enabled:
+        return {}
+    mds = schema.meta_decision_scores
+    frame = _read_df(
+        dynamo,
+        select(mds.c.symbol, mds.c.effective_probability, mds.c.as_of).where(
+            mds.c.as_of >= as_of - timedelta(days=3),
+            mds.c.as_of <= as_of,
+            mds.c.source == "live",
+        ),
+    )
+    if frame.empty:
+        return {}
+    latest = cast(pd.DataFrame, frame[frame["as_of"] == frame["as_of"].max()])
+    return {
+        str(r["symbol"]): float(r["effective_probability"])
+        for r in latest.to_dict(orient="records")
+    }
+
+
 def _latest_risk_verdict(dynamo: DynamoResource) -> tuple[str, Any] | None:
     from dynamo.domain.models.risk import RiskVerdict
 
@@ -242,7 +272,11 @@ def risk_verdict_asset(context: AssetExecutionContext, dynamo: DynamoResource) -
 @dagster_asset(
     name="target_portfolio",
     group_name=PORTFOLIO_GROUP,
-    deps=["risk_verdict", "watchlist"],
+    # meta_scoring is a lineage dep only: it materializes successfully even
+    # when it skips (no production meta-model — the normal state), so it can
+    # never block construction; the 23:45-before-00:30 schedule ordering is
+    # the operational guarantee that scores exist when the flag is on.
+    deps=["risk_verdict", "watchlist", "meta_scoring"],
 )
 def target_portfolio_asset(
     context: AssetExecutionContext, dynamo: DynamoResource
@@ -336,6 +370,8 @@ def target_portfolio_asset(
             sigma_annual=sigma_annual,
             adv_dollar_20d=adv,
             sector_by_symbol=sector_by_symbol,
+            # {} unless meta_sizing_enabled (dark path, plan Phase 3).
+            effective_probability=_meta_effective_probability(dynamo, as_of),
         ),
         risk,
         state,
