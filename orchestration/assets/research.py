@@ -865,11 +865,8 @@ def build_deep_dive_contexts(
         str(r["symbol"]): Instrument.model_validate(_subset(Instrument, r))
         for r in inst_df.to_dict(orient="records")
     }
-    md = schema.macro_digests
-    digest_df = _read_df(dynamo, select(md).order_by(md.c.as_of.desc()).limit(1))
-    macro_text = ""
-    if not digest_df.empty:
-        macro_text = str((digest_df.iloc[0]["payload"] or {}).get("narrative", ""))
+    digest_payload = dynamo.market_repo().latest_macro_digest()
+    macro_text = str((digest_payload or {}).get("narrative", ""))
 
     bars = dynamo.bars_window(list(symbols), as_of, 120)
     n = schema.news

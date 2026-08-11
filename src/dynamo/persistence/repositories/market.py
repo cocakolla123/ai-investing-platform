@@ -495,12 +495,23 @@ class MarketDataRepository:
             for r in rows
         ]
 
-    def latest_verdicts(self, symbols: Sequence[str] | None = None) -> pd.DataFrame:
-        """Most recent committee verdict per symbol."""
+    def latest_verdicts(
+        self,
+        symbols: Sequence[str] | None = None,
+        as_of: date | None = None,
+    ) -> pd.DataFrame:
+        """Most recent committee verdict per symbol.
+
+        ``as_of`` (optional) upper-bounds the read at ``as_of`` inclusive —
+        the point-in-time contract replay's gateway depends on. ``None``
+        keeps the live behavior (no bound) so call sites are unchanged.
+        """
         t = schema.committee_verdicts
         stmt = select(t)
         if symbols is not None:
             stmt = stmt.where(t.c.symbol.in_(list(symbols)))
+        if as_of is not None:
+            stmt = stmt.where(t.c.as_of <= as_of)
         with self._engine.connect() as conn:
             frame = pd.read_sql(stmt, conn)
         if frame.empty:
@@ -511,12 +522,22 @@ class MarketDataRepository:
             .reset_index(drop=True)
         )
 
-    def latest_quant_scores(self, symbols: Sequence[str] | None = None) -> pd.DataFrame:
-        """Most recent quant score per (symbol, model_version)."""
+    def latest_quant_scores(
+        self,
+        symbols: Sequence[str] | None = None,
+        as_of: date | None = None,
+    ) -> pd.DataFrame:
+        """Most recent quant score per (symbol, model_version).
+
+        ``as_of`` (optional) upper-bounds the read at ``as_of`` inclusive
+        (replay point-in-time); ``None`` keeps the live behavior.
+        """
         t = schema.quant_scores
         stmt = select(t)
         if symbols is not None:
             stmt = stmt.where(t.c.symbol.in_(list(symbols)))
+        if as_of is not None:
+            stmt = stmt.where(t.c.as_of <= as_of)
         with self._engine.connect() as conn:
             frame = pd.read_sql(stmt, conn)
         if frame.empty:
@@ -526,3 +547,20 @@ class MarketDataRepository:
             .drop_duplicates(subset=["symbol", "model_version"], keep="last")
             .reset_index(drop=True)
         )
+
+    def latest_macro_digest(self, as_of: date | None = None) -> dict[str, Any] | None:
+        """Payload of the most recent macro digest, or ``None`` when absent.
+
+        ``as_of`` (optional) upper-bounds the read at ``as_of`` inclusive
+        (replay point-in-time); ``None`` keeps the live behavior (latest row).
+        """
+        t = schema.macro_digests
+        stmt = select(t.c.payload)
+        if as_of is not None:
+            stmt = stmt.where(t.c.as_of <= as_of)
+        stmt = stmt.order_by(t.c.as_of.desc()).limit(1)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).first()
+        if row is None or row[0] is None:
+            return None
+        return dict(row[0])

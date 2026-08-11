@@ -20,14 +20,14 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0011() -> None:
+def test_revision_chain_is_linear_through_0012() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0011" in modules, "0011_meta_registry migration missing"
+    assert "0012" in modules, "0012_replay_runs migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0011"}, f"expected 0011 as the single head, got {heads}"
+    assert heads == {"0012"}, f"expected 0012 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
     assert down["0007"] == "0006"
@@ -35,6 +35,22 @@ def test_revision_chain_is_linear_through_0011() -> None:
     assert down["0009"] == "0008"
     assert down["0010"] == "0009"
     assert down["0011"] == "0010"
+    assert down["0012"] == "0011"
+
+
+def test_0012_targets_replay_tables() -> None:
+    from dynamo.persistence import schema
+
+    assert "replay_runs" in schema.metadata.tables
+    assert "replay_decisions" in schema.metadata.tables
+    runs = schema.metadata.tables["replay_runs"]
+    assert [c.name for c in runs.primary_key.columns] == ["id"]
+    assert {"budget_usd", "spent_usd", "status", "config_json"} <= set(runs.c.keys())
+    decisions = schema.metadata.tables["replay_decisions"]
+    assert [c.name for c in decisions.primary_key.columns] == ["id"]
+    assert decisions.c.run_id.index  # indexed FK-by-convention
+    module = _load(VERSIONS / "0012_replay_runs.py")
+    assert {t.name for t in module.TABLES} == {"replay_runs", "replay_decisions"}
 
 
 def test_0011_targets_meta_decision_scores_table() -> None:
@@ -145,6 +161,9 @@ def test_alembic_upgrade_head_creates_table(
         # 0010: advisory calibration columns present after upgrade head.
         experience_columns = {c["name"] for c in inspector.get_columns("decision_experience")}
         assert {"calibrated_probability", "calibration_scope_used"} <= experience_columns
+        # 0012: replay bookkeeping tables present after upgrade head.
+        assert inspector.has_table("replay_runs")
+        assert inspector.has_table("replay_decisions")
     finally:
         engine.dispose()
 

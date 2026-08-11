@@ -130,3 +130,11 @@ name = "core logic does not import adapters"
 type = "forbidden"
 source_modules = ["dynamo.risk", "dynamo.portfolio", "dynamo.research", "dynamo.backtest", "dynamo.learning"]
 forbidden_modules = ["dynamo.data", "dynamo.llm", "dynamo.persistence", "dynamo.execution", "dynamo.api", "dynamo.reporting"]
+
+# Replay is a composition root (like orchestration): it may import everything,
+# but core logic must never import it back (plan Phase 4).
+[[tool.importlinter.contracts]]
+name = "core logic does not import the replay composition root"
+type = "forbidden"
+source_modules = ["dynamo.domain", "dynamo.research", "dynamo.risk", "dynamo.portfolio", "dynamo.backtest", "dynamo.learning"]
+forbidden_modules = ["dynamo.replay"]

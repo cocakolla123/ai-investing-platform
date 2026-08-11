@@ -899,6 +899,42 @@ meta_decision_scores = Table(
     Index("ix_meta_decision_scores_as_of_symbol", "as_of", "symbol"),
 )
 
+# --- Historical replay (plan Phase 4; migration 0012) ---
+#
+# FIREWALL: these two tables plus decision_experience (source='replay') are
+# the ONLY tables replay ever writes. Replay never touches orders / trades /
+# decision_context / committee_verdicts / journal_entries — the firewall test
+# asserts live-table row counts are unchanged across a replay run.
+replay_runs = Table(
+    "replay_runs",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("label", Text, nullable=False, default=""),
+    Column("mode", Text, nullable=False, default="quant"),  # quant | committee (Phase 5)
+    Column("start_as_of", Date, nullable=False),
+    Column("end_as_of", Date, nullable=False),
+    Column("config_json", JSONB, nullable=False, default={}),
+    Column("code_version", Text, nullable=False, default=""),
+    Column("budget_usd", Float),  # committee mode only (Phase 5); NULL for quant
+    Column("spent_usd", Float, nullable=False, default=0.0),
+    Column("status", Text, nullable=False, default="created"),
+)
+
+replay_decisions = Table(
+    "replay_decisions",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("run_id", Text, nullable=False, index=True),
+    Column("as_of", Date, nullable=False),
+    Column("symbol", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("conviction", Float),
+    Column("target_weight", Float),
+    Column("fill_price", Float),
+    Column("payload", JSONB, nullable=False, default={}),
+)
+
 calibration_points = Table(
     "calibration_points",
     metadata,
