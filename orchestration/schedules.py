@@ -25,6 +25,7 @@
 | Reconciliation + stops | every 15 min 09:30-16:00 market days |
 | Parquet export + metrics + equity curve | 02:00 daily |
 | Daily activity report | 02:15 daily |
+| Chain verify + experience completeness | 02:20 daily |
 | Healthcheck dead-man ping | 02:30 daily |
 | Post-trade reviews + calibration + drift | Sunday 08:00 |
 """
@@ -122,6 +123,12 @@ daily_report_job = define_asset_job(
 weekly_learning_job = define_asset_job(
     "weekly_learning_job",
     selection=AssetSelection.assets("post_trade_reviews", "calibration_update", "drift_monitors"),
+)
+safety_checks_job = define_asset_job(
+    "safety_checks_job",
+    # Nightly learning-loop safety: hash-chain verification (02:20) and the
+    # review-completeness check, between the daily report and the dead-man ping.
+    selection=AssetSelection.assets("chain_verify_check", "experience_completeness_check"),
 )
 
 # --- partitioned schedules (partition key = the ET calendar day) ----------
@@ -270,6 +277,12 @@ daily_report_schedule = ScheduleDefinition(
     job=daily_report_job,
     execution_timezone=TZ,
 )
+safety_checks_schedule = ScheduleDefinition(
+    name="safety_checks_schedule",
+    cron_schedule="20 2 * * *",
+    job=safety_checks_job,
+    execution_timezone=TZ,
+)
 healthcheck_schedule = ScheduleDefinition(
     name="healthcheck_schedule",
     cron_schedule="30 2 * * *",
@@ -300,6 +313,7 @@ ALL_JOBS = [
     nightly_rollup_job,
     daily_report_job,
     weekly_learning_job,
+    safety_checks_job,
 ]
 
 ALL_SCHEDULES = [
@@ -328,6 +342,7 @@ ALL_SCHEDULES = [
     stops_schedule,
     nightly_rollup_schedule,
     daily_report_schedule,
+    safety_checks_schedule,
     healthcheck_schedule,
     weekly_learning_schedule,
 ]

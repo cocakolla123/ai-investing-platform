@@ -85,6 +85,13 @@ def test_news_sorted_by_published_at_not_input_order() -> None:
     assert context.index("[n-1]") < context.index("[n-2]")
 
 
+def test_journal_hits_rendered_in_their_section() -> None:
+    context = build(journal_hits=["j-1: similar setup in 2024", "lesson: respect the stop"])
+    section = context.split("## Journal hits", 1)[1]
+    assert "- j-1: similar setup in 2024" in section
+    assert "- lesson: respect the stop" in section
+
+
 def test_missing_optional_inputs_render_placeholders() -> None:
     context = build(
         quant_score=None,

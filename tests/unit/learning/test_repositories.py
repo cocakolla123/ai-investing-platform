@@ -72,10 +72,14 @@ def test_decision_context_chain_append_and_verify(engine) -> None:  # type: igno
 
     repo = DecisionContextRepository(engine)  # type: ignore[arg-type]
     for i in range(5):
-        repo.append(_dc(i))
+        # append() returns the id callers store on orders — the SAME key
+        # get() looks up (returning row_hash here once broke the join spine).
+        assert repo.append(_dc(i)) == f"dc-{i}"
     assert repo.verify().ok
     loaded = repo.get("dc-3")
     assert loaded is not None and loaded.payload == {"seq": 3}
+    # Round trip through the stored reference: id in, same id out.
+    assert repo.get(repo.append(_dc(5))) is not None
 
     # Tamper with one historical row → the verifier must detect it.
     with engine.begin() as cx:  # type: ignore[attr-defined]
@@ -109,6 +113,36 @@ def test_journal_insert_and_text_search(engine) -> None:  # type: ignore[no-unty
     vector_hits = repo.search(embedding=[0.1] * 384, top_k=1)
     assert [e.id for e, _ in vector_hits] == ["j-1"]
     assert vector_hits[0][1] == pytest.approx(1.0, abs=1e-6)  # identical vector
+
+    # Idempotent insert: re-deriving the same entry id is a no-op, not an error.
+    repo.insert(entry, embedding=[0.1] * 384, embedding_version="bge-small-v1")
+    assert len(repo.search(kinds=[JournalKind.LESSON])) == 1
+
+
+def test_journal_search_as_of_hides_future_entries(engine) -> None:  # type: ignore[no-untyped-def]
+    """Write -> search round trip with the hash-fallback embedder; an entry
+    created after ``as_of`` is invisible (leakage guard for replay)."""
+    from dynamo.llm.embeddings import LocalEmbedder
+    from dynamo.persistence.repositories.learning import JournalRepository
+
+    embedder = LocalEmbedder()
+    repo = JournalRepository(engine)  # type: ignore[arg-type]
+    past = JournalEntry(
+        id="j-past", kind=JournalKind.LESSON, symbols=("AAPL",),
+        text="AAPL: cut losers at the stop.", created_at=NOW,
+    )
+    future = JournalEntry(
+        id="j-future", kind=JournalKind.LESSON, symbols=("AAPL",),
+        text="AAPL: future hindsight entry.", created_at=NOW + timedelta(days=5),
+    )
+    for entry in (past, future):
+        repo.insert(entry, embedder.embed([entry.text])[0], embedding_version=embedder.backend)
+
+    query = embedder.embed(["AAPL investment lessons"])[0]
+    unbounded = repo.search(embedding=query, top_k=5)
+    assert {e.id for e, _ in unbounded} == {"j-past", "j-future"}
+    bounded = repo.search(embedding=query, top_k=5, as_of=NOW + timedelta(days=1))
+    assert {e.id for e, _ in bounded} == {"j-past"}  # the future entry is invisible
 
 
 def test_proposal_calibration_metrics_roundtrip(engine) -> None:  # type: ignore[no-untyped-def]

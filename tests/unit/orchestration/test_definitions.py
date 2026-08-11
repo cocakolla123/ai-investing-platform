@@ -50,6 +50,8 @@ def test_expected_assets_present() -> None:
         "metrics_daily",
         "equity_curve",
         "parquet_export",
+        "chain_verify_check",
+        "experience_completeness_check",
     }
     assert expected <= names
 

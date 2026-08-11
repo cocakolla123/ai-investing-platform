@@ -339,6 +339,10 @@ def options_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) 
                 "spot": spot_prices.get(order.underlying),
                 "iv_rank": decision.iv_rank,
             },
+            # The verdict's expected move is for the UNDERLYING — it does not
+            # describe the option position's P&L path, so no expectations are
+            # denormalized here; zeros mean "no forecast" (calibration falls
+            # back to sign-of-pnl). Horizon is the position's real DTE.
             expected_upside_pct=0.0,
             expected_downside_pct=0.0,
             horizon_days=decision.dte,

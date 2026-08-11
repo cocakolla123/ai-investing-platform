@@ -428,6 +428,9 @@ def pm_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) -> No
                 "view_ref": decision.view_ref,
                 "order": order.model_dump(mode="json"),
             },
+            # No committee price expectations for prediction markets — edge
+            # lives in the decision payload; zeros mean "no forecast" and
+            # calibration scores this sleeve by resolution, not price path.
             expected_upside_pct=0.0,
             expected_downside_pct=0.0,
             horizon_days=settings.pm_max_days_to_resolution,
@@ -602,6 +605,8 @@ def pm_sim_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) -
                 "view_ref": decision.view_ref,
                 "order": order.model_dump(mode="json"),
             },
+            # No committee price expectations for prediction markets (see the
+            # Kalshi path above) — zeros mean "no forecast".
             expected_upside_pct=0.0,
             expected_downside_pct=0.0,
             horizon_days=settings.pm_max_days_to_resolution,

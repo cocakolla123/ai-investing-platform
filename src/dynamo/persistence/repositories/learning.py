@@ -68,7 +68,10 @@ class DecisionContextRepository:
 
     def append(self, dc: DecisionContext) -> str:
         """INSERT with the chain extended: prev_hash = last row_hash (or
-        GENESIS), row_hash = sha256(prev ‖ canonical body). Returns row_hash."""
+        GENESIS), row_hash = sha256(prev ‖ canonical body). Returns ``dc.id``
+        — the key callers store on orders and ``get()`` looks up (returning
+        the row_hash here once broke every decision→outcome join; migration
+        0008 repaired the stored references)."""
         body = _dc_body(dc)
         with self._engine.begin() as cx:
             last = cx.execute(
@@ -95,7 +98,7 @@ class DecisionContextRepository:
                     row_hash=digest,
                 )
             )
-        return digest
+        return dc.id
 
     def get(self, dc_id: str) -> DecisionContext | None:
         with self._engine.connect() as cx:
@@ -198,9 +201,13 @@ class JournalRepository:
         embedding: Sequence[float] | None = None,
         embedding_version: str = "",
     ) -> None:
+        """Idempotent append: entry ids are deterministic (thesis:<verdict>,
+        review:<trade>, ...) so an asset re-run re-derives the same row —
+        conflicting ids are left untouched, never updated."""
         with self._engine.begin() as cx:
             cx.execute(
-                journal_entries.insert().values(
+                pg_insert(journal_entries)
+                .values(
                     id=entry.id,
                     kind=entry.kind.value,
                     symbols=list(entry.symbols),
@@ -213,6 +220,7 @@ class JournalRepository:
                     embedding=list(embedding) if embedding is not None else None,
                     embedding_version=embedding_version,
                 )
+                .on_conflict_do_nothing(index_elements=[journal_entries.c.id])
             )
 
     def search(
@@ -225,10 +233,15 @@ class JournalRepository:
         strategy: str | None = None,
         regime: str | None = None,
         top_k: int = 5,
+        as_of: datetime | None = None,
     ) -> list[tuple[JournalEntry, float]]:
         """Returns (entry, similarity). Cosine similarity in [0
-        .. 1]-ish when searching by embedding; 0.0 for text-only matches."""
+        .. 1]-ish when searching by embedding; 0.0 for text-only matches.
+        ``as_of`` hides entries written after that instant (leakage guard —
+        live retrieval passes the run's as-of; replay depends on it)."""
         stmt = select(journal_entries)
+        if as_of is not None:
+            stmt = stmt.where(journal_entries.c.created_at <= as_of)
         if kinds:
             stmt = stmt.where(journal_entries.c.kind.in_([k.value for k in kinds]))
         if symbols:

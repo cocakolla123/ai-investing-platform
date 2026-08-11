@@ -141,6 +141,10 @@ class Settings(BaseSettings):
     # --- Same-day tactical entries (15-min intraday loop) ---
     intraday_entry_cap_per_day: int = 3
 
+    # --- Learning loop (doc 10; journal retrieval feeds dossier contexts) ---
+    journal_retrieval_enabled: bool = True
+    experience_retrieval_top_k: int = 3  # journal hits per symbol in the dossier
+
     # --- Social awareness (Reddit + StockTwits; detector input ONLY) ---
     # Social text is untrusted (pump-and-dump surface): it feeds the Tier-2
     # social_burst detector as an awareness trigger and never moves a score.

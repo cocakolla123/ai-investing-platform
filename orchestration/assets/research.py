@@ -713,6 +713,65 @@ def deep_dive_selection(
 # committee: stage-by-stage batches + sync fallback (doc 03 §3)
 # --------------------------------------------------------------------------
 
+# Journal embedder cached per process: LocalEmbedder() probes the optional
+# sentence-transformers extra on construction (hash fallback otherwise).
+_EMBEDDER: Any = None
+
+
+def _journal_embedder() -> Any:
+    global _EMBEDDER
+    if _EMBEDDER is None:
+        from dynamo.llm.embeddings import LocalEmbedder
+
+        _EMBEDDER = LocalEmbedder()
+    return _EMBEDDER
+
+
+def _write_journal_entries(dynamo: DynamoResource, entries: Sequence[Any]) -> int:
+    """Embed + insert journal entries (idempotent on deterministic ids)."""
+    from dynamo.persistence.repositories.learning import JournalRepository
+
+    entries = list(entries)
+    if not entries:
+        return 0
+    embedder = _journal_embedder()
+    vectors = embedder.embed([e.text for e in entries])
+    repo = JournalRepository(dynamo.engine())
+    for entry, vector in zip(entries, vectors, strict=True):
+        repo.insert(entry, vector, embedding_version=embedder.backend)
+    return len(entries)
+
+
+def _journal_hits_for(
+    dynamo: DynamoResource, symbols: Sequence[str], as_of: date
+) -> dict[str, list[tuple[str, str]]]:
+    """Similar-situation journal hits per symbol: (entry_id, text), best first.
+
+    Vector search (hash-fallback embedder keeps this functional without the
+    embeddings extra) filtered to entries written on/before ``as_of`` — the
+    run's point-in-time, mandatory for replay correctness later. Deterministic
+    for a fixed journal, so the batch stages that re-derive it agree.
+    """
+    settings = dynamo.settings()
+    if not settings.journal_retrieval_enabled or not symbols:
+        return {sym: [] for sym in symbols}
+    from dynamo.learning.journal import JournalFilters, rank_similar
+    from dynamo.persistence.repositories.learning import JournalRepository
+
+    repo = JournalRepository(dynamo.engine())
+    top_k = settings.experience_retrieval_top_k
+    cutoff = datetime.combine(as_of, time.max, tzinfo=UTC)
+    queries = [f"{sym} investment thesis, lessons and post-trade reviews" for sym in symbols]
+    vectors = _journal_embedder().embed(queries)
+    hits: dict[str, list[tuple[str, str]]] = {}
+    for sym, vector in zip(symbols, vectors, strict=True):
+        candidates = repo.search(embedding=vector, top_k=max(top_k * 4, top_k), as_of=cutoff)
+        ranked = rank_similar(
+            candidates, JournalFilters(symbols=frozenset({sym})), top_k=top_k
+        )
+        hits[sym] = [(r.entry.id, r.entry.text) for r in ranked]
+    return hits
+
 
 def build_deep_dive_contexts(
     dynamo: DynamoResource, symbols: Sequence[str], as_of: date
@@ -764,6 +823,8 @@ def build_deep_dive_contexts(
                 source=str(r["source"]),
             )
 
+    journal_hits = _journal_hits_for(dynamo, symbols, as_of)
+
     contexts: dict[str, str] = {}
     for sym in symbols:
         instrument = instruments.get(sym) or Instrument(symbol=sym, name=sym)
@@ -792,6 +853,7 @@ def build_deep_dive_contexts(
             price_stats=price_stats,
             news_items=sym_news[:10],
             macro_digest_text=macro_text,
+            journal_hits=[text for _, text in journal_hits.get(sym, [])],
             earnings_call_excerpt=transcript_by_symbol.get(sym, ""),
         )
     return contexts
@@ -880,6 +942,8 @@ def _persist_opinions(
 
 
 def _persist_verdict(dynamo: DynamoResource, verdict: Any) -> None:
+    from dynamo.learning.journal import thesis_entry
+
     dynamo.market_repo().upsert_rows(
         schema.committee_verdicts,
         [
@@ -894,6 +958,9 @@ def _persist_verdict(dynamo: DynamoResource, verdict: Any) -> None:
             }
         ],
     )
+    # Journal write path (doc 10 §6): every persisted verdict leaves a thesis
+    # entry; the review/lesson entries follow in post_trade_reviews.
+    _write_journal_entries(dynamo, [thesis_entry(verdict, utcnow())])
 
 
 def _opinion_payloads(
@@ -924,11 +991,16 @@ def run_deep_dives_sync_impl(
         context.log.warning("run_deep_dives_sync: no research model — skipping")
         return 0
     contexts = build_deep_dive_contexts(dynamo, symbols, as_of)
+    journal_ids = _journal_hits_for(dynamo, symbols, as_of)
     settings = dynamo.settings()
     completed = 0
     for sym in symbols:
         dossier, bull, bear, verdict = engine.run_deep_dive(
-            sym, as_of, contexts[sym], quant_score=_quant_score_for(dynamo, sym)
+            sym,
+            as_of,
+            contexts[sym],
+            quant_score=_quant_score_for(dynamo, sym),
+            journal_context_used=tuple(eid for eid, _ in journal_ids.get(sym, [])),
         )
         _persist_dossiers(dynamo, {sym: dossier.model_dump(mode="json")}, as_of)
         _persist_opinions(
@@ -1075,6 +1147,9 @@ def advance_committee_stage(
         symbols = sorted(parsed)
         bull_payloads = _opinion_payloads(dynamo, "bull", symbols, as_of)
         bear_payloads = _opinion_payloads(dynamo, "bear", symbols, as_of)
+        # Re-derived deterministically — the same hits the dossier stage put
+        # into the context, so the verdict records what was actually shown.
+        journal_ids = _journal_hits_for(dynamo, symbols, as_of)
         arbiter_version = load_prompt("arbiter").version
         verdicts = 0
         for sym in symbols:
@@ -1096,6 +1171,7 @@ def advance_committee_stage(
                 quant_score=_quant_score_for(dynamo, sym),
                 prompt_version=arbiter_version,
                 model_id=settings.model_arbiter,
+                journal_context_used=tuple(eid for eid, _ in journal_ids.get(sym, [])),
             )
             _persist_opinions(
                 dynamo,

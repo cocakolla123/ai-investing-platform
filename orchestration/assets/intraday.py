@@ -290,9 +290,13 @@ def intraday_evaluate_entries(context: OpExecutionContext, dynamo: DynamoResourc
                 "risk_verdict_ref": verdict_id,
                 "order": order.model_dump(mode="json"),
             },
-            expected_upside_pct=0.0,
-            expected_downside_pct=0.0,
-            horizon_days=20,
+            # Committee expectations denormalized from the verdict where one
+            # exists; (0, 0, 20) means "no forecast" for verdict-less entries.
+            expected_upside_pct=verdict.expected_upside_pct if verdict is not None else 0.0,
+            expected_downside_pct=(
+                verdict.expected_downside_pct if verdict is not None else 0.0
+            ),
+            horizon_days=verdict.horizon_days if verdict is not None else 20,
         )
         dc_id = dc_repo.append(dc)
         manager.transition(coid, OrderState.RISK_CHECKED, "intraday sizing cascade passed")

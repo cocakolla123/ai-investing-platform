@@ -377,6 +377,30 @@ def _execution_ready(context: OpExecutionContext, dynamo: DynamoResource) -> boo
     return True
 
 
+def _verdict_expectations(
+    dynamo: DynamoResource, verdict_ids: Any
+) -> dict[str, tuple[float, float, int]]:
+    """verdict_id -> (expected_upside_pct, expected_downside_pct, horizon_days).
+
+    Denormalized onto new DecisionContext rows so path-based outcome scoring
+    (trade_outcome_achieved) has real expectations to walk against.
+    """
+    ids = sorted({str(v) for v in verdict_ids if v})
+    if not ids:
+        return {}
+    v = schema.committee_verdicts
+    frame = _read_df(dynamo, select(v.c.id, v.c.payload).where(v.c.id.in_(ids)))
+    out: dict[str, tuple[float, float, int]] = {}
+    for r in frame.to_dict(orient="records"):
+        payload = r["payload"] or {}
+        out[str(r["id"])] = (
+            float(payload.get("expected_upside_pct") or 0.0),
+            float(payload.get("expected_downside_pct") or 0.0),
+            int(payload.get("horizon_days") or 20),
+        )
+    return out
+
+
 def _order_manager(dynamo: DynamoResource, broker: Any) -> Any:
     from dynamo.execution.order_manager import OrderManager
     from dynamo.persistence.repositories.execution import OrderRepository, TradeRepository
@@ -423,16 +447,21 @@ def execute_paper_orders(context: OpExecutionContext, dynamo: DynamoResource) ->
     settings = dynamo.settings()
 
     verdict_by_symbol = {w.symbol: w.verdict_id for w in target.weights}
+    expectations = _verdict_expectations(dynamo, verdict_by_symbol.values())
     orders = manager.propose_orders(target, state, prices)
     submitted = 0
     for order in orders:
+        verdict_id = verdict_by_symbol.get(order.symbol)
+        # Committee expectations denormalized from the verdict where one
+        # exists; (0, 0, 20) only for verdict-less orders (e.g. pure exits).
+        upside, downside, horizon = expectations.get(verdict_id or "", (0.0, 0.0, 20))
         dc = DecisionContext(
             id=f"dc-{order.client_order_id}",
             created_at=utcnow(),
             env=settings.dynamo_env.value,
             symbol=order.symbol,
             sleeve=order.sleeve or Sleeve.LONG_TERM,
-            verdict_id=verdict_by_symbol.get(order.symbol),
+            verdict_id=verdict_id,
             target_portfolio_id=target.id,
             payload={
                 "order": order.model_dump(mode="json"),
@@ -440,9 +469,9 @@ def execute_paper_orders(context: OpExecutionContext, dynamo: DynamoResource) ->
                 "risk_verdict_ref": target.risk_verdict_ref,
                 "decision_price": prices.get(order.symbol),
             },
-            expected_upside_pct=0.0,
-            expected_downside_pct=0.0,
-            horizon_days=20,
+            expected_upside_pct=upside,
+            expected_downside_pct=downside,
+            horizon_days=horizon,
         )
         dc_id = dc_repo.append(dc)
         manager.attach_decision_context(order.client_order_id, dc_id)
@@ -626,6 +655,9 @@ def maintain_stops(context: OpExecutionContext, dynamo: DynamoResource) -> None:
                 verdict_id=None,
                 target_portfolio_id="stops",
                 payload={"stop_spec": spec.model_dump(mode="json"), "risk_verdict_ref": verdict_id},
+                # Genuinely no committee expectations here: stop maintenance is
+                # a risk-engine action with no verdict. Zeros mean "no forecast"
+                # and calibration falls back to sign-of-pnl for such rows.
                 expected_upside_pct=0.0,
                 expected_downside_pct=0.0,
                 horizon_days=0,

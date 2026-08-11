@@ -5,7 +5,9 @@ everything else here is LLM-free and runs in degraded mode too.
 """
 
 import os
-from datetime import timedelta
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timedelta
+from typing import Any
 
 import pandas as pd
 from dagster import (
@@ -20,7 +22,7 @@ from sqlalchemy import func, select
 
 from dynamo.persistence import schema
 from orchestration.assets.portfolio_exec import _latest_prices, _portfolio_state
-from orchestration.assets.research import _read_df, _since
+from orchestration.assets.research import _read_df, _since, _write_journal_entries
 from orchestration.resources import DynamoResource, utcnow
 
 LEARNING_GROUP = "learning"
@@ -28,10 +30,30 @@ LEARNING_GROUP = "learning"
 HEALTHCHECK_URL_ENV = "HEALTHCHECK_URL"
 MODELED_SLIPPAGE_BPS = 10.0  # doc 08 cost model baseline; drift monitor compares realized
 
+AGENT_ROLES = ("bull", "bear", "arbiter")
+
+
+def _trade_id(closed: Any) -> str:
+    """Deterministic closed-trade id shared by reviews + completeness check."""
+    return f"{closed.symbol}-{closed.closed_at.date().isoformat()}"
+
+
+def _decision_context_for(closed: Any, trades_repo: Any, orders_repo: Any, dc_repo: Any) -> Any:
+    """The exit fill's decision context via its order (the repaired dc-id join)."""
+    fills = [f for f in trades_repo.fills(closed.symbol) if f.filled_at <= closed.closed_at]
+    for fill in reversed(fills):
+        order = orders_repo.get(fill.client_order_id)
+        if order is not None and order.decision_context_id:
+            dc = dc_repo.get(order.decision_context_id)
+            if dc is not None:
+                return dc
+    return None
+
 
 @dagster_asset(group_name=LEARNING_GROUP)
 def post_trade_reviews(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Closed trades without a review -> Opus review -> post_trade_reviews rows."""
+    from dynamo.learning.journal import lesson_entries, review_entry
     from dynamo.learning.reviews import TradeOutcome, build_review_request, parse_review
     from dynamo.llm.cost_meter import BudgetExceededError
     from dynamo.llm.schemas import strict_schema
@@ -63,19 +85,13 @@ def post_trade_reviews(context: AssetExecutionContext, dynamo: DynamoResource) -
 
     written = 0
     skipped = 0
+    journal_written = 0
     for closed in trades_repo.closed_trades():
-        trade_id = f"{closed.symbol}-{closed.closed_at.date().isoformat()}"
+        trade_id = _trade_id(closed)
         if trade_id in reviewed:
             continue
         # Find the exit fill's decision context via its order.
-        fills = [f for f in trades_repo.fills(closed.symbol) if f.filled_at <= closed.closed_at]
-        dc = None
-        for fill in reversed(fills):
-            order = orders_repo.get(fill.client_order_id)
-            if order is not None and order.decision_context_id:
-                dc = dc_repo.get(order.decision_context_id)
-                if dc is not None:
-                    break
+        dc = _decision_context_for(closed, trades_repo, orders_repo, dc_repo)
         if dc is None:
             context.log.warning("post_trade_reviews: no decision context for %s", trade_id)
             skipped += 1
@@ -119,13 +135,131 @@ def post_trade_reviews(context: AssetExecutionContext, dynamo: DynamoResource) -
         review = parse_review(payload, outcome)
         reviews_repo.insert(review)
         written += 1
-    return MaterializeResult(metadata={"reviews": written, "skipped": skipped})
+        # Journal write path (doc 10 §6): each review leaves a review entry
+        # plus one entry per extracted lesson, embedded for retrieval.
+        now = utcnow()
+        journal_written += _write_journal_entries(
+            dynamo,
+            [
+                review_entry(review, now, strategy=dc.sleeve.value),
+                *lesson_entries(review, now, strategy=dc.sleeve.value),
+            ],
+        )
+    return MaterializeResult(
+        metadata={"reviews": written, "skipped": skipped, "journal_entries": journal_written}
+    )
+
+
+def _date_key(value: Any) -> str:
+    """Normalize date-ish values (date, Timestamp, str) to an ISO day string."""
+    return str(pd.Timestamp(value).date())
+
+
+def _cum_returns_pct(
+    dynamo: DynamoResource, symbol: str, start: datetime, horizon_days: int
+) -> list[float]:
+    """Daily cumulative returns (%) from the first close on/after ``start``,
+    over the next ``horizon_days`` sessions — the path trade_outcome_achieved
+    walks. Empty when bars are missing."""
+    b = schema.bars_1d
+    end = start + timedelta(days=horizon_days * 2 + 10)  # calendar buffer over sessions
+    frame = _read_df(
+        dynamo,
+        select(b.c.ts, b.c.close)
+        .where(b.c.symbol == symbol, b.c.ts >= start, b.c.ts <= end)
+        .order_by(b.c.ts),
+    )
+    if len(frame) < 2:
+        return []
+    closes = [float(x) for x in frame["close"]]
+    base = closes[0]
+    if base <= 0:
+        return []
+    return [(c / base - 1.0) * 100.0 for c in closes[1 : horizon_days + 1]]
+
+
+def _outcome_for(
+    row: Mapping[str, Any],
+    cum_returns: Callable[[str, datetime, int], Sequence[float]],
+) -> bool:
+    """Path-based outcome where the decision context carries real committee
+    expectations (post-denormalization rows); otherwise the naive sign of
+    realized pnl — pre-repair rows hardcoded (0, 0) expectations, for which
+    the doc 10 §5 path definition is undefined."""
+    from dynamo.learning.calibration import trade_outcome_achieved
+
+    upside = float(row.get("expected_upside_pct") or 0.0)
+    downside = float(row.get("expected_downside_pct") or 0.0)
+    horizon = int(row.get("horizon_days") or 0)
+    if upside > 0.0 and downside != 0.0 and horizon > 0:
+        path = list(cum_returns(str(row["symbol"]), row["created_at"], horizon))
+        if path:
+            return trade_outcome_achieved(path, upside, downside, horizon)
+    payload = row.get("payload") or {}
+    return float(payload.get("outcome_pnl_pct", 0.0)) > 0.0
+
+
+def _calibration_observations(
+    merged: Sequence[Mapping[str, Any]],
+    opinions: Sequence[Mapping[str, Any]],
+    outcome_for: Callable[[Mapping[str, Any]], bool],
+) -> list[Any]:
+    """Observations per reviewed trade: committee/arbiter (as before), plus
+    strategy/<sleeve> from the decision context and agent/<role> for each
+    bull/bear/arbiter opinion of the underlying verdict (same outcome)."""
+    from dynamo.learning.calibration import CalibrationObservation
+
+    opinions_by_key: dict[tuple[str, str], list[tuple[str, float]]] = {}
+    for op_row in opinions:
+        payload = op_row.get("payload") or {}
+        conviction = payload.get("conviction")
+        if conviction is None:
+            continue
+        key = (str(op_row["symbol"]), _date_key(op_row["as_of"]))
+        opinions_by_key.setdefault(key, []).append(
+            (str(op_row["role"]), max(0.0, min(1.0, float(conviction))))
+        )
+
+    observations: list[Any] = []
+    for row in merged:
+        conviction = row.get("conviction")
+        if conviction is None or pd.isna(conviction):
+            continue
+        outcome = outcome_for(row)
+        conviction = float(conviction)
+        observations.append(
+            CalibrationObservation(
+                scope_type="committee", scope_id="arbiter", conviction=conviction, outcome=outcome
+            )
+        )
+        sleeve = row.get("sleeve")
+        if sleeve and not pd.isna(sleeve):
+            observations.append(
+                CalibrationObservation(
+                    scope_type="strategy",
+                    scope_id=str(sleeve),
+                    conviction=conviction,
+                    outcome=outcome,
+                )
+            )
+        verdict_key = (str(row.get("symbol_v")), _date_key(row.get("as_of")))
+        for role, agent_conviction in opinions_by_key.get(verdict_key, []):
+            observations.append(
+                CalibrationObservation(
+                    scope_type="agent",
+                    scope_id=role,
+                    conviction=agent_conviction,
+                    outcome=outcome,
+                )
+            )
+    return observations
 
 
 @dagster_asset(group_name=LEARNING_GROUP, deps=["post_trade_reviews"])
 def calibration_update(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
-    """Committee conviction vs realized trade outcomes -> calibration_points."""
-    from dynamo.learning.calibration import CalibrationObservation, compute_calibration
+    """Conviction vs realized trade outcomes -> calibration_points, per scope
+    (committee/arbiter + strategy/<sleeve> + agent/<role>)."""
+    from dynamo.learning.calibration import compute_calibration
     from dynamo.persistence.repositories.learning import CalibrationRepository
 
     as_of = utcnow().date()
@@ -133,25 +267,37 @@ def calibration_update(context: AssetExecutionContext, dynamo: DynamoResource) -
     reviews = _read_df(dynamo, select(r.c.trade_id, r.c.decision_context_id, r.c.payload))
     if reviews.empty:
         return MaterializeResult(metadata={"observations": 0, "skipped": "no reviews"})
-    contexts = _read_df(dynamo, select(d.c.id, d.c.verdict_id))
-    verdicts = _read_df(dynamo, select(v.c.id, v.c.conviction))
+    contexts = _read_df(
+        dynamo,
+        select(
+            d.c.id,
+            d.c.verdict_id,
+            d.c.symbol,
+            d.c.sleeve,
+            d.c.created_at,
+            d.c.expected_upside_pct,
+            d.c.expected_downside_pct,
+            d.c.horizon_days,
+        ),
+    )
+    verdicts = _read_df(dynamo, select(v.c.id, v.c.conviction, v.c.symbol, v.c.as_of))
     merged = reviews.merge(
         contexts, left_on="decision_context_id", right_on="id", how="left"
     ).merge(verdicts, left_on="verdict_id", right_on="id", how="left", suffixes=("", "_v"))
-    observations = []
-    for row in merged.to_dict(orient="records"):
-        conviction = row.get("conviction")
-        payload = row.get("payload") or {}
-        if conviction is None or pd.isna(conviction):
-            continue
-        observations.append(
-            CalibrationObservation(
-                scope_type="committee",
-                scope_id="arbiter",
-                conviction=float(conviction),
-                outcome=float(payload.get("outcome_pnl_pct", 0.0)) > 0.0,
-            )
-        )
+    ao = schema.agent_opinions
+    opinions = _read_df(
+        dynamo,
+        select(ao.c.symbol, ao.c.as_of, ao.c.role, ao.c.payload).where(
+            ao.c.role.in_(AGENT_ROLES)
+        ),
+    )
+    observations = _calibration_observations(
+        merged.to_dict(orient="records"),
+        opinions.to_dict(orient="records"),
+        lambda row: _outcome_for(
+            row, lambda sym, start, horizon: _cum_returns_pct(dynamo, sym, start, horizon)
+        ),
+    )
     if not observations:
         return MaterializeResult(metadata={"observations": 0, "skipped": "no linked verdicts"})
     points = compute_calibration(observations, as_of)
@@ -309,6 +455,58 @@ def parquet_export_asset(
     return MaterializeResult(metadata={"parquet_dir": parquet_dir})
 
 
+# --- learning-loop safety checks (doc 10 §9; nightly 02:20/02:25 ET) ---
+
+
+@dagster_asset(name="chain_verify_check", group_name=LEARNING_GROUP)
+def chain_verify_check(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """Nightly decision_context hash-chain verification; page on any fault."""
+    from dynamo.persistence.repositories.learning import DecisionContextRepository
+
+    result = DecisionContextRepository(dynamo.engine()).verify()
+    if not result.ok:
+        message = (
+            f"decision_context hash chain FAILED: {result.fault.value if result.fault else '?'} "
+            f"at index {result.index} — {result.detail}"
+        )
+        context.log.error("chain_verify_check: %s", message)
+        dynamo.market_repo().add_alert(severity="page", name="chain_verify_fault", message=message)
+    return MaterializeResult(
+        metadata={
+            "ok": result.ok,
+            "fault": result.fault.value if result.fault else "",
+            "fault_index": -1 if result.index is None else result.index,
+        }
+    )
+
+
+@dagster_asset(name="experience_completeness_check", group_name=LEARNING_GROUP)
+def experience_completeness_check(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """Closed trades must be reviewed within 24h (doc 00 §4) — alert on overdue."""
+    from dynamo.learning.reviews import completeness_check
+    from dynamo.persistence.repositories.execution import TradeRepository
+    from dynamo.persistence.repositories.learning import ReviewRepository
+
+    engine = dynamo.engine()
+    closed = [(_trade_id(c), c.closed_at) for c in TradeRepository(engine).closed_trades()]
+    reviewed = ReviewRepository(engine).reviewed_trade_ids()
+    overdue = completeness_check(closed, reviewed, utcnow())
+    if overdue:
+        sample = ", ".join(sorted(overdue)[:10])
+        message = f"{len(overdue)} closed trades overdue for post-trade review: {sample}"
+        context.log.warning("experience_completeness_check: %s", message)
+        dynamo.market_repo().add_alert(
+            severity="warn", name="experience_completeness_overdue", message=message
+        )
+    return MaterializeResult(
+        metadata={"closed_trades": len(closed), "reviewed": len(reviewed), "overdue": len(overdue)}
+    )
+
+
 # --- dead-man switch: final step of the nightly chain (doc 12 §6) ---
 
 
@@ -337,4 +535,6 @@ LEARNING_ASSETS = [
     metrics_daily_asset,
     equity_curve_asset,
     parquet_export_asset,
+    chain_verify_check,
+    experience_completeness_check,
 ]

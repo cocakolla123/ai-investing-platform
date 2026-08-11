@@ -33,6 +33,7 @@ EXPECTED_CRONS = {
     "stops_schedule": "*/15 9-16 * * 1-5",
     "nightly_rollup_schedule": "0 2 * * *",
     "daily_report_schedule": "15 2 * * *",
+    "safety_checks_schedule": "20 2 * * *",
     "healthcheck_schedule": "30 2 * * *",
     "weekly_learning_schedule": "0 8 * * 0",
 }
