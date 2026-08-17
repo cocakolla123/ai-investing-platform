@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from datetime import date
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -111,30 +112,36 @@ def build_labels(
         panel = panel.combine_first(close_panel)
     panel = panel.sort_index()
     ts_as_of = pd.Timestamp(as_of)
-    past = panel.index[panel.index <= ts_as_of]
-    if len(past) == 0:
-        return empty
-    anchor_pos = panel.index.get_loc(past[-1])
-    anchor_pos = int(anchor_pos) if not isinstance(anchor_pos, slice) else anchor_pos.start
-    window = panel.iloc[anchor_pos : anchor_pos + horizon_sessions + 1]
-    if len(window) < horizon_sessions + 1:
-        return empty
 
     out = empty.copy()
     for sym in symbols:
-        if sym not in window.columns:
+        if sym not in panel.columns:
             continue
-        path = window[sym]
-        if path.isna().any() or path.iloc[0] <= 0:
+        # Each symbol's horizon runs on its OWN trading calendar: a mixed
+        # equity+crypto panel has weekend rows where equities are NaN, and a
+        # union-calendar window would (wrongly) disqualify every equity.
+        series = cast(pd.Series, panel[sym]).dropna()
+        past_idx = cast(pd.DatetimeIndex, series.index[series.index <= ts_as_of])
+        if len(past_idx) == 0:
+            continue
+        pos_obj = series.index.get_loc(past_idx[-1])
+        pos = pos_obj.start if isinstance(pos_obj, slice) else int(pos_obj)  # type: ignore[union-attr]
+        path = series.iloc[pos : pos + horizon_sessions + 1]
+        if len(path) < horizon_sessions + 1 or path.iloc[0] <= 0:
             continue
         cum = path / path.iloc[0] - 1.0
         total = float(cum.iloc[-1])
         etf = sector_map.get(sym)
-        if etf is None or etf not in window.columns or window[etf].isna().any():
+        if etf is None or etf not in panel.columns:
             excess = float("nan")
         else:
-            etf_path = window[etf]
-            excess = total - float(etf_path.iloc[-1] / etf_path.iloc[0] - 1.0)
+            # Benchmark aligned to the symbol's dates (as-of joins: last
+            # benchmark close at or before each path date — SPY vs 7-day crypto).
+            etf_path = cast(pd.Series, panel[etf]).dropna().reindex(path.index, method="ffill")
+            if bool(etf_path.isna().any()) or float(etf_path.iloc[0]) <= 0:
+                excess = float("nan")
+            else:
+                excess = total - float(etf_path.iloc[-1] / etf_path.iloc[0] - 1.0)
         lr = np.log(path).diff().dropna()
         vol = float(lr.std() * math.sqrt(TRADING_DAYS_PER_YEAR)) if len(lr) > 2 else float("nan")
         breached = float(cum.iloc[1:].min()) < downside_threshold
