@@ -25,6 +25,8 @@ TABLES = [
     schema.alerts,
     schema.quant_scores,
     schema.instruments,
+    schema.xbrl_facts,
+    schema.transcripts,
 ]
 
 
@@ -235,3 +237,68 @@ def test_generic_upsert_on_quant_scores(repo: MarketDataRepository, engine: Engi
         rows = conn.execute(select(schema.quant_scores)).all()
     assert len(rows) == 1
     assert rows[0].expected_excess_return == 0.03
+
+
+def test_upsert_rows_chunks_below_bind_param_limit(
+    repo: MarketDataRepository,
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batches above the wire-protocol bind-param cap split into chunks.
+
+    Regression: EDGAR companyfacts backfills (>20k rows x 6 params) blew the
+    65,535-parameter Postgres limit in one statement. Shrink the cap so a
+    100-row batch must chunk, and verify every row lands and the count is
+    honest (psycopg reports rowcount=-1 for multi-VALUES upserts).
+    """
+    from dynamo.persistence.repositories import market as market_module
+
+    monkeypatch.setattr(market_module, "_PG_MAX_BIND_PARAMS", 100)  # ~9 rows/chunk
+    bars = [bar("ACME", 1 + (i % 28), "alpaca", float(i), None) for i in range(28)]
+    written = repo.upsert_bars(bars)
+    assert written == 28
+    with engine.connect() as conn:
+        rows = conn.execute(select(schema.bars_1d)).all()
+    assert len(rows) == 28
+
+
+def test_upsert_xbrl_facts_dedupes_in_batch_keep_last(
+    repo: MarketDataRepository, engine: Engine
+) -> None:
+    """EDGAR repeats (cik, tag, period_end, filed_at) within one payload
+    (e.g. Q4 and FY durations sharing end+filed): the batch must dedupe
+    keep-last instead of raising CardinalityViolation."""
+    from dynamo.domain.models.market import XbrlFact
+
+    filed = datetime(2026, 2, 1, tzinfo=UTC)
+    facts = [
+        XbrlFact(cik="0000000001", tag="Revenues", period_end=date(2025, 12, 31),
+                 filed_at=filed, value=100.0, unit="USD"),
+        XbrlFact(cik="0000000001", tag="Revenues", period_end=date(2025, 12, 31),
+                 filed_at=filed, value=400.0, unit="USD"),
+    ]
+    assert repo.upsert_xbrl_facts(facts) == 1
+    with engine.connect() as conn:
+        rows = conn.execute(select(schema.xbrl_facts)).all()
+    assert len(rows) == 1
+    assert rows[0].value == 400.0  # keep-last: the row-by-row upsert end state
+
+
+def test_upsert_transcripts_dedupes_in_batch_keep_last(
+    repo: MarketDataRepository, engine: Engine
+) -> None:
+    """defeatbeta can emit the same (symbol, event_date, source) twice in one
+    bulk payload; the batch must dedupe keep-last, not CardinalityViolation."""
+    from dynamo.domain.models.market import Transcript
+
+    transcripts = [
+        Transcript(symbol="ACME", event_date=date(2026, 1, 15), source="defeatbeta",
+                   period="Q4-2025", content="first draft", speakers=None),
+        Transcript(symbol="ACME", event_date=date(2026, 1, 15), source="defeatbeta",
+                   period="Q4-2025", content="revised", speakers=None),
+    ]
+    assert repo.upsert_transcripts(transcripts) == 1
+    with engine.connect() as conn:
+        rows = conn.execute(select(schema.transcripts)).all()
+    assert len(rows) == 1
+    assert rows[0].content == "revised"

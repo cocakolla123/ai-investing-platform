@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import date
 from typing import Any
 
@@ -73,6 +74,11 @@ DEFAULT_FRED_SERIES: tuple[str, ...] = (
 CRYPTO_NEWS_SKIP_MESSAGE = (
     "crypto news backfill unsupported (finnhub company-news is equities-only) — skipped"
 )
+
+# Finnhub free-tier 429 handling for the news backfill: retries per symbol and
+# the pause when the response carries no Retry-After header.
+_NEWS_RATE_LIMIT_RETRIES = 3
+_NEWS_RATE_LIMIT_PAUSE_S = 65.0
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -300,12 +306,30 @@ def _cmd_fundamentals(args: argparse.Namespace) -> int:
             f"fundamentals: no CIK on file for {missing} — skipped "
             "(hint: --seed-ciks populates instruments.cik from SEC data)"
         )
+    from dynamo.data.errors import DataGap, ProviderDown
+
     total = 0
+    no_facts: list[str] = []
     for sym in sorted(ciks):
-        rows = repo.upsert_xbrl_facts(edgar.company_facts(ciks[sym]))
+        try:
+            rows = repo.upsert_xbrl_facts(edgar.company_facts(ciks[sym]))
+        except (DataGap, ProviderDown) as exc:
+            # ETFs/trusts (e.g. DIA, SPY) appear in SEC's ticker map but have
+            # no us-gaap companyfacts JSON (404) — skip loudly, keep going.
+            no_facts.append(sym)
+            print(f"fundamentals: {sym} (CIK {ciks[sym]}): no companyfacts — skipped ({exc})")
+            continue
         total += rows
         print(f"fundamentals: {sym} (CIK {ciks[sym]}): {rows} facts")
-    print(f"fundamentals backfill complete: {total} facts across {len(ciks)} symbols")
+    if no_facts:
+        print(
+            f"fundamentals: no us-gaap companyfacts for {no_facts} "
+            "(ETF/trust filers) — skipped"
+        )
+    print(
+        f"fundamentals backfill complete: {total} facts across "
+        f"{len(ciks) - len(no_facts)} symbols"
+    )
     return 0
 
 
@@ -401,14 +425,34 @@ def _cmd_news(args: argparse.Namespace) -> int:
     if not symbols:
         print("no equity symbols to backfill (empty universe?)")
         return 0
+    from dynamo.data.errors import RateLimited
+
     finnhub = _finnhub(settings)
     total = 0
+    failed: list[str] = []
     for sym in symbols:
-        rows = repo.upsert_news(finnhub.news_range([sym], args.start, args.end))
-        total += rows
-        print(f"news: {sym} {args.start} -> {args.end}: {rows} items")
-    print(f"news backfill complete: {total} items across {len(symbols)} symbols")
-    return 0
+        # Finnhub free tier 429s in practice even under the 1 req/s client
+        # pacing (observed mid-campaign after ~60 requests). Honor Retry-After
+        # and retry the whole symbol (idempotent upserts) before giving up.
+        for attempt in range(_NEWS_RATE_LIMIT_RETRIES + 1):
+            try:
+                rows = repo.upsert_news(finnhub.news_range([sym], args.start, args.end))
+            except RateLimited as exc:
+                if attempt >= _NEWS_RATE_LIMIT_RETRIES:
+                    failed.append(sym)
+                    print(f"news: {sym}: rate-limited after retries — giving up ({exc})")
+                    break
+                pause = exc.retry_after_s or _NEWS_RATE_LIMIT_PAUSE_S
+                print(f"news: {sym}: 429 rate-limited — pausing {pause:.0f}s then retrying")
+                time.sleep(pause)
+                continue
+            total += rows
+            print(f"news: {sym} {args.start} -> {args.end}: {rows} items")
+            break
+    if failed:
+        print(f"news backfill INCOMPLETE: rate-limited symbols (re-run to fill): {failed}")
+    print(f"news backfill complete: {total} items across {len(symbols) - len(failed)} symbols")
+    return 1 if failed else 0
 
 
 def _cmd_transcripts(args: argparse.Namespace) -> int:

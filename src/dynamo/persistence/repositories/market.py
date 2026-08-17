@@ -52,6 +52,26 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+# PostgreSQL extended-protocol hard cap on bind parameters per statement
+# (uint16). psycopg raises OperationalError above this; upsert_rows chunks
+# batches to stay below it.
+_PG_MAX_BIND_PARAMS = 65535
+
+
+def _reported_rowcount(rowcount: int | None, fallback: int) -> int:
+    """Driver-honest affected-row count for multi-VALUES statements.
+
+    psycopg3 reports ``rowcount = -1`` for multi-VALUES ``INSERT .. ON
+    CONFLICT`` statements (observed during the replay-campaign backfills, where
+    every count printed as ``-1``). When the driver cannot report, fall back to
+    the number of rows submitted — for our idempotent upserts every submitted
+    row is inserted or updated, so the fallback is exact, not an estimate.
+    """
+    if rowcount is None or rowcount < 0:
+        return fallback
+    return int(rowcount)
+
+
 class MarketDataRepository:
     """Idempotent upserts + point-in-time reads over the market-data tables."""
 
@@ -66,23 +86,35 @@ class MarketDataRepository:
         Shared write path for every keyed table, including the research tables
         (dossiers, macro_digests, committee_verdicts, quant_scores,
         quality_scores, watchlist, prediction_market_views, batch_jobs, ...).
+
+        Large batches are chunked below the PostgreSQL wire-protocol limit of
+        65,535 bind parameters per statement (hit in practice by EDGAR
+        companyfacts backfills: one mega-cap symbol yields >20k fact rows x
+        6 columns). Each chunk commits independently — a re-run repairs any
+        partial write (idempotent upserts).
         """
         if not rows:
             return 0
-        stmt = pg_insert(table).values(list(rows))
-        pk = [c.name for c in table.primary_key.columns]
-        updatable = {
-            c.name: stmt.excluded[c.name]
-            for c in table.columns
-            if c.name not in pk and c.name in rows[0]
-        }
-        if updatable:
-            stmt = stmt.on_conflict_do_update(index_elements=pk, set_=updatable)
-        else:
-            stmt = stmt.on_conflict_do_nothing(index_elements=pk)
-        with self._engine.begin() as conn:
-            result = conn.execute(stmt)
-        return int(result.rowcount or 0)
+        params_per_row = max(1, len(rows[0]))
+        chunk_size = max(1, _PG_MAX_BIND_PARAMS // params_per_row)
+        total = 0
+        for start in range(0, len(rows), chunk_size):
+            chunk = list(rows[start : start + chunk_size])
+            stmt = pg_insert(table).values(chunk)
+            pk = [c.name for c in table.primary_key.columns]
+            updatable = {
+                c.name: stmt.excluded[c.name]
+                for c in table.columns
+                if c.name not in pk and c.name in chunk[0]
+            }
+            if updatable:
+                stmt = stmt.on_conflict_do_update(index_elements=pk, set_=updatable)
+            else:
+                stmt = stmt.on_conflict_do_nothing(index_elements=pk)
+            with self._engine.begin() as conn:
+                result = conn.execute(stmt)
+            total += _reported_rowcount(result.rowcount, len(chunk))
+        return total
 
     def insert_rows(self, table: Table, rows: Sequence[Mapping[str, Any]]) -> int:
         """Plain insert for append-only tables with surrogate ids (flags, alerts)."""
@@ -90,7 +122,7 @@ class MarketDataRepository:
             return 0
         with self._engine.begin() as conn:
             result = conn.execute(table.insert(), list(rows))
-        return int(result.rowcount or 0)
+        return _reported_rowcount(result.rowcount, len(rows))
 
     # -- ingestion upserts (provenance carried on every record) ------------
 
@@ -160,9 +192,17 @@ class MarketDataRepository:
         return self.upsert_rows(schema.filings, rows)
 
     def upsert_xbrl_facts(self, facts: Iterable[XbrlFact]) -> int:
-        """Point-in-time fundamentals keyed by ``filed_at`` (doc 02 §3)."""
-        rows = [
-            {
+        """Point-in-time fundamentals keyed by ``filed_at`` (doc 02 §3).
+
+        EDGAR companyfacts legitimately repeats the natural key: one filing
+        can report the same ``(cik, tag, period_end, filed_at)`` for several
+        durations (e.g. Q4 and full-year values both ending 12-31, filed the
+        same day). A multi-VALUES ``ON CONFLICT DO UPDATE`` refuses in-batch
+        duplicates (CardinalityViolation), so dedupe keep-last first — the
+        same end state row-by-row upserts would produce.
+        """
+        deduped: dict[tuple[str, str, date, datetime], dict[str, Any]] = {
+            (f.cik, f.tag, f.period_end, f.filed_at): {
                 "cik": f.cik,
                 "tag": f.tag,
                 "period_end": f.period_end,
@@ -171,8 +211,8 @@ class MarketDataRepository:
                 "unit": f.unit,
             }
             for f in facts
-        ]
-        return self.upsert_rows(schema.xbrl_facts, rows)
+        }
+        return self.upsert_rows(schema.xbrl_facts, list(deduped.values()))
 
     def upsert_insider_tx(self, txs: Iterable[InsiderTx]) -> int:
         rows = [
@@ -243,10 +283,16 @@ class MarketDataRepository:
     def upsert_transcripts(
         self, transcripts: Iterable[Transcript], *, fetched_at: datetime | None = None
     ) -> int:
-        """Earnings-call transcripts, keyed by (symbol, event_date, source)."""
+        """Earnings-call transcripts, keyed by (symbol, event_date, source).
+
+        Bulk providers (defeatbeta) can emit the same (symbol, event_date,
+        source) more than once in one payload (e.g. re-published revisions);
+        a multi-VALUES ``ON CONFLICT DO UPDATE`` refuses in-batch duplicates,
+        so dedupe keep-last first (the row-by-row upsert end state).
+        """
         ts = fetched_at or _now()
-        rows = [
-            {
+        deduped: dict[tuple[str, date, str], dict[str, Any]] = {
+            (t.symbol, t.event_date, t.source): {
                 "symbol": t.symbol,
                 "event_date": t.event_date,
                 "source": t.source,
@@ -256,8 +302,8 @@ class MarketDataRepository:
                 "fetched_at": ts,
             }
             for t in transcripts
-        ]
-        return self.upsert_rows(schema.transcripts, rows)
+        }
+        return self.upsert_rows(schema.transcripts, list(deduped.values()))
 
     def link_transcript_ref(self, symbol: str, event_date: date, ref: str) -> int:
         """Point the matching earnings_events row at a stored transcript."""
@@ -415,7 +461,7 @@ class MarketDataRepository:
                 )
             ).rowcount
             inserted = conn.execute(stmt).rowcount
-        return (int(deleted or 0), int(inserted or 0))
+        return (int(deleted or 0), _reported_rowcount(inserted, len(rows)))
 
     def seed_instrument_ciks(self, ciks: Mapping[str, str]) -> int:
         """Upsert ``instruments.cik`` for the given symbols (EDGAR mapping).
@@ -436,7 +482,7 @@ class MarketDataRepository:
         )
         with self._engine.begin() as conn:
             result = conn.execute(stmt)
-        return int(result.rowcount or 0)
+        return _reported_rowcount(result.rowcount, len(rows))
 
     def close_membership(
         self,

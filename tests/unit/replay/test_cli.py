@@ -1078,3 +1078,94 @@ def test_main_sets_offline_env_before_any_embedder_import(
     assert rc == 0
     assert os.environ["HF_HUB_OFFLINE"] == "1"
     assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_backfill_news_retries_on_rate_limit_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Finnhub free tier 429s mid-campaign: honor Retry-After, sleep, retry
+    the symbol (idempotent upserts), and only then move on."""
+    from dynamo.data.errors import RateLimited
+
+    repo = FakeRepo()
+    attempts: list[str] = []
+    sleeps: list[float] = []
+
+    class FlakyFinnhub:
+        def news_range(self, symbols: Any, start: date, end: date) -> Any:
+            attempts.append(symbols[0])
+            if attempts.count(symbols[0]) == 1 and symbols[0] == "AAA":
+                raise RateLimited("finnhub", "429", retry_after_s=7.0)
+            yield {"id": f"finnhub:{symbols[0]}"}
+
+    monkeypatch.setattr(
+        backfill_cli, "_settings", lambda: FakeSettings(finnhub_api_key="k")
+    )
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    monkeypatch.setattr(backfill_cli, "_finnhub", lambda s: FlakyFinnhub())
+    monkeypatch.setattr("dynamo.cli.backfill.time.sleep", sleeps.append)
+    rc = backfill_cli.main(
+        ["news", "--start", "2026-01-01", "--end", "2026-08-16", "--symbols", "AAA", "BBB"]
+    )
+    assert rc == 0
+    assert attempts == ["AAA", "AAA", "BBB"]  # retried AAA once, then moved on
+    assert sleeps == [7.0]  # honored Retry-After
+    assert len(repo.news) == 2
+
+
+def test_backfill_news_gives_up_after_retries_and_reports(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dynamo.data.errors import RateLimited
+
+    repo = FakeRepo()
+
+    class AlwaysLimited:
+        def news_range(self, symbols: Any, start: date, end: date) -> Any:
+            raise RateLimited("finnhub", "429")
+
+    monkeypatch.setattr(
+        backfill_cli, "_settings", lambda: FakeSettings(finnhub_api_key="k")
+    )
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    monkeypatch.setattr(backfill_cli, "_finnhub", lambda s: AlwaysLimited())
+    monkeypatch.setattr("dynamo.cli.backfill.time.sleep", lambda s: None)
+    rc = backfill_cli.main(
+        ["news", "--start", "2026-01-01", "--end", "2026-08-16", "--symbols", "AAA"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 1  # incomplete backfill is a loud nonzero exit
+    assert "INCOMPLETE" in out and "AAA" in out
+
+
+def test_backfill_fundamentals_skips_symbols_without_companyfacts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ETF trusts (DIA/SPY/QQQ) sit in SEC's ticker map but 404 on
+    companyfacts: skip loudly per symbol, keep going, exit 0."""
+    from dynamo.data.errors import ProviderDown
+
+    repo = FakeRepo()
+
+    class FakeEdgar:
+        def company_ticker_map(self) -> dict[str, str]:
+            return {"AAA": "0000000001", "DIA": "0000000002"}
+
+        def company_facts(self, cik: str) -> Any:
+            if cik == "0000000002":
+                raise ProviderDown("edgar", f"404 for CIK {cik}")
+            yield {"cik": cik}
+
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    monkeypatch.setattr(backfill_cli, "_edgar", lambda s: FakeEdgar())
+    monkeypatch.setattr(
+        backfill_cli,
+        "_cik_map",
+        lambda repo, symbols: {"AAA": "0000000001", "DIA": "0000000002"},
+    )
+    rc = backfill_cli.main(["fundamentals", "--symbols", "AAA", "DIA", "--seed-ciks"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert len(repo.facts) == 1  # AAA landed despite DIA's 404
+    assert "DIA" in out and "skipped" in out
