@@ -70,8 +70,9 @@ class TiingoClient:
         )
 
     def _prices(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
+        # Tiingo URLs use hyphenated share classes (BRK-B), our canon uses dots (BRK.B).
         payload = self._get(
-            f"/tiingo/daily/{symbol.lower()}/prices",
+            f"/tiingo/daily/{symbol.lower().replace('.', '-')}/prices",
             params={
                 "startDate": start.isoformat(),
                 "endDate": end.isoformat(),

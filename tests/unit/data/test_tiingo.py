@@ -72,3 +72,15 @@ def test_market_wide_corp_actions_and_assets_are_noops() -> None:
     client = make_client(httpx.MockTransport(lambda req: httpx.Response(200, json=[])))
     assert list(client.corporate_actions(date(2026, 1, 1), date(2026, 2, 1))) == []
     assert list(client.tradable_instruments()) == []
+
+
+def test_daily_bars_maps_dot_share_classes_to_hyphen_urls() -> None:
+    """BRK.B-style tickers hit Tiingo as brk-b but keep the canonical symbol on bars."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "/tiingo/daily/brk-b/prices" in str(request.url)
+        return httpx.Response(200, json=PRICES)
+
+    client = make_client(httpx.MockTransport(handler))
+    bars = list(client.daily_bars(["BRK.B"], date(2026, 7, 30), date(2026, 7, 31)))
+    assert bars and all(b.symbol == "BRK.B" for b in bars)

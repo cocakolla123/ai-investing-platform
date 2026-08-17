@@ -264,17 +264,30 @@ def _cmd_bars(args: argparse.Namespace) -> int:
         )
         return 1
     repo = _repo(args.database_url)
-    symbols = list(args.symbols) if args.symbols else _universe_symbols(repo, args.end)
+    raw = list(args.symbols) if args.symbols else _universe_symbols(repo, args.end)
+    symbols, crypto = _split_crypto(raw)
+    if crypto:
+        # Tiingo's equity endpoint 404s on pairs; crypto history comes from `crypto-bars`.
+        print(f"skipping crypto pairs (use `backfill crypto-bars`): {', '.join(crypto)}")
     if not symbols:
         print("no symbols to backfill (empty universe?)")
         return 0
     tiingo = _tiingo(settings)
     total = 0
+    failed: list[str] = []
     for sym in symbols:
-        rows = repo.upsert_bars(tiingo.daily_bars([sym], args.start, args.end))
+        try:
+            rows = repo.upsert_bars(tiingo.daily_bars([sym], args.start, args.end))
+        except Exception as exc:  # per-symbol resilience: report at the end, keep going
+            failed.append(sym)
+            print(f"bars: {sym} FAILED: {exc}")
+            continue
         total += rows
         print(f"bars: {sym} {args.start} -> {args.end}: {rows} rows")
-    print(f"bars backfill complete: {total} rows across {len(symbols)} symbols")
+    print(f"bars backfill complete: {total} rows across {len(symbols) - len(failed)} symbols")
+    if failed:
+        print(f"ERROR: {len(failed)} symbols failed: {', '.join(failed)}")
+        return 1
     return 0
 
 
