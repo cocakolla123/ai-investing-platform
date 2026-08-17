@@ -291,6 +291,7 @@ def test_committee_replay_never_touches_live_tables(engine) -> None:  # type: ig
         prompts=PROMPTS,
         schemas=SCHEMAS,
         sleep_fn=lambda s: None,
+        acknowledge_model_knowledge=True,  # June-2026 window vs opus-5 cutoff
     )
     result = replay.run()
     assert result.status == "completed"

@@ -24,6 +24,7 @@ cost with ZERO API calls — run it first to pick a sane ``--max-usd``.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date
 from typing import Any
@@ -128,6 +129,32 @@ def _build_parser() -> argparse.ArgumentParser:
             "run metadata (config_json), never in ReplayConfig"
         ),
     )
+    run.add_argument(
+        "--acknowledge-model-knowledge",
+        action="store_true",
+        help=(
+            "committee mode: proceed even though the window starts within "
+            "the safety margin of a committee model's documented "
+            "training-data cutoff (recorded in config_json; the leakage "
+            "audit flags it)"
+        ),
+    )
+    run.add_argument(
+        "--no-macro-digest",
+        action="store_true",
+        help=(
+            "committee mode: do NOT generate a replay macro digest on days "
+            "without a persisted one (part of config_hash/run id)"
+        ),
+    )
+    run.add_argument(
+        "--no-within-run-learning",
+        action="store_true",
+        help=(
+            "committee mode: exclude THIS run's own resolved replay "
+            "experiences from prior-case retrieval (part of config_hash)"
+        ),
+    )
 
     est = sub.add_parser(
         "estimate",
@@ -136,6 +163,23 @@ def _build_parser() -> argparse.ArgumentParser:
     est.add_argument("--start", required=True, type=date.fromisoformat)
     est.add_argument("--end", required=True, type=date.fromisoformat)
     est.add_argument("--deep-dives-per-day", type=int, default=4)
+    est.add_argument(
+        "--no-macro-digest",
+        action="store_true",
+        help="exclude the per-session replay macro-digest generation cost",
+    )
+
+    aud = sub.add_parser(
+        "audit",
+        help=(
+            "post-run leakage audit over persisted contexts/verdicts -> "
+            "artifacts/backtests/<run_id>/leakage_audit.{json,md}; exit 0 "
+            "clean, 1 flagged (informational — a human reviews)"
+        ),
+    )
+    aud.add_argument("--run-id", required=True)
+    aud.add_argument("--database-url", default=None)
+    aud.add_argument("--out-dir", default=None)
 
     lst = sub.add_parser("list", help="list replay runs")
     lst.add_argument("--database-url", default=None)
@@ -239,6 +283,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         whole_shares=args.whole_shares,
         min_order_notional=args.min_order_notional,
         commission_per_order=args.commission_per_order,
+        generate_macro_digest=not args.no_macro_digest,
+        within_run_learning=not args.no_within_run_learning,
         code_version=args.code_version,
     )
     extras = _preflight_extras(engine, config, skip=args.skip_preflight)
@@ -289,7 +335,7 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
     from dynamo.persistence.repositories.experience import ExperienceRepository
     from dynamo.persistence.repositories.replay import ReplayRepository
     from dynamo.replay.budget import BudgetLedgerTee, ReplayBudget
-    from dynamo.replay.committee import CommitteeReplay
+    from dynamo.replay.committee import CommitteeReplay, ModelKnowledgeError
     from dynamo.replay.gateway import HistoricalDataGateway
     from dynamo.replay.runner import ReplayConfig
 
@@ -311,11 +357,18 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         committee_deep_dives_per_day=args.deep_dives_per_day,
         quant_score_max_age_days=args.quant_score_max_age_days,
         quant_model_version=args.quant_model_version,
+        generate_macro_digest=not args.no_macro_digest,
+        within_run_learning=not args.no_within_run_learning,
         code_version=args.code_version,
     )
     extras = _preflight_extras(engine, config, skip=args.skip_preflight)
     if extras is None:
         return 1
+    # Network isolation (Phase 4): the embedder must never download model
+    # weights mid-run — offline env vars are already set in main(); the live
+    # backend actually loaded is recorded into config_json for the audit.
+    embedder = LocalEmbedder()
+    extras["embedder_backend"] = embedder.backend
     # Resume accounting: a re-run of the same config (same deterministic
     # run id) starts from the durable spent_usd, not from zero.
     prior = run_repo.get_run(config.run_id)
@@ -332,22 +385,28 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         BudgetLedgerTee(SqlAlchemyLedgerWriter(engine), budget),
         settings.claude_monthly_budget_usd,
     )
-    replay = CommitteeReplay(
-        gateway_factory=lambda d: HistoricalDataGateway(engine, d),
-        research_model=AnthropicClient(settings, meter),
-        budget=budget,
-        run_repo=run_repo,
-        experience_repo=ExperienceRepository(engine),
-        config=config,
-        tier_models={
-            "screen": settings.model_screen,
-            "analyst": settings.model_analyst,
-            "arbiter": settings.model_arbiter,
-        },
-        embedder=LocalEmbedder(),
-        run_config_extras=extras,
-        bundle_factory=_bundle_factory(engine),
-    )
+    try:
+        replay = CommitteeReplay(
+            gateway_factory=lambda d: HistoricalDataGateway(engine, d),
+            research_model=AnthropicClient(settings, meter),
+            budget=budget,
+            run_repo=run_repo,
+            experience_repo=ExperienceRepository(engine),
+            config=config,
+            tier_models={
+                "screen": settings.model_screen,
+                "analyst": settings.model_analyst,
+                "arbiter": settings.model_arbiter,
+            },
+            embedder=embedder,
+            run_config_extras=extras,
+            bundle_factory=_bundle_factory(engine),
+            acknowledge_model_knowledge=args.acknowledge_model_knowledge,
+            cutoff_margin_days=settings.replay_cutoff_margin_days,
+        )
+    except ModelKnowledgeError as exc:
+        print(f"model knowledge gate BLOCKED the run ($0 spent):\n  {exc}")
+        return 1
     print(
         f"committee replay {config.run_id} ({config.start} -> {config.end}) "
         f"cap=${budget.cap_usd:.2f}"
@@ -381,8 +440,14 @@ def _cmd_estimate(args: argparse.Namespace) -> int:
     from dynamo.config.settings import Settings
     from dynamo.replay.budget import (
         ASSUMED_CONTEXT_CHARS,
+        ASSUMED_MACRO_CONTEXT_CHARS,
         estimate_deep_dive_cost,
+        estimate_request_cost,
         estimate_run_cost,
+    )
+    from dynamo.replay.committee import (
+        MACRO_DIGEST_MAX_TOKENS,
+        model_knowledge_gate,
     )
     from dynamo.replay.runner import _sessions_between
     from dynamo.research.committee import _DEFAULT_MAX_TOKENS, STAGES
@@ -402,15 +467,29 @@ def _cmd_estimate(args: argparse.Namespace) -> int:
         tier_models, stage_specs, context_chars=ASSUMED_CONTEXT_CHARS
     )
     sessions = _sessions_between(args.start, args.end)
+    per_session = 0.0
+    if not args.no_macro_digest:
+        per_session = estimate_request_cost(
+            tier_models["analyst"],
+            prompt_chars=len(load_prompt("macro_digest").system)
+            + ASSUMED_MACRO_CONTEXT_CHARS,
+            max_tokens=MACRO_DIGEST_MAX_TOKENS,
+        )
     total = estimate_run_cost(
         n_sessions=len(sessions),
         deep_dives_per_day=args.deep_dives_per_day,
         per_dive_usd=per_dive,
+        per_session_usd=per_session,
     )
     print(f"committee replay estimate {args.start} -> {args.end} (NO API calls made)")
     print(f"  sessions:            {len(sessions)}")
     print(f"  deep dives per day:  {args.deep_dives_per_day} (cap; real days may run fewer)")
     print(f"  per deep dive:       ${per_dive:.4f} (4 stages, conservative overestimate)")
+    if per_session:
+        print(
+            f"  macro digest/day:    ${per_session:.4f} "
+            "(generated on days without a persisted digest; --no-macro-digest to drop)"
+        )
     print(
         f"  models:              analyst={tier_models['analyst']} "
         f"arbiter={tier_models['arbiter']}"
@@ -422,7 +501,61 @@ def _cmd_estimate(args: argparse.Namespace) -> int:
     print(f"  projected total:     ${total:.2f}")
     print("  suggested --max-usd: at or below the projected total — the run-time")
     print("  projection uses the same conservative math, so real spend lands lower.")
+    # Model knowledge gate verdict — the same check CommitteeReplay enforces,
+    # surfaced here BEFORE any dollar is at stake.
+    gate = model_knowledge_gate(
+        args.start, tier_models, settings.replay_cutoff_margin_days
+    )
+    print("  model knowledge gate (documented training-data cutoffs):")
+    for model_id, cutoff in sorted(gate["cutoffs"].items()):
+        marker = "BLOCKS" if model_id in gate["blocking_models"] else "ok"
+        print(f"    {model_id}: cutoff {cutoff} [{marker}]")
+    if gate["blocked"]:
+        print(
+            f"  gate verdict:        BLOCKED — window start {args.start} is within "
+            f"{gate['margin_days']}d of a model cutoff; the run will refuse unless "
+            "--acknowledge-model-knowledge is passed (recorded + audited)."
+        )
+    else:
+        print(f"  gate verdict:        OK (margin {gate['margin_days']}d)")
     return 0
+
+
+def _cmd_audit(args: argparse.Namespace) -> int:
+    """Post-run leakage audit: exit 0 clean, 1 flagged, 2 unknown run."""
+    from pathlib import Path
+
+    from dynamo.config.settings import Settings
+    from dynamo.persistence.repositories.replay import ReplayRepository
+    from dynamo.replay.audit import audit_run, write_audit_artifacts
+
+    engine = _engine(args.database_url)
+    repo = ReplayRepository(engine)
+    run = repo.get_run(args.run_id)
+    if run is None:
+        print(f"run {args.run_id!r} not found")
+        return 2
+    contexts = repo.contexts_for(args.run_id)
+    verdicts = repo.verdicts_for(args.run_id)
+    report = audit_run(run, contexts, verdicts)
+    out_dir = Path(
+        args.out_dir or Path(Settings().artifact_dir) / "backtests" / args.run_id
+    )
+    json_path, md_path = write_audit_artifacts(report, out_dir)
+    for name, cat in sorted(report.categories.items()):
+        print(
+            f"  [{cat.status:7}] {name}: {cat.detail}"
+            + (f" ({len(cat.findings)} finding(s))" if cat.findings else "")
+        )
+    print(f"audit artifacts: {json_path} {md_path}")
+    if report.passed:
+        print(f"leakage audit PASS for {args.run_id}")
+        return 0
+    print(
+        f"leakage audit FLAGGED findings for {args.run_id} — informational; "
+        "review the artifacts above."
+    )
+    return 1
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
@@ -483,6 +616,12 @@ def _cmd_show(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Network isolation (backtest-campaign Phase 4): forbid Hugging Face hub
+    # traffic BEFORE any embedder import — a cold sentence-transformers cache
+    # must fail into the deterministic hash fallback (recorded in
+    # config_json), never fetch weights mid-replay.
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "run":
@@ -497,6 +636,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_run(args)
     if args.command == "estimate":
         return _cmd_estimate(args)
+    if args.command == "audit":
+        return _cmd_audit(args)
     if args.command == "list":
         return _cmd_list(args)
     return _cmd_show(args)

@@ -65,6 +65,13 @@ PROMPTS = {
 
 
 def canned_payload(stage: str, symbol: str) -> dict[str, Any]:
+    if stage == "macro_digest":
+        return {
+            "narrative": "canned replay macro narrative",
+            "rates_outlook": "steady",
+            "inflation_outlook": "cooling",
+            "regime_comment": "stable",
+        }
     if stage == "dossier":
         return {"summary": f"dossier for {symbol}", "strengths": [], "weaknesses": []}
     if stage in ("bull", "bear"):
@@ -157,6 +164,9 @@ class CommitteeGateway(FakeGateway):
                     out[s].append(item)
         return out
 
+    def transcripts(self, symbols: Any) -> pd.DataFrame:
+        return pd.DataFrame({"symbol": [], "event_date": [], "source": [], "content": []})
+
     def journal_search(self, **kwargs: Any) -> list[tuple[Any, float]]:
         return []
 
@@ -182,6 +192,7 @@ class FakeRunRepo:
         self.runs: list[dict[str, Any]] = []
         self.statuses: list[tuple[str, str]] = []
         self.verdicts: list[dict[str, Any]] = []
+        self.contexts: list[dict[str, Any]] = []
         self.spends: list[tuple[str, float]] = []
 
     def create_run(self, **kwargs: Any) -> None:
@@ -193,6 +204,11 @@ class FakeRunRepo:
     def insert_verdicts(self, rows: Any) -> int:
         rows = [dict(r) for r in rows]
         self.verdicts.extend(rows)
+        return len(rows)
+
+    def insert_contexts(self, rows: Any) -> int:
+        rows = [dict(r) for r in rows]
+        self.contexts.extend(rows)
         return len(rows)
 
     def record_spend(self, run_id: str, delta_usd: float) -> None:
@@ -244,6 +260,9 @@ def _replay(
         prompts=PROMPTS,
         schemas=SCHEMAS,
         sleep_fn=lambda s: pytest.fail("batch already ended — no sleep expected"),
+        # The June-2026 test window sits inside the opus-5 documented training
+        # window — acknowledged here exactly like the campaign runbook would.
+        acknowledge_model_knowledge=True,
     )
     return replay, model, run_repo, exp_repo, config
 

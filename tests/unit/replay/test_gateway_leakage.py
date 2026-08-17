@@ -388,3 +388,79 @@ def test_gateway_has_no_write_methods() -> None:
     public = [n for n in dir(HistoricalDataGateway) if not n.startswith("_")]
     offenders = [n for n in public if any(n.startswith(b) for b in banned)]
     assert offenders == []
+
+
+def test_transcripts_hide_future_calls(engine, gateway) -> None:  # type: ignore[no-untyped-def]
+    """Phase 4: gateway.transcripts mirrors the live 30-day dossier window
+    and hides calls after as_of (and stale ones before the window)."""
+    from dynamo.persistence import schema
+
+    _repo(engine).upsert_rows(
+        schema.transcripts,
+        [
+            {
+                "symbol": "AAPL", "event_date": BEFORE, "source": "defeatbeta",
+                "period": "Q2", "content": "knowable call", "speakers": [],
+                "fetched_at": _dt(AFTER),  # backfilled TODAY — still visible
+            },
+            {
+                "symbol": "AAPL", "event_date": AFTER, "source": "defeatbeta",
+                "period": "Q3", "content": "FUTURE call", "speakers": [],
+                "fetched_at": _dt(AFTER),
+            },
+            {
+                "symbol": "AAPL", "event_date": AS_OF - timedelta(days=45),
+                "source": "defeatbeta", "period": "Q1", "content": "stale call",
+                "speakers": [], "fetched_at": _dt(BEFORE),
+            },
+        ],
+    )
+    frame = gateway.transcripts(["AAPL"])
+    assert list(frame["content"]) == ["knowable call"]
+
+
+def test_similar_experiences_within_run_learning_scoped_to_one_run(engine, gateway) -> None:  # type: ignore[no-untyped-def]
+    """Phase 4 within-run learning at the SQL layer: include_replay_run_id
+    admits exactly that run's resolved replay rows (still strictly before
+    as_of); other runs' rows and future rows of the included run stay out."""
+    from dynamo.domain.models.learning import (
+        DecisionExperience,
+        DecisionQuality,
+        ForecastQuality,
+        OutcomeQuality,
+    )
+    from dynamo.persistence.repositories.experience import ExperienceRepository
+
+    repo = ExperienceRepository(engine)
+
+    def exp(i: int, day: date, source: str, run_id: str | None) -> DecisionExperience:
+        return DecisionExperience.model_validate(
+            {
+                "id": f"wrl-{i}",
+                "decision_context_id": f"wrl-dc-{i}",
+                "trade_id": f"wrl-t-{i}",
+                "source": source,
+                "replay_run_id": run_id,
+                "created_at": _dt(day),
+                "symbol": "AAPL",
+                "as_of": day,
+                "resolved": True,
+                "pnl_pct": 1.0,
+                "forecast_quality": ForecastQuality.ACCURATE,
+                "decision_quality": DecisionQuality.SOUND,
+                "outcome_quality": OutcomeQuality.WIN,
+                "label": "win",
+            }
+        )
+
+    assert repo.insert(exp(1, BEFORE, "live", None))
+    assert repo.insert(exp(2, BEFORE, "replay", "run-this"))
+    assert repo.insert(exp(3, BEFORE, "replay", "run-other"))
+    assert repo.insert(exp(4, AFTER, "replay", "run-this"))  # future: never
+    # Default: live-only firewall unchanged.
+    assert [e.id for e in gateway.similar_experiences(symbol="AAPL", limit=5)] == ["wrl-1"]
+    # Within-run learning: live + THIS run's past rows, nothing else.
+    hits = gateway.similar_experiences(
+        symbol="AAPL", limit=5, include_replay_run_id="run-this"
+    )
+    assert sorted(e.id for e in hits) == ["wrl-1", "wrl-2"]

@@ -3,11 +3,21 @@
 Prices are USD per million tokens (MTok). Message Batches take 50% off both
 input and output; prompt-cache reads bill at 0.1x the input rate; cache writes
 at 1.25x the input rate.
+
+Each entry is a :class:`ModelSpec` carrying, beside pricing, the model's
+documented TRAINING-DATA cutoff (``knowledge_cutoff``) — the broader of the
+two dates Anthropic publishes (the "reliable knowledge cutoff" is earlier or
+equal), so the replay knowledge gate errs conservative. Source:
+https://platform.claude.com/docs/en/about-claude/models/overview
+("Training data cutoff" row), read 2026-08-17. Month-granular dates are
+recorded as the LAST day of the stated month (again the conservative side:
+the model may know anything through that whole month).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 MTOK = 1_000_000
@@ -19,19 +29,28 @@ CACHE_WRITE_1H_MULTIPLIER = 2.0  # 1-hour TTL (used for batch requests)
 
 
 @dataclass(frozen=True)
-class ModelPricing:
+class ModelSpec:
+    """Pricing + documented training-data cutoff for one model id."""
+
     input_per_mtok: float
     output_per_mtok: float
+    knowledge_cutoff: date
 
 
-PRICING: dict[str, ModelPricing] = {
-    "claude-haiku-4-5": ModelPricing(1.0, 5.0),
-    "claude-sonnet-4-6": ModelPricing(3.0, 15.0),
-    "claude-opus-4-6": ModelPricing(5.0, 25.0),
+# Back-compat alias: existing callers annotate/construct ``ModelPricing``.
+ModelPricing = ModelSpec
+
+PRICING: dict[str, ModelSpec] = {
+    # Training-data cutoffs (docs "Training data cutoff", read 2026-08-17):
+    # haiku-4-5 "Jul 2025"; sonnet-4-6 "Jan 2026"; opus-4-6 "Aug 2025";
+    # sonnet-5 "Jan 2026"; opus-5 "May 2026".
+    "claude-haiku-4-5": ModelSpec(1.0, 5.0, date(2025, 7, 31)),
+    "claude-sonnet-4-6": ModelSpec(3.0, 15.0, date(2026, 1, 31)),
+    "claude-opus-4-6": ModelSpec(5.0, 25.0, date(2025, 8, 31)),
     # Sonnet 5 intro pricing ($2/$10) runs through 2026-08-31, then $3/$15;
     # we meter at the POST-intro rate so the budget never under-counts.
-    "claude-sonnet-5": ModelPricing(3.0, 15.0),
-    "claude-opus-5": ModelPricing(5.0, 25.0),
+    "claude-sonnet-5": ModelSpec(3.0, 15.0, date(2026, 1, 31)),
+    "claude-opus-5": ModelSpec(5.0, 25.0, date(2026, 5, 31)),
 }
 
 
@@ -39,7 +58,7 @@ class UnknownModelError(KeyError):
     """Raised when no pricing entry matches the model id."""
 
 
-def pricing_for(model_id: str) -> ModelPricing:
+def _resolve(model_id: str) -> ModelSpec:
     """Exact match first, then longest known prefix (dated snapshots)."""
     if model_id in PRICING:
         return PRICING[model_id]
@@ -47,6 +66,16 @@ def pricing_for(model_id: str) -> ModelPricing:
         if model_id.startswith(known):
             return PRICING[known]
     raise UnknownModelError(f"no pricing entry for model {model_id!r}")
+
+
+def pricing_for(model_id: str) -> ModelSpec:
+    """Exact match first, then longest known prefix (dated snapshots)."""
+    return _resolve(model_id)
+
+
+def spec_for(model_id: str) -> ModelSpec:
+    """Full spec (pricing + knowledge cutoff); same resolver as pricing_for."""
+    return _resolve(model_id)
 
 
 def calculate_cost(

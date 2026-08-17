@@ -44,6 +44,11 @@ CHARS_PER_TOKEN = 3.0
 # ceiling used when no real context exists yet.
 ASSUMED_CONTEXT_CHARS = 6_000
 
+# Assumed context size (chars) for one replay macro-digest request (series
+# lines + "none" PM section) — generous vs the live _macro_context output
+# (a dozen short lines), so the projection errs high.
+ASSUMED_MACRO_CONTEXT_CHARS = 2_000
+
 
 class ReplayBudgetExhausted(RuntimeError):
     """Projected spend would exceed the run's --max-usd cap; nothing submitted."""
@@ -217,8 +222,14 @@ def estimate_run_cost(
     n_sessions: int,
     deep_dives_per_day: int,
     per_dive_usd: float,
+    per_session_usd: float = 0.0,
 ) -> float:
-    """sessions x shortlist-cap x per-deep-dive projection. Conservative: it
-    assumes the shortlist is FULL every session (real days often select
-    fewer, or none when no BUY candidates exist)."""
-    return max(n_sessions, 0) * max(deep_dives_per_day, 0) * max(per_dive_usd, 0.0)
+    """sessions x shortlist-cap x per-deep-dive projection, plus an optional
+    flat per-session overhead (the replay macro digest when enabled).
+    Conservative: it assumes the shortlist is FULL every session (real days
+    often select fewer, or none when no BUY candidates exist) AND that every
+    session generates a digest (days with a persisted one skip it)."""
+    sessions = max(n_sessions, 0)
+    return sessions * max(deep_dives_per_day, 0) * max(per_dive_usd, 0.0) + sessions * max(
+        per_session_usd, 0.0
+    )

@@ -68,3 +68,36 @@ class TestCalculator:
         uc = cost_from_usage("claude-haiku-4-5", SimpleNamespace(input_tokens=100))
         assert uc.output_tokens == 0
         assert uc.cost_usd == pytest.approx(100 / 1_000_000)
+
+
+class TestModelSpec:
+    """Documented training-data cutoffs (backtest-campaign Phase 4), read
+    from https://platform.claude.com/docs/en/about-claude/models/overview
+    on 2026-08-17; month-granular docs recorded as the month's LAST day."""
+
+    def test_spec_for_carries_knowledge_cutoffs(self) -> None:
+        from datetime import date
+
+        from dynamo.llm.pricing import spec_for
+
+        assert spec_for("claude-sonnet-5").knowledge_cutoff == date(2026, 1, 31)
+        assert spec_for("claude-opus-5").knowledge_cutoff == date(2026, 5, 31)
+        assert spec_for("claude-haiku-4-5").knowledge_cutoff == date(2025, 7, 31)
+        assert spec_for("claude-sonnet-4-6").knowledge_cutoff == date(2026, 1, 31)
+        assert spec_for("claude-opus-4-6").knowledge_cutoff == date(2025, 8, 31)
+
+    def test_spec_for_shares_the_pricing_resolver(self) -> None:
+        from dynamo.llm.pricing import spec_for
+
+        assert spec_for("claude-opus-5-20260501") is spec_for("claude-opus-5")
+        assert spec_for("claude-sonnet-5") is pricing_for("claude-sonnet-5")
+        with pytest.raises(UnknownModelError):
+            spec_for("gpt-9")
+
+    def test_every_pricing_entry_has_a_cutoff(self) -> None:
+        from datetime import date
+
+        from dynamo.llm.pricing import PRICING
+
+        for model_id, spec in PRICING.items():
+            assert isinstance(spec.knowledge_cutoff, date), model_id

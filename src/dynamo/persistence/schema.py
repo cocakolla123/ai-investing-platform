@@ -957,6 +957,27 @@ replay_verdicts = Table(
     Column("payload", JSONB, nullable=False),  # full CommitteeVerdict (+ stage payloads)
 )
 
+# Committee-replay decision-time contexts (backtest-campaign Phase 4;
+# migration 0016). One row per LLM request the committee replay submits
+# (dossier/bull/bear/arbiter per symbol per day, plus replay-generated macro
+# digests, stage='macro_digest' / 'macro_digest_output'): the exact context +
+# instruction text the model saw (system prompts excluded — they are
+# versioned in the repo), sha256-stamped so the post-run leakage audit can
+# verify nothing was altered after the fact.
+replay_contexts = Table(
+    "replay_contexts",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("run_id", Text, nullable=False, index=True),
+    Column("as_of", Date, nullable=False),
+    Column("symbol", Text, nullable=False),
+    Column("stage", Text, nullable=False),
+    Column("context_sha256", Text, nullable=False),
+    Column("context_text", Text, nullable=False),
+    Column("model_id", Text, nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
 # Durable evaluation-period claims (plan Phase 5; migration 0013) — the
 # database-backed sibling of backtest.walkforward.EvaluationRegistry. A
 # (period, purpose) is claimed ONCE; any later claim attempt refuses, so the

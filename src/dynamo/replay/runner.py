@@ -140,6 +140,16 @@ class ReplayConfig(BaseModel):
     whole_shares: bool = False
     min_order_notional: float = Field(default=0.0, ge=0.0)
     commission_per_order: float = Field(default=0.0, ge=0.0)
+    # Committee-mode context completeness (backtest-campaign Phase 4; both in
+    # config_hash like every field — they change behavior AND spend):
+    # generate_macro_digest: when the gateway has no macro digest for a day,
+    # generate one from vintage-bounded macro series via the analyst tier
+    # (costed through ReplayBudget) and inject it into that day's dossiers.
+    # within_run_learning: prior-case retrieval additionally sees THIS run's
+    # own resolved replay experiences (as_of-bounded, this run only) so later
+    # replay months learn from earlier ones — live-parity, still firewalled.
+    generate_macro_digest: bool = True
+    within_run_learning: bool = True
     code_version: str = ""
 
     @property
@@ -568,8 +578,13 @@ class ReplayRunner:
         source = self._verdict_source
         assert source is not None  # enforced in __init__
         out: dict[date, dict[str, CommitteeVerdict]] = {}
+        fields = set(CommitteeVerdict.model_fields)
         for row in source(self.config.source_run_id):
-            verdict = CommitteeVerdict.model_validate(row["payload"])
+            # The persisted payload carries the raw per-stage payloads under
+            # "stages" (Phase 4 audit trail) beside the verdict fields —
+            # filter to the model's own fields (extra="forbid").
+            payload = {k: v for k, v in dict(row["payload"]).items() if k in fields}
+            verdict = CommitteeVerdict.model_validate(payload)
             as_of = row["as_of"]
             if isinstance(as_of, str):
                 as_of = date.fromisoformat(as_of)

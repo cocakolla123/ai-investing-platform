@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from sqlalchemy import Engine, func, select, update
+from sqlalchemy import Engine, and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from dynamo.domain.models.learning import (
@@ -84,6 +84,7 @@ class ExperienceRepository:
         regime: str | None = None,
         sleeve: str | None = None,
         limit: int = 3,
+        include_replay_run_id: str | None = None,
     ) -> list[DecisionExperience]:
         """Prior similar LIVE cases for dossier evidence (plan Phase 2).
 
@@ -94,12 +95,27 @@ class ExperienceRepository:
         decay + same-symbol/sector/regime/sleeve boosts). Experiences are
         structured rows, so this needs no embeddings — a vector rank over
         journal-style text can layer on later without changing callers.
+
+        ``include_replay_run_id`` (within-run learning, backtest-campaign
+        Phase 4): when set, resolved ``source='replay'`` rows belonging to
+        EXACTLY that run id are additionally eligible — still strictly before
+        ``as_of``. The default (``None``) keeps the live-only firewall; other
+        runs' rows and unresolved rows remain invisible either way.
         """
+        source_filter = decision_experience.c.source == "live"
+        if include_replay_run_id:
+            source_filter = or_(
+                source_filter,
+                and_(
+                    decision_experience.c.source == "replay",
+                    decision_experience.c.replay_run_id == include_replay_run_id,
+                ),
+            )
         candidate_cap = max(limit * 50, 200)
         stmt = (
             select(decision_experience)
             .where(
-                decision_experience.c.source == "live",
+                source_filter,
                 decision_experience.c.resolved.is_(True),
                 decision_experience.c.as_of < as_of,
             )

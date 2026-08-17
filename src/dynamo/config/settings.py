@@ -160,6 +160,13 @@ class Settings(BaseSettings):
     # --- Same-day tactical entries (15-min intraday loop) ---
     intraday_entry_cap_per_day: int = 3
 
+    # --- Historical replay (backtest campaign Phase 4) ---
+    # Safety margin added to each model's documented training-data cutoff when
+    # the committee-replay knowledge gate decides whether a window is tainted:
+    # refuse when window start <= cutoff + margin unless the run explicitly
+    # acknowledges (--acknowledge-model-knowledge, recorded in config_json).
+    replay_cutoff_margin_days: int = 30
+
     # --- Learning loop (doc 10; journal retrieval feeds dossier contexts) ---
     journal_retrieval_enabled: bool = True
     experience_retrieval_top_k: int = 3  # journal hits per symbol in the dossier

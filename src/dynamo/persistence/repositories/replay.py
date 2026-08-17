@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from dynamo.persistence.schema import (
     evaluation_claims,
     generation_results,
+    replay_contexts,
     replay_decisions,
     replay_runs,
     replay_verdicts,
@@ -168,6 +169,36 @@ class ReplayRepository:
             select(replay_verdicts)
             .where(replay_verdicts.c.run_id == run_id)
             .order_by(replay_verdicts.c.as_of, replay_verdicts.c.symbol)
+        )
+        with self._engine.connect() as cx:
+            return [dict(r._mapping) for r in cx.execute(stmt)]
+
+    # -- decision-time contexts (backtest-campaign Phase 4) ----------------
+
+    def insert_contexts(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        """Idempotent upsert into ``replay_contexts`` on the deterministic
+        run-namespaced request id, so a resumed run re-derives the same rows."""
+        if not rows:
+            return 0
+        stmt = pg_insert(replay_contexts).values([dict(r) for r in rows])
+        updatable = {
+            c.name: stmt.excluded[c.name]
+            for c in replay_contexts.columns
+            if c.name != "id" and c.name in rows[0]
+        }
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[replay_contexts.c.id], set_=updatable
+        ).returning(replay_contexts.c.id)
+        with self._engine.begin() as cx:
+            written = cx.execute(stmt).all()
+        return len(written)
+
+    def contexts_for(self, run_id: str, as_of: date | None = None) -> list[dict[str, Any]]:
+        stmt = select(replay_contexts).where(replay_contexts.c.run_id == run_id)
+        if as_of is not None:
+            stmt = stmt.where(replay_contexts.c.as_of == as_of)
+        stmt = stmt.order_by(
+            replay_contexts.c.as_of, replay_contexts.c.symbol, replay_contexts.c.stage
         )
         with self._engine.connect() as cx:
             return [dict(r._mapping) for r in cx.execute(stmt)]

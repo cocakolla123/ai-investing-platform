@@ -20,14 +20,14 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0015() -> None:
+def test_revision_chain_is_linear_through_0016() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0015" in modules, "0015_bankroll_context migration missing"
+    assert "0016" in modules, "0016_replay_contexts migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0015"}, f"expected 0015 as the single head, got {heads}"
+    assert heads == {"0016"}, f"expected 0016 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
     assert down["0007"] == "0006"
@@ -39,6 +39,7 @@ def test_revision_chain_is_linear_through_0015() -> None:
     assert down["0013"] == "0012"
     assert down["0014"] == "0013"
     assert down["0015"] == "0014"
+    assert down["0016"] == "0015"
 
 
 def test_0015_targets_bankroll_context_columns() -> None:
@@ -49,6 +50,17 @@ def test_0015_targets_bankroll_context_columns() -> None:
     table = schema.metadata.tables["decision_experience"]
     assert table.c.equity_at_decision.nullable  # NULL on legacy rows
     assert table.c.position_notional.nullable
+
+
+def test_0016_targets_replay_contexts_table() -> None:
+    from dynamo.persistence import schema
+
+    assert "replay_contexts" in schema.metadata.tables
+    table = schema.metadata.tables["replay_contexts"]
+    assert [c.name for c in table.primary_key.columns] == ["id"]
+    assert table.c.run_id.index
+    for col in ("run_id", "as_of", "symbol", "stage", "context_sha256", "context_text"):
+        assert not table.c[col].nullable
 
 
 def test_0014_targets_failure_clusters_table() -> None:

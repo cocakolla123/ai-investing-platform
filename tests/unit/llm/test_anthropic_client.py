@@ -254,3 +254,70 @@ class TestBatches:
         # cost recorded only for succeeded results, at batch pricing
         assert all(e.batch for e in writer.entries)
         assert len(writer.entries) == 2
+
+
+# --------------------------------------------------------------------------
+# network isolation regression (backtest-campaign Phase 4): the client must
+# NEVER enable tools / web search / MCP / beta features — replay determinism
+# and the leakage contract both depend on the model having no side channels.
+# --------------------------------------------------------------------------
+
+BANNED_PARAM_KEYS = {"tools", "tool_choice", "web_search", "mcp_servers", "betas"}
+
+
+def test_build_params_never_contains_tool_or_web_keys() -> None:
+    """Every _build_params combination (structured x batch, i.e. the sync,
+    batch, structured and JSON-fallback paths) yields only the fixed
+    parameter set — no tools/web_search/mcp/betas, ever."""
+    client, _, _ = make_client(StubMessages([]))
+    for structured in (True, False):
+        for batch in (True, False):
+            params = client._build_params(
+                model="claude-sonnet-5",
+                system="sys",
+                context="ctx",
+                instruction="do it",
+                schema=SCHEMA,
+                max_tokens=64,
+                structured=structured,
+                batch=batch,
+            )
+            assert not BANNED_PARAM_KEYS & set(params)
+            expected = {"model", "max_tokens", "system", "messages"}
+            if structured:
+                expected.add("output_config")
+            assert set(params) == expected
+
+
+def test_wire_params_have_no_tool_keys_on_sync_and_batch_paths() -> None:
+    """Belt and suspenders at the wire: the kwargs actually handed to
+    messages.create and the per-request params handed to batches.create are
+    free of tool/web/beta keys — including the structured-rejection fallback."""
+    for reject_structured in (False, True):
+        messages = StubMessages(
+            [make_response(GOOD), make_response(GOOD)],
+            reject_structured=reject_structured,
+        )
+        client, _, _ = make_client(messages)
+        complete(client)
+        assert messages.calls
+        for call in messages.calls:
+            assert not BANNED_PARAM_KEYS & set(call)
+    messages = StubMessages([])
+    client, _, _ = make_client(messages)
+    client.submit_batch(
+        [
+            {
+                "custom_id": "run:2026-06-01-LIQ-dossier",
+                "model_tier": "analyst",
+                "system": "sys",
+                "context": "ctx",
+                "instruction": "do it",
+                "schema": SCHEMA,
+                "max_tokens": 64,
+            }
+        ]
+    )
+    (requests,) = messages.batches.created_with
+    for entry in requests:
+        assert not BANNED_PARAM_KEYS & set(entry["params"])

@@ -44,11 +44,25 @@ STAGES: dict[str, tuple[str, str, str]] = {
     "arbiter": ("arbiter", "arbiter", "arbiter"),
 }
 
+# Temporal prompt discipline (backtest-campaign Phase 4): appended to EVERY
+# stage instruction. The instruction block is the volatile per-call segment
+# (never cache-controlled), so this is cache-safe. On the live path
+# as_of == today, so the sentence is semantically a no-op there — accepted
+# and deliberate: one instruction string, no live/replay fork.
+TEMPORAL_DISCIPLINE = (
+    " You are analyzing as of {as_of}. Use ONLY the provided context. "
+    "Disregard any knowledge of events after {as_of}."
+)
+
 _STAGE_INSTRUCTIONS: dict[str, str] = {
-    "dossier": "Produce the stance-free dossier analysis JSON for {symbol} as of {as_of}.",
-    "bull": "Produce the bull advocate brief JSON for {symbol} as of {as_of}.",
-    "bear": "Produce the bear advocate brief JSON for {symbol} as of {as_of}.",
-    "arbiter": "Produce the committee verdict JSON for {symbol} as of {as_of}.",
+    "dossier": "Produce the stance-free dossier analysis JSON for {symbol} as of {as_of}."
+    + TEMPORAL_DISCIPLINE,
+    "bull": "Produce the bull advocate brief JSON for {symbol} as of {as_of}."
+    + TEMPORAL_DISCIPLINE,
+    "bear": "Produce the bear advocate brief JSON for {symbol} as of {as_of}."
+    + TEMPORAL_DISCIPLINE,
+    "arbiter": "Produce the committee verdict JSON for {symbol} as of {as_of}."
+    + TEMPORAL_DISCIPLINE,
 }
 
 _DEFAULT_MAX_TOKENS: dict[str, int] = {

@@ -108,6 +108,9 @@ def test_estimate_scales_with_deep_dive_cap(capsys: pytest.CaptureFixture[str]) 
                 "--start", "2026-06-01",
                 "--end", "2026-06-10",
                 "--deep-dives-per-day", cap,
+                # Exact 2x scaling only holds without the flat per-session
+                # macro-digest overhead (Phase 4) — drop it here.
+                "--no-macro-digest",
             ]
         )
         assert rc == 0
@@ -1003,3 +1006,75 @@ def test_replay_committee_preflight_runs_before_any_client(
     )
     assert rc == 1
     assert "preflight FAILED" in capsys.readouterr().out
+
+
+def test_estimate_surfaces_model_knowledge_gate_verdict(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A June-2026 window sits inside opus-5's documented training window:
+    the estimate surfaces BLOCKED (zero API calls, zero spend). A window
+    safely past every cutoff + margin reads OK."""
+    rc = replay_cli.main(["estimate", "--start", "2026-06-01", "--end", "2026-06-10"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "model knowledge gate" in out
+    assert "claude-opus-5: cutoff 2026-05-31 [BLOCKS]" in out
+    assert "gate verdict:        BLOCKED" in out
+    assert "--acknowledge-model-knowledge" in out
+
+    rc = replay_cli.main(["estimate", "--start", "2027-01-04", "--end", "2027-01-15"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "gate verdict:        OK" in out
+
+
+def test_estimate_macro_digest_overhead_included_unless_disabled(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def total(extra: list[str]) -> float:
+        rc = replay_cli.main(
+            ["estimate", "--start", "2026-06-01", "--end", "2026-06-10", *extra]
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        line = next(ln for ln in out.splitlines() if "projected total:" in ln)
+        return float(line.split("$")[-1])
+
+    with_macro = total([])
+    without = total(["--no-macro-digest"])
+    assert with_macro > without
+
+
+def test_run_parser_accepts_phase4_flags() -> None:
+    args = replay_cli._build_parser().parse_args(
+        [
+            "run",
+            "--start", "2026-06-01",
+            "--end", "2026-06-10",
+            "--run-label", "x",
+            "--acknowledge-model-knowledge",
+            "--no-macro-digest",
+            "--no-within-run-learning",
+        ]
+    )
+    assert args.acknowledge_model_knowledge is True
+    assert args.no_macro_digest is True
+    assert args.no_within_run_learning is True
+    defaults = replay_cli._build_parser().parse_args(
+        ["run", "--start", "2026-06-01", "--end", "2026-06-10", "--run-label", "x"]
+    )
+    assert defaults.acknowledge_model_knowledge is False
+    assert defaults.no_macro_digest is False
+
+
+def test_main_sets_offline_env_before_any_embedder_import(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    import os
+
+    rc = replay_cli.main(["estimate", "--start", "2027-01-04", "--end", "2027-01-08"])
+    assert rc == 0
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
