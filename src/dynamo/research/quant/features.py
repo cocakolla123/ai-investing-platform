@@ -23,6 +23,7 @@ from dynamo.research.quant.catalog import (
     TRADING_DAYS_PER_YEAR,
     FeatureInputs,
     build_context,
+    dt_naive_utc,
 )
 
 WINSOR_LOW = 0.01
@@ -102,7 +103,7 @@ def build_labels(
     if bars is None or bars.empty or not {"symbol", "ts", "close"} <= set(bars.columns):
         return empty
     df = bars.copy()
-    df["ts"] = pd.to_datetime(df["ts"])
+    df["ts"] = dt_naive_utc(df["ts"])
     price_col = "adj_close" if "adj_close" in df.columns else "close"
     panel = df.pivot_table(index="ts", columns="symbol", values=price_col, aggfunc="last")
     if price_col == "adj_close":

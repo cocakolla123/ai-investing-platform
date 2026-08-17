@@ -20,7 +20,7 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -116,6 +116,20 @@ def to_ts(value: object) -> pd.Timestamp:
     return cast(pd.Timestamp, pd.Timestamp(value))  # type: ignore[arg-type]
 
 
+def dt_naive_utc(values: object) -> pd.Series:
+    """Datetime series normalized to tz-naive UTC.
+
+    Repository frames carry tz-aware timestamptz columns while fixtures and
+    as-of Timestamps are naive; comparing the two raises in pandas. All stored
+    times are UTC, so naive values are read as UTC and aware values are
+    converted — one comparable dtype everywhere.
+    """
+    converted = pd.to_datetime(cast(Any, values), utc=True)
+    if isinstance(converted, pd.DatetimeIndex):
+        return pd.Series(converted.tz_localize(None))
+    return cast(pd.Series, converted.dt.tz_localize(None))
+
+
 def _rows(df: pd.DataFrame, mask: object) -> pd.DataFrame:
     """Boolean-mask row filter with a stable DataFrame static type."""
     return df.loc[cast(pd.Series, mask)]
@@ -136,10 +150,10 @@ def _empty_panel() -> pd.DataFrame:
 def _pivot(bars: pd.DataFrame, column: str, as_of: pd.Timestamp) -> pd.DataFrame:
     if column not in bars.columns:
         return _empty_panel()
-    df = _rows(bars, pd.to_datetime(bars["ts"]) <= as_of).loc[:, ["symbol", "ts", column]].copy()
+    df = _rows(bars, dt_naive_utc(bars["ts"]) <= as_of).loc[:, ["symbol", "ts", column]].copy()
     if df.empty:
         return _empty_panel()
-    df["ts"] = pd.to_datetime(df["ts"])
+    df["ts"] = dt_naive_utc(df["ts"])
     panel = df.pivot_table(index="ts", columns="symbol", values=column, aggfunc="last")
     return panel.sort_index()
 
@@ -451,8 +465,8 @@ def pit_facts(fundamentals: pd.DataFrame | None, as_of: pd.Timestamp) -> pd.Data
     if missing:
         return pd.DataFrame(columns=pd.Index(cols))
     df = fundamentals.loc[:, cols].copy()
-    df["filed_at"] = pd.to_datetime(df["filed_at"])
-    df["period_end"] = pd.to_datetime(df["period_end"])
+    df["filed_at"] = dt_naive_utc(df["filed_at"])
+    df["period_end"] = dt_naive_utc(df["period_end"])
     return _rows(df, df["filed_at"] <= as_of)
 
 
@@ -765,7 +779,7 @@ def _est_revision(days: int, mode: str) -> FeatureFn:
         ):
             return _nan_series(ctx)
         e = est.copy()
-        e["fetched_at"] = pd.to_datetime(e["fetched_at"])
+        e["fetched_at"] = dt_naive_utc(e["fetched_at"])
         out = {}
         for sym in ctx.universe:
             cur = _estimate_at(e, sym, ctx.as_of)
@@ -793,7 +807,7 @@ def _insider_window(
     if insider is None or insider.empty or not cols <= set(insider.columns):
         return pd.DataFrame(columns=pd.Index(sorted(cols | {"price"})))
     df = insider.copy()
-    df["filed_at"] = pd.to_datetime(df["filed_at"])
+    df["filed_at"] = dt_naive_utc(df["filed_at"])
     lo = as_of - pd.Timedelta(days=window_days)
     return _rows(df, (df["filed_at"] <= as_of) & (df["filed_at"] > lo))
 
@@ -869,8 +883,8 @@ def _macro_series(ctx: FeatureContext, series_id: str) -> pd.Series:
     df = _rows(m, m["series_id"] == series_id).copy()
     if df.empty:
         return pd.Series(dtype=float)
-    df["ts"] = pd.to_datetime(df["ts"])
-    df["vintage_ts"] = pd.to_datetime(df["vintage_ts"])
+    df["ts"] = dt_naive_utc(df["ts"])
+    df["vintage_ts"] = dt_naive_utc(df["vintage_ts"])
     df = _rows(df, (df["vintage_ts"] <= ctx.as_of) & (df["ts"] <= ctx.as_of))
     if df.empty:
         return pd.Series(dtype=float)
@@ -893,7 +907,7 @@ def _regime_code(ctx: FeatureContext) -> pd.Series:
     if r is None or len(r) == 0:
         return _nan_series(ctx)
     s = r.copy()
-    s.index = pd.to_datetime(s.index)
+    s.index = pd.DatetimeIndex(dt_naive_utc(s.index))
     s = cast(pd.Series, s[s.index <= ctx.as_of])
     if s.empty:
         return _nan_series(ctx)
@@ -946,7 +960,7 @@ def _calendar_frame(ctx: FeatureContext) -> pd.DataFrame:
     if cal is None or cal.empty or not {"symbol", "event_date"} <= set(cal.columns):
         return pd.DataFrame(columns=pd.Index(["symbol", "event_date"]))
     df = cal.copy()
-    df["event_date"] = pd.to_datetime(df["event_date"])
+    df["event_date"] = dt_naive_utc(df["event_date"])
     return df
 
 
