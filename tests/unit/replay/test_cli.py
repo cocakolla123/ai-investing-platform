@@ -143,7 +143,12 @@ def test_replay_list_and_show_parse() -> None:
 class FakeSettings:
     tiingo_api_key: str = ""
     fred_api_key: str = ""
+    finnhub_api_key: str = ""
     edgar_user_agent: str = "test agent test@example.com"
+    crypto_enabled: bool = True
+    crypto_universe: tuple[str, ...] = ("BTC/USD", "ETH/USD")
+    alpaca_api_key: str = ""
+    alpaca_api_secret: str = ""
 
 
 @dataclass
@@ -151,6 +156,10 @@ class FakeRepo:
     bars: list[Any] = field(default_factory=list)
     facts: list[Any] = field(default_factory=list)
     macro: list[Any] = field(default_factory=list)
+    news: list[Any] = field(default_factory=list)
+    transcripts: list[Any] = field(default_factory=list)
+    linked: list[tuple[str, date, str]] = field(default_factory=list)
+    seeded_ciks: dict[str, str] = field(default_factory=dict)
 
     def upsert_bars(self, bars: Any) -> int:
         batch = list(bars)
@@ -166,6 +175,24 @@ class FakeRepo:
         batch = list(points)
         self.macro.extend(batch)
         return len(batch)
+
+    def upsert_news(self, items: Any) -> int:
+        batch = list(items)
+        self.news.extend(batch)
+        return len(batch)
+
+    def upsert_transcripts(self, transcripts: Any) -> int:
+        batch = list(transcripts)
+        self.transcripts.extend(batch)
+        return len(batch)
+
+    def link_transcript_ref(self, symbol: str, event_date: date, ref: str) -> int:
+        self.linked.append((symbol, event_date, ref))
+        return 1
+
+    def seed_instrument_ciks(self, ciks: Any) -> int:
+        self.seeded_ciks.update(dict(ciks))
+        return len(ciks)
 
     def universe_at(self, as_of: date) -> list[Any]:
         @dataclass
@@ -191,7 +218,26 @@ def test_backfill_bars_requires_symbols_or_universe() -> None:
     assert args.universe is True and args.symbols is None
 
 
-def test_backfill_bars_skips_gracefully_without_key(
+def test_backfill_bars_fails_loudly_without_key(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Phase 1 hardening: a missing Tiingo key is a NONZERO exit — a bars
+    backfill that silently 'succeeds' would let replay preflight blame the
+    wrong layer."""
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
+    monkeypatch.setattr(
+        backfill_cli, "_repo", lambda url: pytest.fail("must not touch the database")
+    )
+    rc = backfill_cli.main(
+        ["bars", "--start", "2026-01-01", "--end", "2026-02-01", "--symbols", "AAA"]
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "TIINGO_API_KEY is not set" in out
+    assert "--allow-missing-tiingo" in out
+
+
+def test_backfill_bars_allow_missing_tiingo_restores_graceful_skip(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
@@ -199,7 +245,10 @@ def test_backfill_bars_skips_gracefully_without_key(
         backfill_cli, "_repo", lambda url: pytest.fail("must not touch the database")
     )
     rc = backfill_cli.main(
-        ["bars", "--start", "2026-01-01", "--end", "2026-02-01", "--symbols", "AAA"]
+        [
+            "bars", "--start", "2026-01-01", "--end", "2026-02-01",
+            "--symbols", "AAA", "--allow-missing-tiingo",
+        ]
     )
     assert rc == 0
     assert "TIINGO_API_KEY is not set" in capsys.readouterr().out
@@ -330,3 +379,496 @@ def test_backfill_default_series_matches_production_ingestion() -> None:
     from orchestration.resources import DEFAULT_FRED_SERIES
 
     assert backfill_cli.DEFAULT_FRED_SERIES == DEFAULT_FRED_SERIES
+
+
+# --------------------------------------------------------------------------
+# backfill universe --as-of (replay campaign backdate)
+# --------------------------------------------------------------------------
+
+
+class FakeUniverseRepo:
+    """Stateful membership store mimicking the repo's backdate semantics."""
+
+    def __init__(self) -> None:
+        self.rows: dict[tuple[str, date], Any] = {}
+
+    def backdate_core_universe(
+        self, memberships: Any, *, delete_approved_by: Any = ("seed", "replay-backdate")
+    ) -> tuple[int, int]:
+        ms = list(memberships)
+        symbols = {m.symbol for m in ms}
+        doomed = [
+            key
+            for key, row in self.rows.items()
+            if row.symbol in symbols
+            and int(row.tier) == 1
+            and row.approved_by in delete_approved_by
+        ]
+        for key in doomed:
+            del self.rows[key]
+        for m in ms:
+            self.rows[(m.symbol, m.valid_from)] = m
+        return len(doomed), len(ms)
+
+    def universe_at(self, as_of: date) -> list[Any]:
+        return [
+            m
+            for m in self.rows.values()
+            if m.valid_from <= as_of and (m.valid_to is None or m.valid_to >= as_of)
+        ]
+
+
+def test_backfill_universe_requires_as_of() -> None:
+    with pytest.raises(SystemExit):
+        backfill_cli._build_parser().parse_args(["universe"])
+    args = backfill_cli._build_parser().parse_args(["universe", "--as-of", "2024-12-01"])
+    assert args.as_of == date(2024, 12, 1)
+
+
+def test_backfill_universe_backdates_and_verifies(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dynamo.domain.models.market import Tier, UniverseMembership
+
+    repo = FakeUniverseRepo()
+    # Pre-existing 2026-08 seed rows (approved_by='seed') + one human add.
+    for sym in ("AAA", "SPY", "BTC/USD"):
+        repo.rows[(sym, date(2026, 8, 1))] = UniverseMembership(
+            symbol=sym, tier=Tier.CORE, valid_from=date(2026, 8, 1),
+            valid_to=None, reason="core seed", approved_by="seed",
+        )
+    repo.rows[("HUMAN", date(2026, 8, 5))] = UniverseMembership(
+        symbol="HUMAN", tier=Tier.CORE, valid_from=date(2026, 8, 5),
+        valid_to=None, reason="approved add", approved_by="user",
+    )
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    monkeypatch.setattr(
+        "dynamo.data.universe.seed_symbol_origins",
+        lambda *, include_crypto, seed_path="unused": [
+            ("AAA", "built-in starter list"),
+            ("SPY", "built-in starter list"),
+            *([("BTC/USD", "crypto starter list")] if include_crypto else []),
+        ],
+    )
+    rc = backfill_cli.main(["universe", "--as-of", "2024-12-01"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    # Old seed intervals replaced by one backdated open interval per symbol.
+    assert sorted(k for k in repo.rows if k[0] != "HUMAN") == [
+        ("AAA", date(2024, 12, 1)),
+        ("BTC/USD", date(2024, 12, 1)),
+        ("SPY", date(2024, 12, 1)),
+    ]
+    row = repo.rows[("AAA", date(2024, 12, 1))]
+    assert row.approved_by == "replay-backdate"
+    assert row.valid_to is None
+    assert "replay backfill campaign" in row.reason
+    # Human-approved rows are never touched.
+    assert ("HUMAN", date(2026, 8, 5)) in repo.rows
+    assert "verify universe_at(as-of=2024-12-01): 3/3" in out
+    assert "OK" in out
+
+
+def test_backfill_universe_is_idempotent_and_rebases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = FakeUniverseRepo()
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    monkeypatch.setattr(
+        "dynamo.data.universe.seed_symbol_origins",
+        lambda *, include_crypto, seed_path="unused": [("AAA", "built-in starter list")],
+    )
+    assert backfill_cli.main(["universe", "--as-of", "2024-12-01"]) == 0
+    assert backfill_cli.main(["universe", "--as-of", "2024-12-01"]) == 0
+    # Same as-of twice -> still exactly one interval.
+    assert list(repo.rows) == [("AAA", date(2024, 12, 1))]
+    # Different as-of -> replaced (single interval again, new valid_from).
+    assert backfill_cli.main(["universe", "--as-of", "2025-06-01"]) == 0
+    assert list(repo.rows) == [("AAA", date(2025, 6, 1))]
+
+
+def test_backfill_universe_excludes_crypto_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = FakeUniverseRepo()
+    seen: list[bool] = []
+
+    def fake_origins(*, include_crypto: bool, seed_path: str = "unused") -> list[Any]:
+        seen.append(include_crypto)
+        return [("AAA", "built-in starter list")]
+
+    monkeypatch.setattr(
+        backfill_cli, "_settings", lambda: FakeSettings(crypto_enabled=False)
+    )
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    monkeypatch.setattr("dynamo.data.universe.seed_symbol_origins", fake_origins)
+    assert backfill_cli.main(["universe", "--as-of", "2024-12-01"]) == 0
+    assert seen == [False]
+
+
+# --------------------------------------------------------------------------
+# backfill news
+# --------------------------------------------------------------------------
+
+
+def test_backfill_news_parses_args() -> None:
+    with pytest.raises(SystemExit):
+        backfill_cli._build_parser().parse_args(
+            ["news", "--start", "2026-01-01", "--end", "2026-02-01"]
+        )
+    args = backfill_cli._build_parser().parse_args(
+        ["news", "--start", "2026-01-01", "--end", "2026-02-01", "--universe"]
+    )
+    assert args.universe is True and args.start == date(2026, 1, 1)
+
+
+def test_backfill_news_fails_loudly_without_key(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
+    monkeypatch.setattr(
+        backfill_cli, "_repo", lambda url: pytest.fail("must not touch the database")
+    )
+    rc = backfill_cli.main(
+        ["news", "--start", "2026-01-01", "--end", "2026-02-01", "--symbols", "AAA"]
+    )
+    assert rc == 1
+    assert "FINNHUB_API_KEY" in capsys.readouterr().out
+
+
+def test_backfill_news_upserts_range_and_skips_crypto(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = FakeRepo()
+    calls: list[tuple[list[str], date, date]] = []
+
+    class FakeFinnhub:
+        def news_range(self, symbols: Any, start: date, end: date) -> Any:
+            calls.append((list(symbols), start, end))
+            yield {"id": f"finnhub:{symbols[0]}"}
+
+    monkeypatch.setattr(
+        backfill_cli, "_settings", lambda: FakeSettings(finnhub_api_key="k")
+    )
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    monkeypatch.setattr(backfill_cli, "_finnhub", lambda s: FakeFinnhub())
+    rc = backfill_cli.main(
+        [
+            "news", "--start", "2026-01-01", "--end", "2026-08-01",
+            "--symbols", "AAA", "BTC/USD", "BBB",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert calls == [
+        (["AAA"], date(2026, 1, 1), date(2026, 8, 1)),
+        (["BBB"], date(2026, 1, 1), date(2026, 8, 1)),
+    ]
+    assert len(repo.news) == 2
+    assert backfill_cli.CRYPTO_NEWS_SKIP_MESSAGE in out
+    assert "BTC/USD" in out
+
+
+# --------------------------------------------------------------------------
+# backfill transcripts (guarded optional extra)
+# --------------------------------------------------------------------------
+
+
+class FakeDefeatBeta:
+    def __init__(self, available: bool, transcripts: list[Any] | None = None) -> None:
+        self.available = available
+        self._transcripts = transcripts or []
+        self.calls: list[tuple[list[str], date]] = []
+
+    def transcripts(self, symbols: Any, *, since: date) -> list[Any]:
+        self.calls.append((list(symbols), since))
+        return list(self._transcripts)
+
+
+def test_backfill_transcripts_parses_args() -> None:
+    with pytest.raises(SystemExit):
+        backfill_cli._build_parser().parse_args(["transcripts"])
+    args = backfill_cli._build_parser().parse_args(
+        ["transcripts", "--symbols", "AAA", "--since", "2024-01-01"]
+    )
+    assert args.symbols == ["AAA"] and args.since == date(2024, 1, 1)
+
+
+def test_backfill_transcripts_missing_extra_is_nonzero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(backfill_cli, "_defeatbeta", lambda: FakeDefeatBeta(False))
+    monkeypatch.setattr(
+        backfill_cli, "_repo", lambda url: pytest.fail("must not touch the database")
+    )
+    rc = backfill_cli.main(["transcripts", "--symbols", "AAA"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "transcripts" in out and "extra" in out
+    assert "--allow-missing-extra" in out
+
+
+def test_backfill_transcripts_allow_missing_extra_skips(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(backfill_cli, "_defeatbeta", lambda: FakeDefeatBeta(False))
+    monkeypatch.setattr(
+        backfill_cli, "_repo", lambda url: pytest.fail("must not touch the database")
+    )
+    rc = backfill_cli.main(
+        ["transcripts", "--symbols", "AAA", "--allow-missing-extra"]
+    )
+    assert rc == 0
+    assert "skipping" in capsys.readouterr().out
+
+
+def test_backfill_transcripts_upserts_and_links(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dynamo.domain.models.market import Transcript
+
+    transcript = Transcript(
+        symbol="AAA",
+        event_date=date(2025, 5, 1),
+        source="defeatbeta",
+        period="2025Q1",
+        content="CEO: strong quarter.",
+    )
+    provider = FakeDefeatBeta(True, [transcript])
+    repo = FakeRepo()
+    monkeypatch.setattr(backfill_cli, "_defeatbeta", lambda: provider)
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    rc = backfill_cli.main(
+        ["transcripts", "--symbols", "AAA", "BTC/USD", "--since", "2024-06-01"]
+    )
+    assert rc == 0
+    assert provider.calls == [(["AAA"], date(2024, 6, 1))]  # crypto filtered out
+    assert repo.transcripts == [transcript]
+    assert repo.linked == [("AAA", date(2025, 5, 1), transcript.ref)]
+    assert "skipped" in capsys.readouterr().out  # crypto skip note
+
+
+# --------------------------------------------------------------------------
+# backfill crypto-bars
+# --------------------------------------------------------------------------
+
+
+def test_backfill_crypto_bars_parses_args() -> None:
+    args = backfill_cli._build_parser().parse_args(
+        ["crypto-bars", "--start", "2024-01-01", "--end", "2026-08-01"]
+    )
+    assert args.symbols is None
+    args = backfill_cli._build_parser().parse_args(
+        [
+            "crypto-bars", "--start", "2024-01-01", "--end", "2026-08-01",
+            "--symbols", "BTC/USD",
+        ]
+    )
+    assert args.symbols == ["BTC/USD"]
+
+
+def test_backfill_crypto_bars_defaults_to_settings_universe(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    @dataclass
+    class FakeBar:
+        symbol: str
+
+    repo = FakeRepo()
+    calls: list[tuple[list[str], date, date]] = []
+
+    class FakeCrypto:
+        def daily_bars(self, symbols: Any, start: date, end: date) -> Any:
+            calls.append((list(symbols), start, end))
+            for sym in symbols:
+                yield FakeBar(sym)
+                yield FakeBar(sym)
+
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    monkeypatch.setattr(backfill_cli, "_alpaca_crypto", lambda s: FakeCrypto())
+    rc = backfill_cli.main(
+        ["crypto-bars", "--start", "2024-01-01", "--end", "2026-08-01"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert calls == [(["BTC/USD", "ETH/USD"], date(2024, 1, 1), date(2026, 8, 1))]
+    assert len(repo.bars) == 4
+    assert "BTC/USD 2024-01-01 -> 2026-08-01: 2 bars" in out
+
+
+def test_backfill_crypto_bars_explicit_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = FakeRepo()
+    seen: list[str] = []
+
+    class FakeCrypto:
+        def daily_bars(self, symbols: Any, start: date, end: date) -> Any:
+            seen.extend(symbols)
+            return iter(())
+
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    monkeypatch.setattr(backfill_cli, "_alpaca_crypto", lambda s: FakeCrypto())
+    rc = backfill_cli.main(
+        [
+            "crypto-bars", "--start", "2024-01-01", "--end", "2026-08-01",
+            "--symbols", "SOL/USD",
+        ]
+    )
+    assert rc == 0
+    assert seen == ["SOL/USD"]
+
+
+# --------------------------------------------------------------------------
+# fundamentals --seed-ciks
+# --------------------------------------------------------------------------
+
+
+def test_backfill_fundamentals_seed_ciks(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = FakeRepo()
+
+    class FakeEdgar:
+        def company_ticker_map(self) -> dict[str, str]:
+            return {"AAA": "0000000001", "ZZZ": "0000000009"}
+
+        def company_facts(self, cik: str) -> Any:
+            yield {"cik": cik}
+
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
+    monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
+    monkeypatch.setattr(backfill_cli, "_edgar", lambda s: FakeEdgar())
+    monkeypatch.setattr(
+        backfill_cli, "_cik_map", lambda repo, symbols: {"AAA": "0000000001"}
+    )
+    rc = backfill_cli.main(["fundamentals", "--symbols", "AAA", "NOMAP", "--seed-ciks"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert repo.seeded_ciks == {"AAA": "0000000001"}  # only requested symbols
+    assert "no SEC ticker mapping for ['NOMAP']" in out
+    assert len(repo.facts) == 1
+
+
+# --------------------------------------------------------------------------
+# replay preflight wiring (Phase 1)
+# --------------------------------------------------------------------------
+
+
+def _preflight_error() -> Any:
+    from dynamo.replay.preflight import PreflightCheck, PreflightError, PreflightReport
+
+    report = PreflightReport(
+        checks=(PreflightCheck("universe", "error", "universe is EMPTY at 2026-02-02"),)
+    )
+    return PreflightError(report)
+
+
+def test_replay_run_parses_skip_preflight() -> None:
+    args = replay_cli._build_parser().parse_args(
+        [
+            "run", "--start", "2026-06-01", "--end", "2026-06-10",
+            "--run-label", "x", "--skip-preflight",
+        ]
+    )
+    assert args.skip_preflight is True
+    args = replay_cli._build_parser().parse_args(
+        ["run", "--start", "2026-06-01", "--end", "2026-06-10", "--run-label", "x"]
+    )
+    assert args.skip_preflight is False
+
+
+def test_replay_quant_run_refuses_on_preflight_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import dynamo.replay.preflight as preflight_mod
+
+    monkeypatch.setattr(replay_cli, "_engine", lambda url: object())
+
+    def failing_preflight(engine: Any, config: Any) -> Any:
+        raise _preflight_error()
+
+    monkeypatch.setattr(preflight_mod, "run_preflight", failing_preflight)
+    rc = replay_cli.main(
+        ["run", "--start", "2026-06-01", "--end", "2026-06-10", "--run-label", "x"]
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "preflight FAILED" in out
+    assert "universe is EMPTY" in out
+
+
+def test_replay_skip_preflight_records_skip_in_run_metadata(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--skip-preflight never calls run_preflight and hands the runner a
+    {"preflight": {"skipped": True}} extra for config_json (NOT ReplayConfig)."""
+    import dynamo.replay.preflight as preflight_mod
+    import dynamo.replay.runner as runner_mod
+
+    monkeypatch.setattr(replay_cli, "_engine", lambda url: object())
+    monkeypatch.setattr(
+        preflight_mod,
+        "run_preflight",
+        lambda engine, config: pytest.fail("preflight must not run when skipped"),
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        def run(self, progress: Any = None) -> Any:
+            @dataclass
+            class R:
+                run_id: str = "replay-fake"
+                status: str = "completed"
+                sessions: tuple = ()
+                decisions: tuple = ()
+                fills: tuple = ()
+                experiences: tuple = ()
+                equity_curve: tuple = ()
+
+            return R()
+
+    monkeypatch.setattr(runner_mod, "ReplayRunner", FakeRunner)
+    rc = replay_cli.main(
+        [
+            "run", "--start", "2026-06-01", "--end", "2026-06-10",
+            "--run-label", "x", "--skip-preflight",
+        ]
+    )
+    assert rc == 0
+    assert captured["run_config_extras"] == {"preflight": {"skipped": True}}
+    # run_id stability: the skip lives in metadata, never in the config.
+    assert "skip" not in captured["config"].model_dump_json()
+    assert "SKIPPED" in capsys.readouterr().out
+
+
+def test_replay_committee_preflight_runs_before_any_client(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Committee mode preflights right after config construction — a failure
+    exits before the budget, meter, or Anthropic client are ever built."""
+    import dynamo.replay.preflight as preflight_mod
+
+    class KeyedSettings:
+        anthropic_api_key = "k"
+
+    monkeypatch.setattr("dynamo.config.settings.Settings", lambda: KeyedSettings())
+    monkeypatch.setattr(replay_cli, "_engine", lambda url: object())
+
+    def failing_preflight(engine: Any, config: Any) -> Any:
+        raise _preflight_error()
+
+    monkeypatch.setattr(preflight_mod, "run_preflight", failing_preflight)
+    rc = replay_cli.main(
+        [
+            "run", "--start", "2026-06-01", "--end", "2026-06-10",
+            "--mode", "committee", "--run-label", "x", "--max-usd", "5.0",
+        ]
+    )
+    assert rc == 1
+    assert "preflight FAILED" in capsys.readouterr().out

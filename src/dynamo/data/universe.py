@@ -54,6 +54,35 @@ CRYPTO_STARTERS: tuple[str, ...] = (
 )
 
 
+def seed_symbol_origins(
+    *,
+    include_crypto: bool,
+    seed_path: str | Path = DEFAULT_SEED_PATH,
+) -> list[tuple[str, str]]:
+    """(symbol, origin) pairs from the seed file, else the built-in list.
+
+    Crypto starter pairs (ADR-0013) are appended in BOTH branches when
+    enabled — the equity seed file does not govern the crypto sleeve.
+    Shared by :meth:`UniverseManager.seed_core` and the backfill CLI's
+    ``universe --as-of`` backdate (which must target the same symbol set the
+    seed wrote).
+    """
+    path = Path(seed_path)
+    if path.exists():
+        symbols = [
+            line.strip().upper()
+            for line in path.read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        out = [(s, f"seed file {path}") for s in symbols]
+    else:
+        out = [(s, "built-in starter list") for s in (*STARTER_STOCKS, *STARTER_ETFS)]
+    if include_crypto:
+        seen = {s for s, _ in out}
+        out.extend((s, "crypto starter list") for s in CRYPTO_STARTERS if s not in seen)
+    return out
+
+
 class UniverseStore(Protocol):
     """The slice of ``MarketDataRepository`` the manager reads/writes through."""
 
@@ -97,26 +126,10 @@ class UniverseManager:
     # -- seeding -----------------------------------------------------------
 
     def _seed_symbols(self) -> list[tuple[str, str]]:
-        """(symbol, origin) pairs from the seed file, else the built-in list.
-
-        Crypto starter pairs (ADR-0013) are appended in BOTH branches when
-        enabled — the equity seed file does not govern the crypto sleeve.
-        """
-        if self._seed_path.exists():
-            symbols = [
-                line.strip().upper()
-                for line in self._seed_path.read_text().splitlines()
-                if line.strip() and not line.strip().startswith("#")
-            ]
-            out = [(s, f"seed file {self._seed_path}") for s in symbols]
-        else:
-            out = [(s, "built-in starter list") for s in (*STARTER_STOCKS, *STARTER_ETFS)]
-        if self._include_crypto:
-            seen = {s for s, _ in out}
-            out.extend(
-                (s, "crypto starter list") for s in CRYPTO_STARTERS if s not in seen
-            )
-        return out
+        """See :func:`seed_symbol_origins` (shared with the backfill CLI)."""
+        return seed_symbol_origins(
+            include_crypto=self._include_crypto, seed_path=self._seed_path
+        )
 
     def seed_core(self, as_of: date) -> int:
         """Seed Tier 1 once; idempotent (no-op when Tier 1 already populated)."""

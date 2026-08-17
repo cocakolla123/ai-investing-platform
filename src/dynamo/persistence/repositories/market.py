@@ -22,7 +22,7 @@ from typing import Any
 
 import pandas as pd
 import structlog
-from sqlalchemy import Engine, Table, select, update
+from sqlalchemy import Engine, Table, delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from dynamo.domain.models.market import (
@@ -363,6 +363,80 @@ class MarketDataRepository:
             for m in memberships
         ]
         return self.upsert_rows(schema.universe_membership, rows)
+
+    def backdate_core_universe(
+        self,
+        memberships: Sequence[UniverseMembership],
+        *,
+        delete_approved_by: Sequence[str] = ("seed", "replay-backdate"),
+    ) -> tuple[int, int]:
+        """Atomically replace the CORE seed intervals for these symbols.
+
+        ONE transaction (replay backfill campaign): delete every existing
+        CORE row for the given symbols whose ``approved_by`` is in
+        ``delete_approved_by`` (the original ``'seed'`` rows plus any prior
+        ``'replay-backdate'`` rows — that is what makes a re-run with a
+        different ``as_of`` replace rather than accumulate intervals), then
+        re-insert the new memberships with the same upsert semantics as
+        :meth:`upsert_universe_membership`. Returns ``(deleted, inserted)``.
+
+        Human-approved CORE additions (any other ``approved_by``) are never
+        touched.
+        """
+        rows = [
+            {
+                "symbol": m.symbol,
+                "valid_from": m.valid_from,
+                "tier": int(m.tier),
+                "valid_to": m.valid_to,
+                "reason": m.reason,
+                "approved_by": m.approved_by,
+            }
+            for m in memberships
+        ]
+        if not rows:
+            return (0, 0)
+        t = schema.universe_membership
+        symbols = [r["symbol"] for r in rows]
+        stmt = pg_insert(t).values(rows)
+        pk = [c.name for c in t.primary_key.columns]
+        stmt = stmt.on_conflict_do_update(
+            index_elements=pk,
+            set_={
+                c.name: stmt.excluded[c.name] for c in t.columns if c.name not in pk
+            },
+        )
+        with self._engine.begin() as conn:
+            deleted = conn.execute(
+                delete(t).where(
+                    t.c.symbol.in_(symbols),
+                    t.c.tier == int(Tier.CORE),
+                    t.c.approved_by.in_(list(delete_approved_by)),
+                )
+            ).rowcount
+            inserted = conn.execute(stmt).rowcount
+        return (int(deleted or 0), int(inserted or 0))
+
+    def seed_instrument_ciks(self, ciks: Mapping[str, str]) -> int:
+        """Upsert ``instruments.cik`` for the given symbols (EDGAR mapping).
+
+        Existing rows get ONLY their ``cik`` updated (name/sector/etc are
+        preserved); missing rows are created minimally (``name=symbol``).
+        """
+        if not ciks:
+            return 0
+        t = schema.instruments
+        rows = [
+            {"symbol": symbol, "name": symbol, "cik": cik}
+            for symbol, cik in sorted(ciks.items())
+        ]
+        stmt = pg_insert(t).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["symbol"], set_={"cik": stmt.excluded.cik}
+        )
+        with self._engine.begin() as conn:
+            result = conn.execute(stmt)
+        return int(result.rowcount or 0)
 
     def close_membership(
         self,

@@ -24,6 +24,7 @@ TABLES = [
     schema.quarantine,
     schema.alerts,
     schema.quant_scores,
+    schema.instruments,
 ]
 
 
@@ -105,6 +106,112 @@ def test_universe_at_point_in_time(repo: MarketDataRepository) -> None:
     assert {m.symbol for m in august} == {"AAPL"}  # promotion lapsed
     core_only = repo.universe_at(date(2026, 7, 15), Tier.CORE)
     assert {m.symbol for m in core_only} == {"AAPL"}
+
+
+def _core(symbol: str, valid_from: date, approved_by: str | None) -> UniverseMembership:
+    return UniverseMembership(
+        symbol=symbol, tier=Tier.CORE, valid_from=valid_from,
+        valid_to=None, reason="core seed: built-in starter list", approved_by=approved_by,
+    )
+
+
+def test_backdate_core_universe_replaces_seed_in_one_shot(
+    repo: MarketDataRepository, engine: Engine
+) -> None:
+    """Phase 1 backdate: seed rows deleted + backdated rows inserted; each
+    symbol ends with exactly ONE open interval; human-approved rows survive."""
+    repo.upsert_universe_membership(
+        [
+            _core("AAPL", date(2026, 8, 1), "seed"),
+            _core("SPY", date(2026, 8, 1), "seed"),
+            _core("HUMAN", date(2026, 8, 5), "someone@example.com"),
+        ]
+    )
+    backdated = [
+        UniverseMembership(
+            symbol=s, tier=Tier.CORE, valid_from=date(2024, 12, 1), valid_to=None,
+            reason="replay backfill campaign backdate", approved_by="replay-backdate",
+        )
+        for s in ("AAPL", "SPY")
+    ]
+    deleted, inserted = repo.backdate_core_universe(backdated)
+    assert (deleted, inserted) == (2, 2)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(schema.universe_membership).order_by(
+                schema.universe_membership.c.symbol
+            )
+        ).all()
+    by_symbol: dict[str, list] = {}
+    for r in rows:
+        by_symbol.setdefault(r.symbol, []).append(r)
+    # Single interval per backdated symbol, starting at the backdate.
+    for sym in ("AAPL", "SPY"):
+        assert len(by_symbol[sym]) == 1
+        assert by_symbol[sym][0].valid_from == date(2024, 12, 1)
+        assert by_symbol[sym][0].valid_to is None
+        assert by_symbol[sym][0].approved_by == "replay-backdate"
+    # Human-approved row untouched.
+    assert by_symbol["HUMAN"][0].valid_from == date(2026, 8, 5)
+
+    # Survivorship view: active both at the backdate and today.
+    assert {m.symbol for m in repo.universe_at(date(2024, 12, 1))} == {"AAPL", "SPY"}
+    assert {"AAPL", "SPY", "HUMAN"} <= {
+        m.symbol for m in repo.universe_at(max(date.today(), date(2026, 8, 6)))
+    }
+
+
+def test_backdate_core_universe_is_idempotent_and_rebases(
+    repo: MarketDataRepository, engine: Engine
+) -> None:
+    repo.upsert_universe_membership([_core("AAPL", date(2026, 8, 1), "seed")])
+
+    def backdate(as_of: date) -> None:
+        repo.backdate_core_universe(
+            [
+                UniverseMembership(
+                    symbol="AAPL", tier=Tier.CORE, valid_from=as_of, valid_to=None,
+                    reason="replay backfill campaign backdate",
+                    approved_by="replay-backdate",
+                )
+            ]
+        )
+
+    def intervals() -> list[date]:
+        with engine.connect() as conn:
+            return [
+                r.valid_from
+                for r in conn.execute(
+                    select(schema.universe_membership).where(
+                        schema.universe_membership.c.symbol == "AAPL"
+                    )
+                )
+            ]
+
+    backdate(date(2024, 12, 1))
+    backdate(date(2024, 12, 1))  # same as-of twice -> no dupes
+    assert intervals() == [date(2024, 12, 1)]
+    backdate(date(2025, 6, 1))  # different as-of -> replaced again
+    assert intervals() == [date(2025, 6, 1)]
+
+
+def test_seed_instrument_ciks_preserves_existing_profiles(
+    repo: MarketDataRepository, engine: Engine
+) -> None:
+    from dynamo.domain.models.market import Instrument
+
+    repo.upsert_instruments(
+        [Instrument(symbol="AAPL", name="Apple Inc.", sector="Information Technology")]
+    )
+    repo.seed_instrument_ciks({"AAPL": "0000320193", "NEWCO": "0000000042"})
+    with engine.connect() as conn:
+        rows = {r.symbol: r for r in conn.execute(select(schema.instruments))}
+    assert rows["AAPL"].cik == "0000320193"
+    assert rows["AAPL"].name == "Apple Inc."  # profile untouched
+    assert rows["AAPL"].sector == "Information Technology"
+    assert rows["NEWCO"].cik == "0000000042"  # minimal new row
+    assert rows["NEWCO"].name == "NEWCO"
 
 
 def test_quarantine_and_alert_writes(repo: MarketDataRepository, engine: Engine) -> None:

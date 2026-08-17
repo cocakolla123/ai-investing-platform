@@ -63,6 +63,14 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--initial-equity", type=float, default=100_000.0)
     run.add_argument("--horizon-sessions", type=int, default=20)
     run.add_argument("--database-url", default=None)
+    run.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help=(
+            "skip the data-readiness preflight; the skip is recorded in the "
+            "run metadata (config_json), never in ReplayConfig"
+        ),
+    )
 
     est = sub.add_parser(
         "estimate",
@@ -89,6 +97,32 @@ def _engine(database_url: str | None) -> Any:
     return make_engine(database_url or Settings().database_url)
 
 
+def _preflight_extras(engine: Any, config: Any, *, skip: bool) -> dict[str, Any] | None:
+    """The ``{"preflight": ...}`` config_json extras, or ``None`` on failure.
+
+    Runs :func:`dynamo.replay.preflight.run_preflight` before EVERY run.
+    ``skip=True`` records the skip in run metadata instead of checking (kept
+    out of ``ReplayConfig`` so the deterministic run id never changes).
+    """
+    from dynamo.replay.preflight import PreflightError, run_preflight
+
+    if skip:
+        print("preflight SKIPPED (--skip-preflight) — skip recorded in run metadata")
+        return {"preflight": {"skipped": True}}
+    try:
+        report = run_preflight(engine, config)
+    except PreflightError as exc:
+        print("preflight FAILED — refusing to run:")
+        for check in exc.report.checks:
+            print(f"  [{check.status.upper():7}] {check.name}: {check.detail}")
+        print("fix the data above (backfills), or re-run with --skip-preflight.")
+        return None
+    for check in report.warnings:
+        print(f"preflight warning: {check.name}: {check.detail}")
+    print("preflight OK")
+    return {"preflight": {"skipped": False, **report.as_dict()}}
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     if args.mode == "committee":
         return _cmd_run_committee(args)
@@ -107,11 +141,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
         initial_equity=args.initial_equity,
         horizon_sessions=args.horizon_sessions,
     )
+    extras = _preflight_extras(engine, config, skip=args.skip_preflight)
+    if extras is None:
+        return 1
     runner = ReplayRunner(
         gateway_factory=lambda d: HistoricalDataGateway(engine, d),
         experience_repo=ExperienceRepository(engine),
         run_repo=ReplayRepository(engine),
         config=config,
+        run_config_extras=extras,
     )
     print(f"replay {config.run_id} ({config.start} -> {config.end}, mode={config.mode})")
     result = runner.run(progress=print)
@@ -169,6 +207,9 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         horizon_sessions=args.horizon_sessions,
         committee_deep_dives_per_day=args.deep_dives_per_day,
     )
+    extras = _preflight_extras(engine, config, skip=args.skip_preflight)
+    if extras is None:
+        return 1
     # Resume accounting: a re-run of the same config (same deterministic
     # run id) starts from the durable spent_usd, not from zero.
     prior = run_repo.get_run(config.run_id)
@@ -198,6 +239,7 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
             "arbiter": settings.model_arbiter,
         },
         embedder=LocalEmbedder(),
+        run_config_extras=extras,
     )
     print(
         f"committee replay {config.run_id} ({config.start} -> {config.end}) "

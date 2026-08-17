@@ -1,0 +1,274 @@
+"""Replay preflight tests (backtest-campaign Phase 1): every failure mode is
+LOUD, the report shape is stable, and the Phase-2/3 hooks behave both before
+and after those phases land. NO network, NO database — a fake reads object
+stands in for the engine."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+from typing import Any
+
+import pytest
+
+from dynamo.replay import preflight as pf
+from dynamo.replay.runner import (
+    REGIME_MACRO_LOOKBACK_DAYS,
+    RETURNS_LOOKBACK_DAYS,
+    ReplayConfig,
+)
+
+START = date(2026, 2, 2)
+END = date(2026, 7, 31)
+LOOKBACK = START - timedelta(days=RETURNS_LOOKBACK_DAYS)
+MACRO_REACH = START - timedelta(days=REGIME_MACRO_LOOKBACK_DAYS)
+
+SYMBOLS = [f"S{i:02d}" for i in range(20)]
+
+
+@dataclass
+class FakeReads:
+    """In-memory PreflightReads: healthy by default, degradable per test."""
+
+    universe: list[str] = field(default_factory=lambda: list(SYMBOLS))
+    bars_missing_at: dict[date, set[str]] = field(default_factory=dict)
+    macro_first: dict[str, date | None] = field(
+        default_factory=lambda: {
+            s: MACRO_REACH - timedelta(days=30) for s in pf.REQUIRED_MACRO_SERIES
+        }
+    )
+    runs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    bar_queries: list[tuple[date, date]] = field(default_factory=list)
+
+    def universe_symbols(self, as_of: date, tiers: tuple[int, ...]) -> list[str]:
+        return list(self.universe)
+
+    def symbols_with_bars(
+        self, symbols: Sequence[str], start: date, end: date
+    ) -> set[str]:
+        self.bar_queries.append((start, end))
+        missing: set[str] = set()
+        for anchor, syms in self.bars_missing_at.items():
+            if start <= anchor <= end:
+                missing = syms
+        return set(symbols) - missing
+
+    def macro_first_observation(
+        self, series_ids: Sequence[str], vintage_cutoff: date
+    ) -> dict[str, date | None]:
+        return {s: self.macro_first.get(s) for s in series_ids}
+
+    def get_run(self, run_id: str) -> Mapping[str, Any] | None:
+        return self.runs.get(run_id)
+
+
+def config(**overrides: Any) -> ReplayConfig:
+    payload: dict[str, Any] = {
+        "start": START,
+        "end": END,
+        "mode": "quant",
+        "label": "preflight-test",
+    }
+    payload.update(overrides)
+    return ReplayConfig(**payload)
+
+
+def errors_of(exc: pf.PreflightError) -> dict[str, str]:
+    return {c.name: c.detail for c in exc.report.errors}
+
+
+# -- happy path + report shape ----------------------------------------------
+
+
+def test_healthy_data_passes_with_quant_model_warning() -> None:
+    report = pf.run_preflight(FakeReads(), config())
+    assert report.passed
+    names = [c.name for c in report.checks]
+    assert names == [
+        "universe",
+        "bar_coverage_start",
+        "bar_coverage_lookback",
+        "macro_history",
+        "quant_model",
+        "source_run",
+    ]
+    # quant_model_version unset -> warning recorded, never an error.
+    assert [c.name for c in report.warnings] == ["quant_model"]
+
+    payload = report.as_dict()
+    assert payload["passed"] is True
+    assert len(payload["checks"]) == len(report.checks)
+    assert set(payload["checks"][0]) == {"name", "status", "detail"}
+
+
+def test_bar_coverage_checked_at_start_and_at_lookback() -> None:
+    reads = FakeReads()
+    pf.run_preflight(reads, config())
+    assert len(reads.bar_queries) == 2
+    (s1, e1), (s2, e2) = reads.bar_queries
+    assert s1 <= START <= e1
+    assert s2 <= LOOKBACK <= e2
+
+
+# -- failure modes (each loud) ----------------------------------------------
+
+
+def test_empty_universe_is_an_error() -> None:
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(FakeReads(universe=[]), config())
+    errs = errors_of(exc.value)
+    assert "universe" in errs
+    assert "EMPTY" in errs["universe"]
+    # bar coverage is not checked against an empty universe
+    assert not any(n.startswith("bar_coverage") for n in errs)
+
+
+def test_bar_coverage_below_95pct_at_start_is_an_error() -> None:
+    reads = FakeReads(bars_missing_at={START: set(SYMBOLS[:2])})  # 18/20 = 90%
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config())
+    errs = errors_of(exc.value)
+    assert "bar_coverage_start" in errs
+    assert "95%" in errs["bar_coverage_start"]
+    assert "bar_coverage_lookback" not in errs
+
+
+def test_bar_coverage_below_95pct_at_lookback_is_an_error() -> None:
+    reads = FakeReads(bars_missing_at={LOOKBACK: set(SYMBOLS[:2])})
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config())
+    assert "bar_coverage_lookback" in errors_of(exc.value)
+
+
+def test_exactly_95pct_coverage_passes() -> None:
+    reads = FakeReads(bars_missing_at={START: set(SYMBOLS[:1])})  # 19/20 = 95%
+    report = pf.run_preflight(reads, config())
+    assert report.passed
+
+
+def test_macro_series_missing_or_short_is_an_error() -> None:
+    reads = FakeReads(
+        macro_first={
+            "BAMLH0A0HYM2": None,  # never ingested
+            "T10Y3M": MACRO_REACH + timedelta(days=1),  # too shallow
+        }
+    )
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config())
+    detail = errors_of(exc.value)["macro_history"]
+    assert "BAMLH0A0HYM2" in detail and "no observations" in detail
+    assert "T10Y3M" in detail
+
+
+# -- quant-model hook (Phase 2) ---------------------------------------------
+
+
+def test_quant_model_version_set_but_no_loader_is_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dynamo.research.quant.training as training
+
+    # Pre-Phase-2 state: no loader on the module (future-proofed).
+    monkeypatch.delattr(training, "bundle_from_version", raising=False)
+    cfg = config()
+    object.__setattr__(cfg, "quant_model_version", "campaign-v1")
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(FakeReads(), cfg)
+    assert "quant_model" in errors_of(exc.value)
+
+
+def test_quant_model_loader_failure_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import dynamo.research.quant.training as training
+
+    def bundle_from_version(version: str) -> Any:
+        raise LookupError(f"unknown model version {version!r}")
+
+    monkeypatch.setattr(
+        training, "bundle_from_version", bundle_from_version, raising=False
+    )
+    cfg = config()
+    object.__setattr__(cfg, "quant_model_version", "campaign-v1")
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(FakeReads(), cfg)
+    assert "not loadable" in errors_of(exc.value)["quant_model"]
+
+
+def test_quant_model_loadable_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    import dynamo.research.quant.training as training
+
+    monkeypatch.setattr(
+        training, "bundle_from_version", lambda version: object(), raising=False
+    )
+    cfg = config()
+    object.__setattr__(cfg, "quant_model_version", "campaign-v1")
+    report = pf.run_preflight(FakeReads(), cfg)
+    check = next(c for c in report.checks if c.name == "quant_model")
+    assert check.status == pf.OK
+
+
+# -- source-run hook (Phase 3, against replay_runs today) -------------------
+
+
+def _committee_run(start: date = START, end: date = END, mode: str = "committee") -> dict[str, Any]:
+    return {"id": "replay-src", "mode": mode, "start_as_of": start, "end_as_of": end}
+
+
+def test_source_run_must_exist() -> None:
+    cfg = config()
+    object.__setattr__(cfg, "source_run_id", "replay-missing")
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(FakeReads(), cfg)
+    assert "does not exist" in errors_of(exc.value)["source_run"]
+
+
+def test_source_run_must_be_committee_mode_and_covering() -> None:
+    reads = FakeReads(
+        runs={"replay-src": _committee_run(start=START + timedelta(days=5), mode="quant")}
+    )
+    cfg = config()
+    object.__setattr__(cfg, "source_run_id", "replay-src")
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, cfg)
+    detail = errors_of(exc.value)["source_run"]
+    assert "'quant'" in detail
+    assert "does not cover" in detail
+
+
+def test_valid_source_run_passes() -> None:
+    reads = FakeReads(runs={"replay-src": _committee_run()})
+    cfg = config()
+    object.__setattr__(cfg, "source_run_id", "replay-src")
+    report = pf.run_preflight(reads, cfg)
+    check = next(c for c in report.checks if c.name == "source_run")
+    assert check.status == pf.OK
+
+
+def test_portfolio_mode_without_source_run_is_an_error() -> None:
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(FakeReads(), config(mode="portfolio"))
+    assert "source_run" in errors_of(exc.value)
+
+
+# -- error aggregation ------------------------------------------------------
+
+
+def test_all_failures_reported_together() -> None:
+    reads = FakeReads(
+        universe=list(SYMBOLS),
+        bars_missing_at={START: set(SYMBOLS[:10]), LOOKBACK: set(SYMBOLS[:10])},
+        macro_first={s: None for s in pf.REQUIRED_MACRO_SERIES},
+    )
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config())
+    errs = errors_of(exc.value)
+    assert set(errs) == {"bar_coverage_start", "bar_coverage_lookback", "macro_history"}
+    # The exception message itself lists every error (loudness contract).
+    for name in errs:
+        assert name in str(exc.value)
+
+
+def test_session_window_spans_center() -> None:
+    lo, hi = pf.session_window(date(2026, 2, 2))
+    assert lo < date(2026, 2, 2) < hi
+    assert (hi - lo).days <= 30

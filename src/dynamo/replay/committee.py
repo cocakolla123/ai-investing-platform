@@ -358,6 +358,7 @@ class CommitteeReplay:
         sleep_fn: Callable[[float], None] = _time.sleep,
         poll_initial_s: float = POLL_INITIAL_S,
         poll_timeout_s: float = POLL_TIMEOUT_S,
+        run_config_extras: Mapping[str, Any] | None = None,
     ) -> None:
         if config.mode != "committee":
             raise ValueError(f"CommitteeReplay requires mode='committee', got {config.mode!r}")
@@ -385,6 +386,9 @@ class CommitteeReplay:
         self._sleep = sleep_fn
         self._poll_initial_s = poll_initial_s
         self._poll_timeout_s = poll_timeout_s
+        # Run-metadata extras (e.g. the preflight report) merged into
+        # replay_runs.config_json — NOT part of ReplayConfig (run-id stability).
+        self._run_config_extras = dict(run_config_extras or {})
 
     # ------------------------------------------------------------------ run
     def run(self, progress: Callable[[str], None] | None = None) -> CommitteeReplayResult:
@@ -399,7 +403,7 @@ class CommitteeReplay:
             mode=cfg.mode,
             start_as_of=cfg.start,
             end_as_of=cfg.end,
-            config=cfg.model_dump(mode="json"),
+            config={**cfg.model_dump(mode="json"), **self._run_config_extras},
             code_version=cfg.code_version,
             budget_usd=self._budget.cap_usd,
             status="running",

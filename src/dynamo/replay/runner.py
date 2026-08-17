@@ -436,6 +436,7 @@ class ReplayRunner:
         *,
         risk_config: RiskConfig | None = None,
         construction_config: ConstructionConfig | None = None,
+        run_config_extras: Mapping[str, Any] | None = None,
     ) -> None:
         if config.mode != "quant":
             raise ValueError(
@@ -446,6 +447,10 @@ class ReplayRunner:
         self._experiences = experience_repo
         self._runs = run_repo
         self.config = config
+        # Run-metadata extras (e.g. the preflight report) recorded into
+        # replay_runs.config_json alongside the config — deliberately NOT part
+        # of ReplayConfig, so they never perturb the deterministic run id.
+        self._run_config_extras = dict(run_config_extras or {})
         self._risk_config = risk_config or RiskConfig()
         # Replay construction defaults: quality_floor=0 (replay has no quality
         # scores; the synthesized watchlist carries an informational
@@ -475,7 +480,7 @@ class ReplayRunner:
             mode=cfg.mode,
             start_as_of=cfg.start,
             end_as_of=cfg.end,
-            config=cfg.model_dump(mode="json"),
+            config={**cfg.model_dump(mode="json"), **self._run_config_extras},
             code_version=cfg.code_version,
             budget_usd=None,
             status="running",

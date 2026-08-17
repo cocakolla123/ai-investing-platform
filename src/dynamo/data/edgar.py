@@ -41,6 +41,7 @@ log = structlog.get_logger(__name__)
 SEARCH_BASE = "https://efts.sec.gov/LATEST/search-index"
 DATA_BASE = "https://data.sec.gov"
 ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data"
+FILES_BASE = "https://www.sec.gov/files"
 
 _SYMBOL_RE = re.compile(r"\(([A-Z][A-Z0-9.\-]*)\)\s+\(CIK")
 _XML_NS_RE = re.compile(r"\{.*\}")
@@ -68,6 +69,7 @@ class EdgarClient:
         search_base: str = SEARCH_BASE,
         data_base: str = DATA_BASE,
         archives_base: str = ARCHIVES_BASE,
+        files_base: str = FILES_BASE,
         max_pages: int = 10,
         max_insider_filings: int = 50,
     ) -> None:
@@ -78,6 +80,7 @@ class EdgarClient:
         self._search_base = search_base
         self._data_base = data_base
         self._archives_base = archives_base
+        self._files_base = files_base
         self._max_pages = max_pages
         self._max_insider_filings = max_insider_filings
 
@@ -172,6 +175,28 @@ class EdgarClient:
                         unit=unit,
                         filed_at=_to_dt(filed),
                     )
+
+    def company_ticker_map(self) -> dict[str, str]:
+        """symbol -> zero-padded CIK from SEC's ``company_tickers.json``.
+
+        The published mapping (updated periodically by the SEC) covers every
+        EDGAR filer with a listed ticker. SEC spells share classes with a
+        dash (``BRK-B``); the platform uses the dot form (``BRK.B``), so
+        dashes are normalized to dots. Used by the backfill CLI's
+        ``fundamentals --seed-ciks`` to populate ``instruments.cik``.
+        """
+        payload = self._get(f"{self._files_base}/company_tickers.json")
+        out: dict[str, str] = {}
+        for entry in (payload or {}).values():
+            ticker = entry.get("ticker")
+            cik = entry.get("cik_str")
+            if not ticker or cik is None:
+                continue
+            symbol = str(ticker).upper().replace("-", ".")
+            # First occurrence wins: the file is ordered by market cap, so a
+            # duplicate ticker (rare) resolves to the larger filer.
+            out.setdefault(symbol, f"{int(cik):010d}")
+        return out
 
     def insider_transactions(self, since: datetime) -> Iterable[InsiderTx]:
         """Form 4 non-derivative transactions (simplified parse; see module doc)."""

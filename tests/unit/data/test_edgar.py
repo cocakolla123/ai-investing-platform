@@ -115,6 +115,23 @@ def test_company_facts_parses_us_gaap_tags() -> None:
     assert shares.unit == "shares"
 
 
+def test_company_ticker_map_normalizes_and_pads() -> None:
+    payload = {
+        "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
+        "1": {"cik_str": 1067983, "ticker": "BRK-B", "title": "Berkshire"},
+        "2": {"cik_str": 99999, "ticker": "AAPL", "title": "Dup ticker (ignored)"},
+        "3": {"cik_str": None, "ticker": "NOCIK"},
+        "4": {"cik_str": 12345, "ticker": ""},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).endswith("/company_tickers.json")
+        return httpx.Response(200, json=payload)
+
+    mapping = make_client(httpx.MockTransport(handler)).company_ticker_map()
+    assert mapping == {"AAPL": "0000320193", "BRK.B": "0001067983"}
+
+
 def test_recent_filings_maps_index_hits() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=SEARCH_HITS)
