@@ -103,6 +103,16 @@ class FakeRepo:
         self.inserted_rows.append(("transcripts", transcripts))
         return len(transcripts)
 
+    def upsert_bars(self, bars: Any, timeframe: str = "1d") -> int:
+        bars = list(bars)
+        self.inserted_rows.append((f"bars_{timeframe}", bars))
+        return len(bars)
+
+    def upsert_instruments(self, instruments: Any) -> int:
+        instruments = list(instruments)
+        self.inserted_rows.append(("instruments", instruments))
+        return len(instruments)
+
     def link_transcript_ref(self, symbol: str, event_date: Any, ref: str) -> int:
         self.transcript_links.append((symbol, event_date, ref))
         return 1
@@ -131,6 +141,7 @@ class FakeState:
     defeatbeta_transcripts: list[Any] | None = None  # None -> extra not installed
     failure_count: int = 0  # failure_clustering_sensor feedstock count
     clustering_watermark: int = 0  # last recorded learning.cluster_watermark
+    crypto_provider: Any | None = None  # None -> crypto sleeve disabled (ADR-0013)
 
 
 _STATE: dict[str, FakeState] = {}
@@ -180,6 +191,9 @@ class FakeDynamo(DynamoResource):
                 return list(spreads)
 
         return _StubOddsPipe()
+
+    def alpaca_crypto(self) -> Any:
+        return self.st.crypto_provider
 
     def earnings_reporters(self, start: Any, end: Any) -> list[dict[str, Any]]:
         return [r for r in self.st.reporters if start <= r["event_date"] <= end]

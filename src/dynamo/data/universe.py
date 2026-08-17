@@ -24,7 +24,7 @@ from typing import Any, Protocol
 
 import structlog
 
-from dynamo.domain.models.market import Tier, UniverseMembership
+from dynamo.domain.models.market import Instrument, Tier, UniverseMembership
 
 log = structlog.get_logger(__name__)
 
@@ -43,6 +43,14 @@ STARTER_STOCKS: tuple[str, ...] = (
 # ~10 ETFs: broad index, sector SPDRs sample, treasuries (doc 02 §2 curated set).
 STARTER_ETFS: tuple[str, ...] = (
     "SPY", "QQQ", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "TLT",
+)
+
+# Crypto sleeve starter pairs (ADR-0013): Alpaca-supported, canonical
+# "BASE/QUOTE" form. Joined into the Tier-1 seed when the sleeve is enabled
+# (settings.crypto_enabled -> UniverseManager(include_crypto=...)). Mirrors
+# the settings.crypto_universe default.
+CRYPTO_STARTERS: tuple[str, ...] = (
+    "BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "LINK/USD",
 )
 
 
@@ -77,24 +85,38 @@ class UniverseManager:
         *,
         seed_path: str = DEFAULT_SEED_PATH,
         default_promotion_days: int = 30,
+        include_crypto: bool = True,
     ) -> None:
         self._store = store
         self._seed_path = Path(seed_path)
         self._default_promotion_days = default_promotion_days
+        # ADR-0013: callers pass settings.crypto_enabled; the default matches
+        # the settings default so existing wiring seeds the crypto pairs.
+        self._include_crypto = include_crypto
 
     # -- seeding -----------------------------------------------------------
 
     def _seed_symbols(self) -> list[tuple[str, str]]:
-        """(symbol, origin) pairs from the seed file, else the built-in list."""
+        """(symbol, origin) pairs from the seed file, else the built-in list.
+
+        Crypto starter pairs (ADR-0013) are appended in BOTH branches when
+        enabled — the equity seed file does not govern the crypto sleeve.
+        """
         if self._seed_path.exists():
             symbols = [
                 line.strip().upper()
                 for line in self._seed_path.read_text().splitlines()
                 if line.strip() and not line.strip().startswith("#")
             ]
-            return [(s, f"seed file {self._seed_path}") for s in symbols]
-        builtin = [(s, "built-in starter list") for s in (*STARTER_STOCKS, *STARTER_ETFS)]
-        return builtin
+            out = [(s, f"seed file {self._seed_path}") for s in symbols]
+        else:
+            out = [(s, "built-in starter list") for s in (*STARTER_STOCKS, *STARTER_ETFS)]
+        if self._include_crypto:
+            seen = {s for s, _ in out}
+            out.extend(
+                (s, "crypto starter list") for s in CRYPTO_STARTERS if s not in seen
+            )
+        return out
 
     def seed_core(self, as_of: date) -> int:
         """Seed Tier 1 once; idempotent (no-op when Tier 1 already populated)."""
@@ -283,4 +305,24 @@ def default_sector_etf_map(sectors: Mapping[str, str]) -> dict[str, str]:
 
 def seed_symbols_documented() -> Sequence[str]:
     """The built-in starter universe (user-expandable via the seed file)."""
-    return (*STARTER_STOCKS, *STARTER_ETFS)
+    return (*STARTER_STOCKS, *STARTER_ETFS, *CRYPTO_STARTERS)
+
+
+def crypto_instruments(symbols: Sequence[str]) -> list[Instrument]:
+    """Instrument rows for crypto pairs (ADR-0013).
+
+    Crypto has no GICS sector; committee dossiers and the risk engine's
+    sector caps key off ``instruments.sector``, so crypto pairs get the
+    literal sector ``"crypto"`` — they share one sector bucket, which is the
+    conservative reading (highly correlated assets share a cap). Upserted by
+    the nightly ``crypto_bars`` asset (idempotent).
+    """
+    return [
+        Instrument(
+            symbol=symbol,
+            name=symbol,
+            exchange="alpaca_crypto",
+            sector="crypto",
+        )
+        for symbol in symbols
+    ]

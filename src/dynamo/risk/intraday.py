@@ -28,6 +28,7 @@ from datetime import date
 
 from dynamo.domain.models.research import Action, CommitteeVerdict, Signal
 from dynamo.domain.models.risk import RiskConfig
+from dynamo.domain.symbols import is_crypto_symbol
 from dynamo.risk.sizing import SizingCandidate, SizingContext, size_positions
 
 PDT_EQUITY_FLOOR = 25_000.0
@@ -163,6 +164,19 @@ def select_intraday_entries(
 
 
 # --- PDT guard (doc 13 §6: the execution layer counts day trades) ----------
+
+
+def pdt_relevant_fills(
+    fills: Iterable[tuple[str, str, date]],
+) -> list[tuple[str, str, date]]:
+    """Drop crypto fills before PDT accounting (ADR-0013).
+
+    FINRA's pattern-day-trader rule applies to margin securities accounts
+    only — Alpaca crypto trades never count as day trades and crypto exits
+    are never deferred by the guard. Callers filter fills through this before
+    :func:`count_day_trades` / building the entered-today set.
+    """
+    return [f for f in fills if not is_crypto_symbol(f[0])]
 
 
 def count_day_trades(fills: Iterable[tuple[str, str, date]]) -> int:

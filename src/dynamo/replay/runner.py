@@ -27,6 +27,14 @@ Determinism: no wall clock, no randomness — every timestamp derives from the
 run configuration; the same config produces byte-identical decisions and
 experiences (the run id itself is a hash of the config).
 
+Crypto (ADR-0013), v1 convention: crypto pairs flow through the same loop
+when present in the universe + bars, but the calendar stays NYSE — crypto
+trades AND marks on equity sessions only. Weekend bars sit in the bars frame
+harmlessly (weekend rows never match a session date in ``_day_prices``); the
+first session after a weekend marks positions at that session's close, so
+weekend price moves surface on Monday. Sizing/caps come from the same
+production constructor + cascade (crypto sleeve caps included).
+
 FIREWALL: the runner writes ONLY through ``ReplayRepository`` (replay_runs /
 replay_decisions) and ``ExperienceRepository.insert`` (source='replay').
 """

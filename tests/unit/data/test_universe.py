@@ -57,25 +57,55 @@ class FakeStore:
         self.alerts.append({"severity": severity, "name": name, "message": message})
 
 
-def make_manager(store: FakeStore, seed_path: str = "/nonexistent/seed.txt") -> UniverseManager:
-    return UniverseManager(store, seed_path=seed_path)
+def make_manager(
+    store: FakeStore,
+    seed_path: str = "/nonexistent/seed.txt",
+    include_crypto: bool = True,
+) -> UniverseManager:
+    return UniverseManager(store, seed_path=seed_path, include_crypto=include_crypto)
 
 
 def test_seed_core_builtin_list_is_idempotent() -> None:
     store = FakeStore()
     manager = make_manager(store)
     count = manager.seed_core(AS_OF)
-    assert count == 50  # ~40 stocks + ~10 ETFs
-    assert "AAPL" in {m.symbol for m in store.universe_at(AS_OF, Tier.CORE)}
+    assert count == 55  # ~40 stocks + ~10 ETFs + 5 crypto pairs (ADR-0013)
+    symbols = {m.symbol for m in store.universe_at(AS_OF, Tier.CORE)}
+    assert "AAPL" in symbols
+    assert "BTC/USD" in symbols
     assert manager.seed_core(AS_OF) == 0  # second run is a no-op
 
 
-def test_seed_core_from_file(tmp_path: Path) -> None:
+def test_seed_core_from_file_still_appends_crypto(tmp_path: Path) -> None:
+    """ADR-0013: the equity seed file does not govern the crypto sleeve —
+    crypto starters join in both branches, with their own origin string."""
     seed = tmp_path / "universe_seed.txt"
     seed.write_text("# core\nAAPL\nmsft\n\nSPY\n")
     store = FakeStore()
     make_manager(store, seed_path=str(seed)).seed_core(AS_OF)
-    assert {m.symbol for m in store.universe_at(AS_OF, Tier.CORE)} == {"AAPL", "MSFT", "SPY"}
+    members = store.universe_at(AS_OF, Tier.CORE)
+    assert {m.symbol for m in members} == {
+        "AAPL", "MSFT", "SPY", "BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "LINK/USD",
+    }
+    reasons = {m.symbol: m.reason for m in members}
+    assert reasons["BTC/USD"] == "core seed: crypto starter list"
+
+
+def test_seed_core_crypto_disabled_seeds_equities_only(tmp_path: Path) -> None:
+    seed = tmp_path / "universe_seed.txt"
+    seed.write_text("AAPL\nSPY\n")
+    store = FakeStore()
+    make_manager(store, seed_path=str(seed), include_crypto=False).seed_core(AS_OF)
+    assert {m.symbol for m in store.universe_at(AS_OF, Tier.CORE)} == {"AAPL", "SPY"}
+
+
+def test_crypto_instruments_rows_carry_the_crypto_sector() -> None:
+    from dynamo.data.universe import CRYPTO_STARTERS, crypto_instruments
+
+    rows = crypto_instruments(CRYPTO_STARTERS)
+    assert [r.symbol for r in rows] == list(CRYPTO_STARTERS)
+    assert all(r.sector == "crypto" for r in rows)
+    assert all(not r.is_etf for r in rows)
 
 
 def test_promote_writes_window_and_extends() -> None:

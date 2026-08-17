@@ -38,6 +38,7 @@ from dynamo.domain.models.research import (
     WatchlistRow,
 )
 from dynamo.domain.models.risk import Regime, RiskConfig, RiskVerdict
+from dynamo.domain.symbols import is_crypto_symbol
 from dynamo.portfolio.config import ConstructionConfig
 from dynamo.risk.ladder import effects_for
 from dynamo.risk.sizing import SizingCandidate, SizingContext, size_positions
@@ -114,12 +115,22 @@ def _finite_pos(x: float) -> bool:
     return math.isfinite(x) and x > 0.0
 
 
+def _core_sleeve(symbol: str) -> Sleeve:
+    """The nightly-watchlist sleeve a symbol belongs to (ADR-0013).
+
+    Crypto pairs ride the long-term selection path (ranked watchlist, entry
+    verdicts) but are tagged ``Sleeve.CRYPTO`` so lots, orders, and decision
+    contexts carry the sleeve and the crypto caps bind in sizing/compliance.
+    """
+    return Sleeve.CRYPTO if is_crypto_symbol(symbol) else Sleeve.LONG_TERM
+
+
 def _held_sleeves(state: PortfolioState) -> dict[str, set[Sleeve]]:
     out: dict[str, set[Sleeve]] = {}
     for position in state.positions:
         if position.qty == 0.0:
             continue
-        sleeves = {lot.sleeve for lot in position.lots} or {Sleeve.LONG_TERM}
+        sleeves = {lot.sleeve for lot in position.lots} or {_core_sleeve(position.symbol)}
         out.setdefault(position.symbol, set()).update(sleeves)
     return out
 
@@ -310,17 +321,19 @@ class RuleBasedConstructor:
         lt_symbols: set[str] = set()
 
         # Retained holdings first (incumbents; doc 07: holds are retained).
+        # Crypto lots (Sleeve.CRYPTO) live inside the long-term selection
+        # path — same retention/entry rules, crypto caps applied in sizing.
         for symbol in sorted(held):
             if symbol in exits or symbol not in cur_w:
                 continue
-            if Sleeve.LONG_TERM not in held[symbol]:
+            if not held[symbol] & {Sleeve.LONG_TERM, Sleeve.CRYPTO}:
                 continue
             v = inputs.verdicts.get(symbol)
             if symbol in trims:
                 lt_lots.append(
                     _Lot(
                         symbol=symbol,
-                        sleeve=Sleeve.LONG_TERM,
+                        sleeve=_core_sleeve(symbol),
                         desired=cur_w[symbol] * _TRIM_FRACTION,
                         is_new=False,
                         mandatory_cap=cur_w[symbol] * _TRIM_FRACTION,
@@ -339,7 +352,7 @@ class RuleBasedConstructor:
                 lt_lots.append(
                     _Lot(
                         symbol=symbol,
-                        sleeve=Sleeve.LONG_TERM,
+                        sleeve=_core_sleeve(symbol),
                         desired=cur_w[symbol],
                         is_new=False,
                         mandatory_cap=None,
@@ -393,7 +406,7 @@ class RuleBasedConstructor:
             lt_lots.append(
                 _Lot(
                     symbol=symbol,
-                    sleeve=Sleeve.LONG_TERM,
+                    sleeve=_core_sleeve(symbol),
                     desired=0.0,  # sized by the cascade
                     is_new=True,
                     mandatory_cap=None,
@@ -545,7 +558,9 @@ class RuleBasedConstructor:
             sizing_candidates.append(
                 SizingCandidate(
                     symbol=lot.symbol,
-                    sleeve=sleeve,
+                    # Crypto lots ride the long-term sleeve budget but carry
+                    # Sleeve.CRYPTO (crypto caps bind inside the cascade).
+                    sleeve=lot.sleeve,
                     conviction=conviction,
                     sigma_annual=inputs.sigma_annual.get(lot.symbol, float("nan")),
                     adv_dollar_20d=inputs.adv_dollar_20d.get(lot.symbol, float("nan")),
@@ -739,6 +754,7 @@ class RuleBasedConstructor:
         symbol_alloc: dict[str, float] = {}
         sector_alloc: dict[str, float] = {}
         cluster_alloc: dict[str, float] = {}
+        crypto_alloc = 0.0  # crypto sleeve total (ADR-0013)
         total = 0.0
         out: list[_Lot] = []
         investable = max(0.0, min(verdict.gross_exposure_cap, 1.0 - verdict.cash_floor))
@@ -757,11 +773,23 @@ class RuleBasedConstructor:
                 clamps.append("invalid_input")
 
             symbol_cap = verdict.per_position_cap.get(lot.symbol, rcfg.per_position_hard)
+            lot_is_crypto = is_crypto_symbol(lot.symbol)
+            if lot_is_crypto:
+                # Crypto caps are hard bounds even for retained lots
+                # (ADR-0013): per-pair, then the collective sleeve below.
+                symbol_cap = min(symbol_cap, rcfg.crypto_max_position)
             avail = symbol_cap - symbol_alloc.get(lot.symbol, 0.0)
             if w > avail:
                 w = max(avail, 0.0)
                 verdict_clamped = True
                 clamps.append("per_position_cap")
+
+            if lot_is_crypto:
+                avail = rcfg.crypto_sleeve_cap - crypto_alloc
+                if w > avail:
+                    w = max(avail, 0.0)
+                    verdict_clamped = True
+                    clamps.append("crypto_sleeve_cap")
 
             sector = sector_by_symbol.get(lot.symbol)
             if sector is not None and sector in verdict.sector_caps:
@@ -799,6 +827,8 @@ class RuleBasedConstructor:
                     sector_alloc[sector] = sector_alloc.get(sector, 0.0) + w
                 if cluster is not None:
                     cluster_alloc[cluster] = cluster_alloc.get(cluster, 0.0) + w
+                if lot_is_crypto:
+                    crypto_alloc += w
                 total += w
             out.append(
                 _Lot(

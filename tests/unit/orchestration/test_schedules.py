@@ -9,6 +9,10 @@ TZ = "America/New_York"
 
 EXPECTED_CRONS = {
     "eod_ingest_schedule": "30 21 * * 1-5",
+    # Crypto sleeve (ADR-0013): bars every day (24/7 market), stops every 2h
+    # on weekends (the weekday 15-min loop covers market hours).
+    "crypto_bars_schedule": "35 21 * * *",
+    "crypto_stops_schedule": "0 */2 * * 6,0",
     "insider_schedule": "0 * * * *",
     "news_schedule": "*/30 * * * 1-5",
     "macro_ingest_schedule": "0 8 * * *",
@@ -76,3 +80,11 @@ def test_failure_clustering_job_registered_but_never_scheduled() -> None:
     assert "failure_clustering_job" in names
     scheduled_jobs = {s.job.name for s in ALL_SCHEDULES}
     assert "failure_clustering_job" not in scheduled_jobs
+
+
+def test_crypto_stops_schedule_runs_the_full_stops_job() -> None:
+    """ADR-0013: weekend crypto stop coverage reuses the existing stops job —
+    the simpler correct option (equity GTC stop replaces queue harmlessly
+    off-hours; crypto stops get real weekend maintenance)."""
+    assert BY_NAME["crypto_stops_schedule"].job.name == "stops_job"
+    assert BY_NAME["stops_schedule"].job.name == "stops_job"

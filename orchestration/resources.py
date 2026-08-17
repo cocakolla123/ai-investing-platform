@@ -19,6 +19,7 @@ from dynamo.config.settings import Settings
 if TYPE_CHECKING:
     from sqlalchemy import Engine
 
+    from dynamo.data.alpaca_crypto import AlpacaCryptoData
     from dynamo.data.alpaca_data import AlpacaMarketData
     from dynamo.data.edgar import EdgarClient
     from dynamo.data.finnhub import FinnhubClient
@@ -148,6 +149,17 @@ class DynamoResource(ConfigurableResource):
         from dynamo.data.alpaca_data import AlpacaMarketData
 
         return AlpacaMarketData(s.alpaca_api_key, s.alpaca_api_secret)
+
+    def alpaca_crypto(self) -> AlpacaCryptoData | None:
+        """Crypto bars adapter (ADR-0013); None only when the sleeve is
+        disabled — crypto data needs no API keys (keys are passed through
+        when present for higher rate limits)."""
+        s = self.settings()
+        if not s.crypto_enabled:
+            return None
+        from dynamo.data.alpaca_crypto import AlpacaCryptoData
+
+        return AlpacaCryptoData(s.alpaca_api_key, s.alpaca_api_secret)
 
     def tiingo(self) -> TiingoClient | None:
         s = self.settings()

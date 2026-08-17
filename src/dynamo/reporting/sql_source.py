@@ -53,9 +53,25 @@ class SqlReportSource:
 
     def open_position_counts(self) -> dict[str, int]:
         eq, op, pm = schema.positions, schema.options_positions, schema.pm_positions
+        # Crypto shares the positions table (same broker, ADR-0013); the
+        # canonical "BASE/QUOTE" symbol form makes the slash the discriminator
+        # (dynamo.domain.symbols.is_crypto_symbol, in SQL).
         return {
             "equities": int(
-                self._scalar(select(func.count()).select_from(eq).where(eq.c.qty != 0)) or 0
+                self._scalar(
+                    select(func.count())
+                    .select_from(eq)
+                    .where(eq.c.qty != 0, eq.c.symbol.not_like("%/%"))
+                )
+                or 0
+            ),
+            "crypto": int(
+                self._scalar(
+                    select(func.count())
+                    .select_from(eq)
+                    .where(eq.c.qty != 0, eq.c.symbol.like("%/%"))
+                )
+                or 0
             ),
             "options": int(
                 self._scalar(select(func.count()).select_from(op).where(op.c.contracts != 0))

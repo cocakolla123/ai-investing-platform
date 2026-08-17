@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
+from dynamo.domain.symbols import is_crypto_symbol
 from dynamo.llm.pricing import (
     BATCH_DISCOUNT,
     CACHE_READ_MULTIPLIER,
@@ -40,7 +41,7 @@ class ReportSource(Protocol):
 
     # --- at a glance ---
     def equity_points(self, day: date) -> list[Row]: ...  # last 2 rows <= day
-    def open_position_counts(self) -> dict[str, int]: ...  # equities/options/kalshi
+    def open_position_counts(self) -> dict[str, int]: ...  # equities/crypto/options/kalshi
     def regime_on(self, day: date) -> Row | None: ...
     def ladder_on(self, day: date) -> Row | None: ...
 
@@ -91,6 +92,7 @@ class Glance(BaseModel):
     day_change_pct: float | None = None
     cash_pct: float | None = None
     open_equities: int = 0
+    open_crypto: int = 0  # crypto sleeve (ADR-0013), same positions table
     open_options: int = 0
     open_kalshi: int = 0
     open_polymarket_sim: int = 0  # SIMULATED sleeve (ADR-0011) — no real orders
@@ -124,11 +126,11 @@ class Decisions(BaseModel):
 
 class TradeLine(BaseModel):
     filled_at: datetime
-    market: str  # stocks | options | kalshi
+    market: str  # stocks | crypto | options | kalshi | polymarket-sim
     instrument: str
     side: str
     quantity: float
-    quantity_unit: str  # shares | contracts
+    quantity_unit: str  # shares | coins | contracts
     fill_price: float
     price_unit: str  # $ | cents
     slippage_bps: float | None = None
@@ -245,6 +247,7 @@ def _glance(source: ReportSource, day: date, verdicts: list[Row], cost: CostSumm
         day_change_pct=day_change_pct,
         cash_pct=cash_pct,
         open_equities=int(counts.get("equities", 0)),
+        open_crypto=int(counts.get("crypto", 0)),
         open_options=int(counts.get("options", 0)),
         open_kalshi=int(counts.get("kalshi", 0)),
         open_polymarket_sim=int(counts.get("polymarket_sim", 0)),
@@ -293,18 +296,22 @@ def _decisions(verdicts: list[Row], watchlist: list[Row]) -> Decisions:
 def _trades(source: ReportSource, day: date) -> list[TradeLine]:
     lines: list[TradeLine] = []
     for t in source.equity_trades_on(day):
+        # Crypto fills live in the same trades table (same broker) but are
+        # labeled as their own market (ADR-0013) — clearly separated in the
+        # rendered table, mirroring how the PM sleeve is surfaced.
+        crypto = is_crypto_symbol(str(t["symbol"]))
         lines.append(
             TradeLine(
                 filled_at=t["filled_at"],
-                market="stocks",
+                market="crypto" if crypto else "stocks",
                 instrument=str(t["symbol"]),
                 side=str(t["side"]),
                 quantity=_f(t["qty"]),
-                quantity_unit="shares",
+                quantity_unit="coins" if crypto else "shares",
                 fill_price=_f(t["fill_price"]),
                 price_unit="$",
                 slippage_bps=None if t.get("slippage_bps") is None else _f(t["slippage_bps"]),
-                sleeve=t.get("sleeve"),
+                sleeve=t.get("sleeve") or ("crypto" if crypto else None),
             )
         )
     for t in source.options_trades_on(day):
@@ -529,8 +536,8 @@ def _render_glance(g: Glance, lines: list[str]) -> None:
     if g.cash_pct is not None:
         lines.append(f"- **Cash on hand:** {g.cash_pct:.1f}% of the portfolio")
     positions_line = (
-        f"- **Open positions:** {g.open_equities} stocks, {g.open_options} options, "
-        f"{g.open_kalshi} Kalshi event markets"
+        f"- **Open positions:** {g.open_equities} stocks, {g.open_crypto} crypto, "
+        f"{g.open_options} options, {g.open_kalshi} Kalshi event markets"
     )
     if g.open_polymarket_sim:
         positions_line += (

@@ -3,6 +3,8 @@
 | Job | When (ET) |
 |---|---|
 | EOD bars + corporate actions | 21:30 market days |
+| Crypto bars (24/7 market) | 21:35 every day |
+| Crypto weekend stops (full stops job) | every 2h Sat/Sun |
 | EDGAR filings poller | every 10 min, market days |
 | Form 4 / insider | hourly |
 | News | every 30 min, market days |
@@ -64,6 +66,10 @@ MARKET_DAYS = "1-5"  # Mon-Fri; exchange holidays no-op harmlessly (idempotent u
 eod_ingest_job = define_asset_job(
     "eod_ingest_job",
     selection=AssetSelection.assets("eod_bars", "corporate_actions"),
+)
+crypto_bars_job = define_asset_job(
+    "crypto_bars_job",
+    selection=AssetSelection.assets("crypto_bars"),
 )
 insider_job = define_asset_job(
     "insider_job",
@@ -163,6 +169,11 @@ def _partitioned_schedule(name: str, cron: str, job):
 
 eod_ingest_schedule = _partitioned_schedule(
     "eod_ingest_schedule", f"30 21 * * {MARKET_DAYS}", eod_ingest_job
+)
+# Crypto trades 24/7 (ADR-0013): bars ingest EVERY day, 5 minutes after the
+# equities EOD ingest slot.
+crypto_bars_schedule = _partitioned_schedule(
+    "crypto_bars_schedule", "35 21 * * *", crypto_bars_job
 )
 insider_schedule = _partitioned_schedule("insider_schedule", "0 * * * *", insider_job)
 news_schedule = _partitioned_schedule("news_schedule", f"*/30 * * * {MARKET_DAYS}", news_job)
@@ -288,6 +299,19 @@ stops_schedule = ScheduleDefinition(
     job=stops_job,
     execution_timezone=TZ,
 )
+# Crypto weekend stop coverage (ADR-0013): crypto trades through the weekend,
+# so the FULL stops job runs every 2h Sat/Sun. Running it unrestricted is the
+# simpler correct option: crypto stop specs get maintained, while equity stop
+# replaces are harmless (GTC stops queue at the broker outside market hours)
+# and synthetic-stop evaluation is quote-driven and quotes do not move for
+# closed markets. The 15-min weekday loop above already covers crypto during
+# market hours.
+crypto_stops_schedule = ScheduleDefinition(
+    name="crypto_stops_schedule",
+    cron_schedule="0 */2 * * 6,0",
+    job=stops_job,
+    execution_timezone=TZ,
+)
 nightly_rollup_schedule = ScheduleDefinition(
     name="nightly_rollup_schedule",
     cron_schedule="0 2 * * *",
@@ -322,6 +346,7 @@ weekly_learning_schedule = ScheduleDefinition(
 
 ALL_JOBS = [
     eod_ingest_job,
+    crypto_bars_job,
     insider_job,
     news_job,
     macro_ingest_job,
@@ -345,6 +370,7 @@ ALL_JOBS = [
 
 ALL_SCHEDULES = [
     eod_ingest_schedule,
+    crypto_bars_schedule,
     insider_schedule,
     news_schedule,
     macro_ingest_schedule,
@@ -368,6 +394,7 @@ ALL_SCHEDULES = [
     paper_execution_schedule,
     reconciliation_schedule,
     stops_schedule,
+    crypto_stops_schedule,
     nightly_rollup_schedule,
     daily_report_schedule,
     safety_checks_schedule,

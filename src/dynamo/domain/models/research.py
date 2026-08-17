@@ -227,6 +227,9 @@ class Signal(Frozen):
 class Sleeve(StrEnum):
     LONG_TERM = "long_term"
     TACTICAL = "tactical"
+    # Crypto sleeve (ADR-0013): Alpaca crypto pairs ("BTC/USD"), capped by
+    # settings.crypto_sleeve_cap / crypto_max_position in the sizing cascade.
+    CRYPTO = "crypto"
 
 
 class WatchlistRow(Frozen):

@@ -1,8 +1,24 @@
 """Alpaca implementation of the ``Broker`` port (doc 09 §1, §3, §8).
 
 Paper vs live is decided solely by ``settings.alpaca_base_url`` — the code
-path is identical. US equities/ETFs only; typed errors; rejects are never
-auto-retried; transient 5xx gets exactly one jittered retry then ``HaltSignal``.
+path is identical. US equities/ETFs plus Alpaca crypto pairs (ADR-0013);
+typed errors; rejects are never auto-retried; transient 5xx gets exactly one
+jittered retry then ``HaltSignal``.
+
+Crypto orders (ADR-0013) go through the SAME request classes with three
+differences, all handled in ``_build_request``:
+
+- ``time_in_force=GTC`` always — Alpaca rejects DAY/OPG for crypto;
+- no opening auction exists, so ``MARKET_ON_OPEN`` maps to a plain GTC
+  market order (24/7 market: it fills immediately);
+- plain stop orders are not supported for crypto — ``STOP`` maps to a GTC
+  stop-limit with the limit 1% through the stop (marketable once triggered).
+
+Fractional quantities are native for crypto and PDT does not apply (the PDT
+guard excludes crypto at the call site, orchestration/assets/portfolio_exec).
+Symbols use the canonical "BTC/USD" pair form on the way in; position and
+order payloads coming back may use the slashless "BTCUSD" form and are
+normalized at this edge (``dynamo.domain.symbols``).
 """
 
 from __future__ import annotations
@@ -20,11 +36,13 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
     MarketOrderRequest,
     ReplaceOrderRequest,
+    StopLimitOrderRequest,
     StopOrderRequest,
 )
 
 from dynamo.config.settings import Settings, get_settings
 from dynamo.domain.models.portfolio import Order, OrderSide, OrderType
+from dynamo.domain.symbols import is_crypto_symbol, normalize_crypto_symbol
 from dynamo.execution.errors import (
     BrokerRejection,
     BrokerUnavailable,
@@ -110,7 +128,10 @@ class AlpacaBroker:
             d = self._as_dict(p)
             out.append(
                 {
-                    "symbol": str(d.get("symbol", "")),
+                    # Crypto positions come back slashless ("BTCUSD") —
+                    # normalize to the canonical "BTC/USD" so reconciliation
+                    # matches internal state (ADR-0013).
+                    "symbol": self._canonical_symbol(d),
                     "qty": float(d.get("qty", 0.0)),
                     "avg_entry_price": float(d.get("avg_entry_price", 0.0)),
                 }
@@ -127,8 +148,15 @@ class AlpacaBroker:
 
     # --- request mapping (doc 09 §3) ---
 
+    # Crypto stop-limit band (module docstring): limit 1% through the stop so
+    # the triggered order is marketable but never fills at an absurd print.
+    _CRYPTO_STOP_LIMIT_BAND = 0.01
+
     def _build_request(self, order: Order) -> Any:
         side = AlpacaSide.BUY if order.side == OrderSide.BUY else AlpacaSide.SELL
+        crypto = is_crypto_symbol(order.symbol)
+        # Alpaca crypto rejects DAY/OPG; GTC is the only tif the sleeve uses.
+        day_tif = TimeInForce.GTC if crypto else TimeInForce.DAY
         common: dict[str, Any] = {
             "symbol": order.symbol,
             "qty": order.qty,
@@ -136,22 +164,40 @@ class AlpacaBroker:
             "client_order_id": order.client_order_id,
         }
         if order.order_type == OrderType.MARKET_ON_OPEN:
+            if crypto:
+                # 24/7 market — there is no opening auction; a plain GTC
+                # market order fills immediately (module docstring).
+                return MarketOrderRequest(time_in_force=TimeInForce.GTC, **common)
             # Opening auction: market order with OPG time-in-force.
             return MarketOrderRequest(time_in_force=TimeInForce.OPG, **common)
         if order.order_type in (OrderType.MARKETABLE_LIMIT, OrderType.SYNTHETIC_STOP_EXIT):
+            # Marketable limit applies to crypto too (spreads exist there as
+            # well) — only the time-in-force differs (GTC).
             if order.limit_price is None:
                 raise BrokerRejection(order.client_order_id, "marketable limit needs limit_price")
             return LimitOrderRequest(
-                time_in_force=TimeInForce.DAY,
+                time_in_force=day_tif,
                 limit_price=round(order.limit_price, 2),
                 **common,
             )
         if order.order_type == OrderType.STOP:
             if order.stop_price is None:
                 raise BrokerRejection(order.client_order_id, "stop order needs stop_price")
+            stop_price = round(order.stop_price, 2)
+            if crypto:
+                # Alpaca crypto supports market/limit/stop-limit only — plain
+                # stops are rejected. Map to a stop-limit 1% through the stop.
+                band = self._CRYPTO_STOP_LIMIT_BAND
+                factor = (1.0 - band) if side is AlpacaSide.SELL else (1.0 + band)
+                return StopLimitOrderRequest(
+                    time_in_force=TimeInForce.GTC,
+                    stop_price=stop_price,
+                    limit_price=round(order.stop_price * factor, 2),
+                    **common,
+                )
             return StopOrderRequest(
                 time_in_force=TimeInForce.GTC,
-                stop_price=round(order.stop_price, 2),
+                stop_price=stop_price,
                 **common,
             )
         raise BrokerRejection(order.client_order_id, f"unsupported order type {order.order_type}")
@@ -203,12 +249,22 @@ class AlpacaBroker:
         return {}
 
     @staticmethod
-    def _normalize_order(d: dict[str, Any]) -> dict[str, Any]:
+    def _canonical_symbol(d: dict[str, Any]) -> str:
+        """Payload symbol in canonical form: crypto rows (``asset_class ==
+        "crypto"``) may arrive slashless and are normalized; everything else
+        passes through untouched (ADR-0013)."""
+        symbol = str(d.get("symbol", ""))
+        if str(d.get("asset_class", "")) == "crypto":
+            return normalize_crypto_symbol(symbol)
+        return symbol
+
+    @classmethod
+    def _normalize_order(cls, d: dict[str, Any]) -> dict[str, Any]:
         filled_avg = d.get("filled_avg_price")
         return {
             "client_order_id": str(d.get("client_order_id", "")),
             "broker_order_id": str(d.get("id", "")),
-            "symbol": str(d.get("symbol", "")),
+            "symbol": cls._canonical_symbol(d),
             "side": str(d.get("side", "")),
             "qty": float(d.get("qty") or 0.0),
             "filled_qty": float(d.get("filled_qty") or 0.0),

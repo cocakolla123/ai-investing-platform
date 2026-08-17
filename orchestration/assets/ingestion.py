@@ -52,6 +52,35 @@ def eod_bars(context: AssetExecutionContext, dynamo: DynamoResource) -> Material
 
 
 @dagster_asset(group_name=INGESTION_GROUP, partitions_def=daily_partitions)
+def crypto_bars(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
+    """Daily crypto bars for the sleeve universe (ADR-0013).
+
+    Crypto trades 24/7, so this runs every calendar day (21:35 ET, right
+    after the equities EOD ingest). A short trailing window is fetched each
+    night — idempotent upserts backfill weekend/holiday gaps and refresh the
+    in-progress UTC day next run. Crypto instrument rows (sector="crypto")
+    are upserted alongside so dossiers/risk sector caps see the sleeve.
+    """
+    from dynamo.data.universe import crypto_instruments
+
+    as_of = as_of_from_partition(context.partition_key)
+    provider = dynamo.alpaca_crypto()
+    if provider is None:
+        context.log.info("crypto_bars: crypto sleeve disabled — skipping")
+        return _skipped("crypto disabled")
+    symbols = list(dynamo.settings().crypto_universe)
+    if not symbols:
+        return _skipped("empty crypto universe")
+    repo = dynamo.market_repo()
+    bars = provider.daily_bars(symbols, as_of - timedelta(days=7), as_of)
+    rows = repo.upsert_bars(bars, timeframe="1d")
+    instruments = repo.upsert_instruments(crypto_instruments(symbols))
+    return MaterializeResult(
+        metadata={"rows": rows, "symbols": len(symbols), "instruments": instruments}
+    )
+
+
+@dagster_asset(group_name=INGESTION_GROUP, partitions_def=daily_partitions)
 def corporate_actions(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Splits/dividends from both sources (doc 02 §5)."""
     as_of = as_of_from_partition(context.partition_key)
@@ -274,6 +303,7 @@ def filings_poll_job() -> None:
 
 INGESTION_ASSETS = [
     eod_bars,
+    crypto_bars,
     corporate_actions,
     insider_tx,
     news,

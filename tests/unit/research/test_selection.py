@@ -75,3 +75,29 @@ class TestCapAndDeterminism:
         assert [c.symbol for c in second] == ["AAA", "ZZZ"]
         # dedupe kept the higher-priority (promoted) row
         assert first[1].newly_promoted
+
+
+class TestCryptoEligibility:
+    """ADR-0013: crypto pairs must be selectable for committee deep dives.
+
+    Selection never keys off fundamentals/filings existence — a crypto pair
+    with no earnings, no filings, and no fundamentals reaches the committee
+    through the same staleness and price-move triggers as any core name, so
+    no special floor is needed.
+    """
+
+    def test_never_reviewed_crypto_is_selected_via_staleness(self) -> None:
+        candidates = [
+            DeepDiveCandidate(symbol="BTC/USD", last_verdict_age_days=None),
+            fresh("AAPL"),
+        ]
+        selected = select_deep_dives(candidates, cap=10)
+        assert [c.symbol for c in selected] == ["BTC/USD"]
+
+    def test_crypto_price_move_is_an_event_trigger(self) -> None:
+        candidates = [
+            DeepDiveCandidate(symbol="ETH/USD", move_sigma=3.1, last_verdict_age_days=2),
+            stale("STL"),
+        ]
+        selected = select_deep_dives(candidates, cap=1)
+        assert [c.symbol for c in selected] == ["ETH/USD"]  # event beats staleness

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 from dynamo.domain.models.research import Sleeve
 from dynamo.domain.models.risk import RiskConfig, SizedPosition
+from dynamo.domain.symbols import is_crypto_symbol
 
 CLAMP_INVALID = "invalid_input"
 CLAMP_VETO = "veto"
@@ -31,8 +32,17 @@ CLAMP_CLUSTER = "cluster_cap"
 CLAMP_LIQUIDITY = "liquidity_cap"
 CLAMP_GROSS = "gross_cap"
 CLAMP_FLOOR = "min_weight_floor"
+CLAMP_CRYPTO_POSITION = "crypto_position_cap"
+CLAMP_CRYPTO_SLEEVE = "crypto_sleeve_cap"
 
 _HORIZON_SESSIONS = 20.0
+# Annualization convention: sqrt(252) on trading-day return series for ALL
+# assets, crypto included (ADR-0013). Crypto trades 24/7 but the platform
+# decides and marks on equity sessions, and sigma inputs are computed from
+# the same trading-day series as equities — using one constant keeps crypto
+# and equity sigmas comparable inside the vol-parity base. (Switching crypto
+# to sqrt(365) on calendar-day series would require calendar-day return
+# inputs; deliberately not done for v1.)
 _SESSIONS_PER_YEAR = 252.0
 
 
@@ -143,14 +153,17 @@ def size_positions(
             inv_sigmas[i] = 1.0 / candidate.sigma_annual
     inv_total = sum(inv_sigmas.values())
 
-    # Existing usage per sector / cluster / gross.
+    # Existing usage per sector / cluster / crypto sleeve / gross.
     sector_used: dict[str, float] = {}
     cluster_used: dict[str, float] = {}
+    crypto_used = 0.0  # crypto sleeve bucket (ADR-0013), keyed off the symbol
     existing_gross = 0.0
     for symbol, weight in ctx.existing_weights.items():
         if not _finite(weight) or weight <= 0.0:
             continue
         existing_gross += weight
+        if is_crypto_symbol(symbol):
+            crypto_used += weight
         sector = ctx.sector_by_symbol.get(symbol)
         if sector is not None:
             sector_used[sector] = sector_used.get(sector, 0.0) + weight
@@ -204,6 +217,18 @@ def size_positions(
             weight = position_cap
             clamps.append(position_clamp)
 
+        # Crypto caps (ADR-0013): hard per-pair bound, then the collective
+        # sleeve bucket consumed cumulatively like sector/cluster budgets.
+        candidate_is_crypto = is_crypto_symbol(candidate.symbol)
+        if candidate_is_crypto:
+            if weight > config.crypto_max_position:
+                weight = max(config.crypto_max_position, 0.0)
+                clamps.append(CLAMP_CRYPTO_POSITION)
+            available = max(config.crypto_sleeve_cap * tighten - crypto_used, 0.0)
+            if weight > available:
+                weight = available
+                clamps.append(CLAMP_CRYPTO_SLEEVE)
+
         if candidate.sector is not None:
             available = max(
                 config.sector_cap * tighten - sector_used.get(candidate.sector, 0.0),
@@ -251,6 +276,8 @@ def size_positions(
 
         if weight > 0.0:
             new_gross += weight
+            if candidate_is_crypto:
+                crypto_used += weight
             if candidate.sector is not None:
                 sector_used[candidate.sector] = (
                     sector_used.get(candidate.sector, 0.0) + weight

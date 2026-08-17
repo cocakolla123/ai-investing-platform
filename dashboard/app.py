@@ -71,12 +71,22 @@ with col_ladder:
 st.subheader("Allocation")
 positions = safe_df(select(schema.positions))
 if not empty_note(positions, "No open positions."):
+    from dynamo.domain.symbols import is_crypto_symbol
+
     closes = latest_closes(list(positions["symbol"]))
     positions["price"] = (
         positions["symbol"].map(closes.get).fillna(positions["avg_entry_price"])
     )
     positions["value"] = positions["qty"] * positions["price"]
-    st.bar_chart(positions.set_index("symbol")["value"])
+    # Sleeve split (ADR-0013): crypto pairs ("BTC/USD") are their own sleeve.
+    positions["sleeve"] = positions["symbol"].map(
+        lambda s: "crypto" if is_crypto_symbol(str(s)) else "equities"
+    )
+    col_sym, col_sleeve = st.columns([3, 1])
+    with col_sym:
+        st.bar_chart(positions.set_index("symbol")["value"])
+    with col_sleeve:
+        st.bar_chart(positions.groupby("sleeve")["value"].sum())
 
 # --- Abstention rate (rolling 30d), a health indicator (doc 00 §4) ---
 

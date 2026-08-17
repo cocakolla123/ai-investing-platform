@@ -80,3 +80,43 @@ def test_oddspipe_spreads_persists_pairs(fake_dynamo: FakeDynamo, fake_repo: Fak
     result = cast(MaterializeResult, oddspipe_spreads(ctx, fake_dynamo))
     assert result.metadata is not None and result.metadata["pairs"] == 1
     assert ("pm_cross_venue_spreads", fake_dynamo.st.oddspipe_spreads) in fake_repo.inserted_rows
+
+
+def test_crypto_bars_skips_when_sleeve_disabled(fake_dynamo: FakeDynamo) -> None:
+    """ADR-0013: no provider (sleeve disabled) -> graceful skip metadata."""
+    from orchestration.assets.ingestion import crypto_bars
+
+    ctx = build_asset_context(partition_key="2026-08-14")
+    result = cast(MaterializeResult, crypto_bars(ctx, fake_dynamo))
+    assert result.metadata is not None and result.metadata["skipped"] == "crypto disabled"
+
+
+def test_crypto_bars_upserts_bars_and_crypto_instruments(
+    fake_dynamo: FakeDynamo, fake_repo: FakeRepo
+) -> None:
+    """ADR-0013: bars land in bars_1d and instrument rows carry sector='crypto'."""
+    from datetime import UTC, date, datetime
+
+    from dynamo.domain.models.market import Bar
+
+    class _StubCrypto:
+        def daily_bars(self, symbols: Any, start: date, end: date) -> Any:
+            for symbol in symbols:
+                yield Bar(
+                    symbol=symbol,
+                    ts=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
+                    open=1.0, high=2.0, low=0.5, close=1.5,
+                    volume=100, adj_close=1.5, source="alpaca_crypto",
+                )
+
+    from orchestration.assets.ingestion import crypto_bars
+
+    fake_dynamo.st.crypto_provider = _StubCrypto()
+    ctx = build_asset_context(partition_key="2026-08-14")
+    result = cast(MaterializeResult, crypto_bars(ctx, fake_dynamo))
+    assert result.metadata is not None
+    assert result.metadata["rows"] == 5  # settings default: 5 pairs
+    assert result.metadata["instruments"] == 5
+    upserted = dict(fake_repo.inserted_rows)
+    assert all(b.source == "alpaca_crypto" for b in upserted["bars_1d"])
+    assert all(i.sector == "crypto" for i in upserted["instruments"])

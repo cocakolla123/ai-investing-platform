@@ -76,6 +76,14 @@ class RiskConfig(BaseModel):
     conviction_tilt_max: float = 1.5
     ewma_vol_span_days: int = 60
     hysteresis_sessions: int = 5
+    # Crypto sleeve caps (ADR-0013). Crypto realized vol runs 3-5x equities,
+    # so vol-parity sizing already shrinks crypto positions naturally; these
+    # caps are belt-and-suspenders hard bounds enforced in the sizing cascade
+    # AND the constructor's verdict-compliance pass. Defaults mirror
+    # settings.crypto_sleeve_cap / crypto_max_position; callers may override
+    # from Settings (risk stays pure — caps are passed in, never read here).
+    crypto_sleeve_cap: float = 0.10  # all crypto positions combined
+    crypto_max_position: float = 0.05  # any single crypto pair
 
 
 class StopKind(StrEnum):

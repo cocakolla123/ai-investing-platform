@@ -26,6 +26,7 @@ from dynamo.domain.models.portfolio import (
     Trade,
 )
 from dynamo.domain.ports import Broker, Clock
+from dynamo.domain.symbols import is_crypto_symbol
 from dynamo.execution.client_order_id import client_order_id
 from dynamo.execution.errors import (
     BrokerRejection,
@@ -175,7 +176,9 @@ class OrderManager:
                 limit_price=round(
                     marketable_limit_price(side, price, spreads.get(symbol, 0.0)), 4
                 ),
-                tif="day",
+                # Crypto rejects DAY at Alpaca — GTC is the sleeve's only tif
+                # (ADR-0013); the broker enforces this again at request build.
+                tif="gtc" if is_crypto_symbol(symbol) else "day",
                 state=OrderState.PROPOSED,
                 sleeve=tw.sleeve if tw is not None else None,
                 created_at=self._clock.now(),

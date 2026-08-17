@@ -19,6 +19,7 @@ def test_expected_assets_present() -> None:
     expected = {
         # ingestion (doc 02 §4)
         "eod_bars",
+        "crypto_bars",  # crypto sleeve (ADR-0013)
         "corporate_actions",
         "insider_tx",
         "news",

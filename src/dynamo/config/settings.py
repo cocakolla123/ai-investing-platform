@@ -51,6 +51,25 @@ class Settings(BaseSettings):
     approval_ttl_minutes: int = 30
     reconciliation_cash_tolerance: float = 1.00
 
+    # --- Crypto sleeve (ADR-0013; Alpaca crypto, paper-capable today) ---
+    # Caps are deliberately conservative: crypto realized vol runs 3-5x
+    # equities, so vol-parity sizing already shrinks crypto positions
+    # naturally — the sleeve cap and per-position cap are belt-and-suspenders
+    # hard bounds on top of that, enforced in the sizing cascade and the
+    # constructor's compliance pass. Symbols use the canonical "BASE/QUOTE"
+    # Alpaca pair form ("BTC/USD"); adapters normalize any slashless broker
+    # form ("BTCUSD") at the edge (dynamo.domain.symbols).
+    crypto_enabled: bool = Field(default=True, alias="CRYPTO_ENABLED")
+    crypto_sleeve_cap: float = 0.10  # all crypto combined, fraction of equity
+    crypto_max_position: float = 0.05  # any single pair, fraction of equity
+    crypto_universe: tuple[str, ...] = (
+        "BTC/USD",
+        "ETH/USD",
+        "SOL/USD",
+        "AVAX/USD",
+        "LINK/USD",
+    )
+
     # --- Market data ---
     tiingo_api_key: str = Field(default="", alias="TIINGO_API_KEY")
     finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY")

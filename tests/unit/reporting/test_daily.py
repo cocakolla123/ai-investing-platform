@@ -241,7 +241,7 @@ def test_glance_numbers_and_abstention_note() -> None:
     assert (g.names_reviewed, g.names_acted_on) == (5, 3)
     md = render_markdown(report)
     assert "reviewed 5 names, acted on 3" in md
-    assert "7 stocks, 2 options, 1 Kalshi event markets" in md
+    assert "7 stocks, 0 crypto, 2 options, 1 Kalshi event markets" in md
 
 
 def test_decisions_grouped_and_ordered_by_conviction() -> None:
@@ -291,7 +291,7 @@ def test_polymarket_sim_rows_are_labeled_simulated() -> None:
 
 def test_kalshi_only_glance_line_omits_sim_sleeve() -> None:
     md = render_markdown(build_daily_report(full_day_source(), DAY))
-    assert "7 stocks, 2 options, 1 Kalshi event markets" in md
+    assert "7 stocks, 0 crypto, 2 options, 1 Kalshi event markets" in md
     assert "SIMULATED" not in md  # nothing simulated happened, nothing rendered
 
 
@@ -391,3 +391,28 @@ def test_learning_metrics_absent_render_nothing() -> None:
     md = render_markdown(build_daily_report(FakeSource(), DAY))
     assert "Learning health" not in md
     assert "Improvement proposals open" not in md
+
+
+def test_crypto_trades_and_positions_surface_as_their_own_sleeve() -> None:
+    """ADR-0013: crypto rows share the trades/positions tables but render
+    clearly labeled as the crypto sleeve (mirroring the PM sleeve pattern)."""
+    source = FakeSource(
+        open_position_counts={"equities": 3, "crypto": 2, "options": 0, "kalshi": 0},
+        equity_trades=[
+            {"filled_at": _ts(14, 10), "symbol": "AAPL", "side": "buy", "qty": 10,
+             "fill_price": 230.0, "slippage_bps": 1.0, "sleeve": "long_term"},
+            {"filled_at": _ts(14, 11), "symbol": "BTC/USD", "side": "buy", "qty": 0.05,
+             "fill_price": 61_250.0, "slippage_bps": 2.5, "sleeve": None},
+        ],
+    )
+    report = build_daily_report(source, DAY)
+    assert report.glance.open_crypto == 2
+    by_instrument = {t.instrument: t for t in report.trades}
+    assert by_instrument["BTC/USD"].market == "crypto"
+    assert by_instrument["BTC/USD"].quantity_unit == "coins"
+    assert by_instrument["BTC/USD"].sleeve == "crypto"  # labeled even sans order row
+    assert by_instrument["AAPL"].market == "stocks"
+    assert by_instrument["AAPL"].quantity_unit == "shares"
+    md = render_markdown(report)
+    assert "3 stocks, 2 crypto, 0 options" in md
+    assert "| crypto | BTC/USD | buy | 0.05 coins |" in md

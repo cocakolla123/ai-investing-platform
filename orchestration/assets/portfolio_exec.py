@@ -607,7 +607,7 @@ def _pdt_filtered_specs(
     the exit would trip the pattern day-trader rule under $25k equity — log +
     alert instead, UNLESS it is a disaster stop."""
     from dynamo.domain.models.risk import StopKind
-    from dynamo.risk.intraday import count_day_trades, pdt_exit_allowed
+    from dynamo.risk.intraday import count_day_trades, pdt_exit_allowed, pdt_relevant_fills
 
     today = utcnow().date()
     t = schema.trades
@@ -617,10 +617,13 @@ def _pdt_filtered_specs(
             t.c.filled_at >= datetime.combine(today - timedelta(days=7), time.min, tzinfo=UTC)
         ),
     )
-    fills: list[tuple[str, str, date]] = [
+    # PDT is a securities-account rule: crypto fills are excluded up front
+    # (ADR-0013), so crypto never counts a day trade and a crypto stop exit
+    # is never deferred — its symbol cannot appear in ``entered_today``.
+    fills: list[tuple[str, str, date]] = pdt_relevant_fills(
         (str(r["symbol"]), str(r["side"]), _pydate(r["filled_at"]))
         for r in frame.to_dict(orient="records")
-    ]
+    )
     entered_today = {sym for sym, side, day in fills if side == "buy" and day == today}
     day_trades = count_day_trades(fills)
     repo = dynamo.market_repo()
@@ -650,6 +653,7 @@ def maintain_stops(context: OpExecutionContext, dynamo: DynamoResource) -> None:
     """Apply the risk engine's stop updates through the order state machine."""
     from dynamo.domain.models.portfolio import DecisionContext as DC
     from dynamo.domain.models.research import Sleeve
+    from dynamo.domain.symbols import is_crypto_symbol
     from dynamo.execution.stops_maintenance import StopsMaintainer
     from dynamo.persistence.repositories.execution import PositionRepository
     from dynamo.persistence.repositories.learning import DecisionContextRepository
@@ -687,7 +691,8 @@ def maintain_stops(context: OpExecutionContext, dynamo: DynamoResource) -> None:
                 created_at=utcnow(),
                 env=settings.dynamo_env.value,
                 symbol=spec.symbol,
-                sleeve=Sleeve.LONG_TERM,
+                # Crypto stop maintenance is attributed to its sleeve (ADR-0013).
+                sleeve=Sleeve.CRYPTO if is_crypto_symbol(spec.symbol) else Sleeve.LONG_TERM,
                 verdict_id=None,
                 target_portfolio_id="stops",
                 payload={"stop_spec": spec.model_dump(mode="json"), "risk_verdict_ref": verdict_id},
