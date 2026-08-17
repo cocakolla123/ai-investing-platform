@@ -1,0 +1,560 @@
+"""Train the quant bundle (backtest-campaign Phase 2) — the campaign unblocker.
+
+Usage:
+    python -m dynamo.cli.quant_train --train-start 2024-01-01 \
+        --train-end 2025-12-31 --label campaign-v1 [--universe] \
+        [--symbols AAPL MSFT ...] [--database-url URL]
+
+Manual only — NEVER scheduled. ZERO LLM calls. The flow:
+
+1. **Panel** — for every NYSE session in the window (minus the trailing label
+   horizon), features come through ``HistoricalDataGateway.feature_inputs``
+   at that date — the SAME loading path replay uses (both knowledge-time
+   bounds on every frame), so training can never see data replay would not.
+   This is deliberately the per-date gateway rather than a hand-rolled bulk
+   query: slower against the real database (~minutes for a 2-year window)
+   but provably point-in-time by construction. Labels come from one bars
+   frame bounded at ``train_end`` via ``build_labels`` per date; because the
+   labels look 20 sessions forward, the last ``horizon_sessions`` sessions of
+   the window are feature-excluded (they cannot have complete labels).
+2. **Walk-forward report card** — ``train_and_evaluate`` per task (ranker =
+   excess return, downside classifier, vol) over purged/embargoed folds.
+   The doc-08 default fold geometry needs 902 sessions; shorter windows
+   (the campaign window is ~500) get an honestly scaled-down geometry
+   (documented in :func:`walkforward_for`) — purge stays >= the label
+   horizon so no fold ever trains on rows whose labels overlap its test set.
+3. **Final models** — ``fit_final_model`` per task on the FULL window (the
+   binary model calibrates on its internal chronological tail slice), saved
+   via ``learning/artifacts.py`` (sha256 manifests) + one bundle manifest
+   (``research/quant/bundle.py``).
+4. **Registry** — ONE CANDIDATE ``ModelVersion`` (model_type='quant_bundle',
+   id = --label, metrics = pooled out-of-fold metrics, artifact_path = the
+   bundle manifest). Replay may use the candidate explicitly via
+   ``--quant-model-version``; production scoring requires promotion.
+5. **Go/no-go table** — per-fold rank IC, pooled IC t-stat vs the ship gate,
+   dispersion. GO/NO-GO #1 of the campaign runbook: never proceed to the
+   paid committee run on a degenerate model.
+
+Gate: refuses (exit 2) when the panel has < 60 feature sessions or < 20
+symbols carrying both a usable label and at least one feature value.
+
+Crypto note (ADR-0013): crypto pairs ride along with NaN fundamentals /
+insider / estimates features (the builders never raise on them) — the models
+train on whatever features exist and ``feature_coverage`` reflects the holes
+at scoring time. Symbols without a sector ETF (crypto included) get SPY as
+the excess-return benchmark in the label map.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any, cast
+
+MIN_PANEL_SESSIONS = 60
+MIN_PANEL_SYMBOLS = 20
+HORIZON_SESSIONS = 20
+BENCHMARK_FALLBACK = "SPY"
+MODEL_NAME = "lgbm"
+ALGO = "lightgbm"
+
+
+class PanelTooSmallError(RuntimeError):
+    """The pooled panel is below the training gate — refuse (exit 2)."""
+
+
+@dataclass(frozen=True)
+class TrainingPanel:
+    """Pooled (ts, symbol)-indexed features + labels over the window."""
+
+    features: Any  # pd.DataFrame, MultiIndex (ts, symbol)
+    labels: Any  # pd.DataFrame, same index, the three doc-04 targets
+    sessions: tuple[date, ...]  # feature sessions (window minus horizon tail)
+
+
+@dataclass(frozen=True)
+class TrainReport:
+    """Everything main() needs to print the table and register the candidate."""
+
+    version: str
+    bundle_path: Path
+    feature_names: tuple[str, ...]
+    n_samples: int
+    n_sessions: int
+    n_symbols: int
+    config_hash: str
+    fold_ic_dispersion: float
+    task_reports: dict[str, dict[str, Any]]
+    registry_metrics: dict[str, Any]
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="dynamo-quant-train",
+        description="Train + register the quant model bundle (manual, never scheduled)",
+    )
+    parser.add_argument("--train-start", required=True, type=date.fromisoformat)
+    parser.add_argument("--train-end", required=True, type=date.fromisoformat)
+    parser.add_argument(
+        "--label",
+        required=True,
+        help="bundle version AND registry id (e.g. campaign-v1); must be unused",
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--symbols", nargs="+", default=None, help="explicit training symbols"
+    )
+    group.add_argument(
+        "--universe",
+        action="store_true",
+        help="train on the active tier-1/3 universe at --train-end (the default)",
+    )
+    parser.add_argument("--database-url", default=None)
+    return parser
+
+
+# --------------------------------------------------------------------------
+# panel assembly (pure given injected loaders — unit-testable without a DB)
+# --------------------------------------------------------------------------
+
+
+def label_sector_map(
+    sectors: Mapping[str, str], universe: Sequence[str]
+) -> dict[str, str]:
+    """symbol -> excess-return benchmark: the sector SPDR where one exists,
+    else SPY (crypto pairs and unclassified names — documented decision:
+    market-relative excess is the honest fallback, NaN would silently drop
+    them from the ranker's training rows)."""
+    from dynamo.data.universe import default_sector_etf_map
+
+    etf = default_sector_etf_map(dict(sectors))
+    return {sym: etf.get(sym, BENCHMARK_FALLBACK) for sym in universe}
+
+
+def build_panel(
+    feature_inputs_for: Callable[[date], Any],
+    label_bars: Any,
+    sector_map: Mapping[str, str],
+    universe: Sequence[str],
+    sessions: Sequence[date],
+    *,
+    horizon_sessions: int = HORIZON_SESSIONS,
+    progress: Callable[[str], None] | None = None,
+) -> TrainingPanel:
+    """Pooled panel: ``build_features`` per session (explicit as_of, the
+    replay loading path) + ``build_labels`` per session from the shared
+    label-bars frame. The trailing ``horizon_sessions`` sessions are excluded
+    — their forward windows extend past ``train_end`` so their labels cannot
+    be complete."""
+    import pandas as pd
+
+    from dynamo.research.quant.features import build_features, build_labels
+
+    universe = [str(s) for s in universe]
+    feature_sessions = list(sessions)[: -horizon_sessions or None]
+    if horizon_sessions >= len(sessions):
+        feature_sessions = []
+    feature_frames: list[Any] = []
+    label_frames: list[Any] = []
+    keys: list[Any] = []
+    for i, day in enumerate(feature_sessions):
+        inputs = feature_inputs_for(day)
+        features = build_features(inputs, day, universe)
+        labels = build_labels(
+            label_bars, sector_map, day, horizon_sessions=horizon_sessions
+        ).reindex(universe)
+        feature_frames.append(features)
+        label_frames.append(labels)
+        keys.append(pd.Timestamp(day))
+        if progress is not None and (i + 1) % 25 == 0:
+            progress(f"panel: {i + 1}/{len(feature_sessions)} sessions built")
+    if not feature_frames:
+        empty = pd.DataFrame(
+            index=pd.MultiIndex.from_arrays([[], []], names=["ts", "symbol"])
+        )
+        return TrainingPanel(features=empty, labels=empty, sessions=())
+    features_panel = pd.concat(feature_frames, keys=keys, names=["ts", "symbol"])
+    labels_panel = pd.concat(label_frames, keys=keys, names=["ts", "symbol"])
+    return TrainingPanel(
+        features=features_panel,
+        labels=labels_panel,
+        sessions=tuple(feature_sessions),
+    )
+
+
+def check_panel(panel: TrainingPanel) -> tuple[int, int]:
+    """(n_sessions, n_usable_symbols); raises :class:`PanelTooSmallError`
+    below the gate. A usable symbol has >= 1 non-NaN label AND >= 1 non-NaN
+    feature somewhere in the window."""
+    import pandas as pd
+
+    features = cast(pd.DataFrame, panel.features)
+    labels = cast(pd.DataFrame, panel.labels)
+    n_sessions = len(panel.sessions)
+    if features.empty or labels.empty:
+        raise PanelTooSmallError(
+            f"panel is empty ({n_sessions} feature sessions) — check bars/universe backfills"
+        )
+    label_any = cast(pd.Series, labels.notna().any(axis=1))
+    feature_any = cast(pd.Series, features.notna().any(axis=1))
+    by_symbol_label = label_any.groupby(level="symbol").any()
+    by_symbol_feature = feature_any.groupby(level="symbol").any()
+    usable = (by_symbol_label & by_symbol_feature.reindex(by_symbol_label.index, fill_value=False))
+    n_symbols = int(usable.sum())
+    problems = []
+    if n_sessions < MIN_PANEL_SESSIONS:
+        problems.append(
+            f"{n_sessions} feature sessions < {MIN_PANEL_SESSIONS} minimum"
+        )
+    if n_symbols < MIN_PANEL_SYMBOLS:
+        problems.append(
+            f"{n_symbols} usable symbols (label + features) < {MIN_PANEL_SYMBOLS} minimum"
+        )
+    if problems:
+        raise PanelTooSmallError(
+            "refusing to train on a degenerate panel: " + "; ".join(problems)
+        )
+    return n_sessions, n_symbols
+
+
+def walkforward_for(n_sessions: int) -> Any:
+    """Fold geometry for the window. Doc-08 defaults when the window is long
+    enough (>= 902 sessions); otherwise an honestly scaled-down geometry —
+    purge stays 20 sessions (== the label horizon, so a fold can never train
+    on rows whose forward windows overlap its test set), embargo stays 10,
+    test ~15% of the window, train fills the rest leaving room for >= 2 folds
+    when possible."""
+    from dynamo.backtest.walkforward import WalkForwardConfig
+
+    default = WalkForwardConfig()
+    needed = default.train_sessions + default.purge_sessions + default.test_sessions
+    if n_sessions >= needed:
+        return default
+    purge, embargo = default.purge_sessions, default.embargo_sessions
+    test = max(10, int(n_sessions * 0.15))
+    train = n_sessions - purge - 2 * test
+    if train < test:  # tiny window — settle for a single fold
+        train = n_sessions - purge - test
+    if train <= 0:
+        raise PanelTooSmallError(
+            f"{n_sessions} sessions cannot form a single purged walk-forward fold"
+        )
+    return WalkForwardConfig(
+        train_sessions=train,
+        test_sessions=test,
+        purge_sessions=purge,
+        embargo_sessions=embargo,
+        roll_sessions=test,
+    )
+
+
+# --------------------------------------------------------------------------
+# training + artifact save (injectable — the smoke test drives this directly)
+# --------------------------------------------------------------------------
+
+
+def train_quant_bundle(
+    panel: TrainingPanel,
+    *,
+    version: str,
+    artifact_dir: str | Path,
+    train_start: date,
+    train_end: date,
+    wf_config: Any | None = None,
+) -> TrainReport:
+    """Walk-forward evaluation for the three tasks, final-model fits on the
+    full window, artifact + bundle-manifest save. Pure of the database —
+    callers hand in the assembled panel."""
+    import math
+
+    import numpy as np
+
+    from dynamo.backtest.walkforward import compute_config_hash
+    from dynamo.research.quant.bundle import save_bundle
+    from dynamo.research.quant.models import LightGBMModel, StatsforecastBaseline
+    from dynamo.research.quant.training import (
+        feature_quantiles,
+        fit_final_model,
+        train_and_evaluate,
+    )
+
+    n_sessions, n_symbols = check_panel(panel)
+    features, labels = panel.features, panel.labels
+    feature_names = tuple(str(c) for c in features.columns)
+    wf = wf_config if wf_config is not None else walkforward_for(n_sessions)
+    config_hash = compute_config_hash(
+        {
+            "version": version,
+            "train_start": train_start,
+            "train_end": train_end,
+            "feature_names": list(feature_names),
+            "model": MODEL_NAME,
+            "wf": {
+                "train": wf.train_sessions,
+                "test": wf.test_sessions,
+                "purge": wf.purge_sessions,
+                "embargo": wf.embargo_sessions,
+                "roll": wf.roll_sessions,
+            },
+        }
+    )
+    # Historic average only as the CLI's bar-to-beat: the full baseline suite
+    # (seasonal-naive, AutoETS) stays available through train_and_evaluate
+    # directly, but per-symbol ETS fits across folds would dominate runtime
+    # for zero effect on the doc-04 ship gates' primary comparisons.
+    baselines = {
+        "baseline-historic-average": lambda: StatsforecastBaseline("historic_average")
+    }
+
+    factories = {
+        "rank": lambda: LightGBMModel("regression"),
+        "downside": lambda: LightGBMModel("binary"),
+        "vol": lambda: LightGBMModel("regression"),
+    }
+    task_reports: dict[str, dict[str, Any]] = {}
+    for task in ("rank", "downside", "vol"):
+        task_reports[task] = train_and_evaluate(
+            features,
+            labels,
+            task=task,  # type: ignore[arg-type]
+            model_factories={MODEL_NAME: factories[task]},
+            baseline_factories=baselines,
+            wf_config=wf,
+            config_hash=config_hash,
+        )
+
+    rank_fold_ics = [
+        f["models"][MODEL_NAME]["rank_ic"]
+        for f in task_reports["rank"]["folds"]
+        if f["models"][MODEL_NAME]["rank_ic"] is not None
+    ]
+    dispersion = (
+        float(np.std(np.asarray(rank_fold_ics, dtype=float), ddof=1))
+        if len(rank_fold_ics) >= 2
+        else 0.0
+    )
+
+    ranker = fit_final_model(
+        features, labels, task="rank", model_factory=factories["rank"]
+    )
+    downside = fit_final_model(
+        features, labels, task="downside", model_factory=factories["downside"]
+    )
+    vol = fit_final_model(features, labels, task="vol", model_factory=factories["vol"])
+
+    n_samples = len(features)
+    rank_pooled = task_reports["rank"]["pooled"][MODEL_NAME]
+    down_pooled = task_reports["downside"]["pooled"][MODEL_NAME]
+    vol_pooled = task_reports["vol"]["pooled"][MODEL_NAME]
+
+    def _num(value: Any) -> float | None:
+        if value is None:
+            return None
+        v = float(value)
+        return None if math.isnan(v) else v
+
+    registry_metrics: dict[str, Any] = {
+        "rank_ic_pooled": _num(rank_pooled.get("rank_ic_pooled")),
+        "rank_ic_t_stat": _num(rank_pooled.get("rank_ic_t_stat")),
+        "rank_win_share": _num(rank_pooled.get("win_share")),
+        "rank_fold_ics": [_num(v) for v in rank_fold_ics],
+        "rank_ships_ok": bool(task_reports["rank"]["ships_ok"][MODEL_NAME]),
+        "downside_brier_pooled": _num(down_pooled.get("brier_pooled")),
+        "downside_auc_pooled": _num(down_pooled.get("auc_pooled")),
+        "downside_base_rate_brier_pooled": _num(
+            down_pooled.get("base_rate_brier_pooled")
+        ),
+        "vol_rmse_log_pooled": _num(vol_pooled.get("rmse_log_vol_pooled")),
+        "vol_qlike_pooled": _num(vol_pooled.get("qlike_pooled")),
+        "n_folds": int(task_reports["rank"]["n_folds"]),
+        "n_samples": n_samples,
+        "n_sessions": n_sessions,
+        "n_symbols": n_symbols,
+        "fold_ic_dispersion": dispersion,
+    }
+
+    bundle_path = save_bundle(
+        artifact_dir,
+        version,
+        ranker=ranker,
+        downside=downside,
+        vol=vol,
+        feature_names=feature_names,
+        train_feature_quantiles=feature_quantiles(features),
+        train_start=train_start,
+        train_end=train_end,
+        n_samples=n_samples,
+        config_hash=config_hash,
+        metrics={"registry": registry_metrics, "tasks": task_reports},
+        fold_ic_dispersion=dispersion,
+        vol_is_log=True,
+    )
+    return TrainReport(
+        version=version,
+        bundle_path=bundle_path,
+        feature_names=feature_names,
+        n_samples=n_samples,
+        n_sessions=n_sessions,
+        n_symbols=n_symbols,
+        config_hash=config_hash,
+        fold_ic_dispersion=dispersion,
+        task_reports=task_reports,
+        registry_metrics=registry_metrics,
+    )
+
+
+def registry_model_version(report: TrainReport, train_start: date, train_end: date) -> Any:
+    """The CANDIDATE row for the trained bundle (status is forced to
+    candidate by ``insert_candidate``; production requires promotion)."""
+    from datetime import UTC, datetime
+
+    from dynamo.domain.models.learning import ModelVersion
+    from dynamo.research.quant.bundle import feature_names_hash
+
+    return ModelVersion(
+        id=report.version,
+        model_type="quant_bundle",
+        algo=ALGO,
+        features_hash=feature_names_hash(report.feature_names),
+        train_start=train_start,
+        train_end=train_end,
+        hyperparams={
+            "model": MODEL_NAME,
+            "tasks": ["rank", "downside", "vol"],
+            "config_hash": report.config_hash,
+        },
+        metrics=dict(report.registry_metrics),
+        artifact_path=str(report.bundle_path),
+        created_at=datetime.now(UTC),
+    )
+
+
+def print_go_no_go(report: TrainReport, out: Callable[[str], None] = print) -> None:
+    """The GO/NO-GO #1 table: per-fold rank IC, pooled t-stat vs the ship
+    gate, dispersion, and the secondary-task pooled metrics."""
+    from dynamo.research.quant.training import SHIP_T_STAT
+
+    m = report.registry_metrics
+
+    def _fmt(value: Any, spec: str = "+.4f") -> str:
+        return "n/a" if value is None else format(float(value), spec)
+
+    out(f"GO/NO-GO — quant bundle {report.version!r}")
+    out(
+        f"  panel: {report.n_samples} rows, {report.n_sessions} sessions, "
+        f"{report.n_symbols} usable symbols, {len(report.feature_names)} features"
+    )
+    out("  fold  test window               rank IC")
+    for fold in report.task_reports["rank"]["folds"]:
+        ic = fold["models"][MODEL_NAME]["rank_ic"]
+        out(
+            f"  {fold['fold_id']:>4}  {fold['test_start']} .. {fold['test_end']}  "
+            f"{_fmt(ic)}"
+        )
+    out(
+        f"  pooled rank IC {_fmt(m['rank_ic_pooled'])}  "
+        f"t-stat {_fmt(m['rank_ic_t_stat'], '.2f')} "
+        f"(ship gate >= {SHIP_T_STAT:.2f})  "
+        f"win share {_fmt(m['rank_win_share'], '.2f')}"
+    )
+    out(f"  fold IC dispersion {m['fold_ic_dispersion']:.4f}")
+    out(
+        f"  downside: Brier {_fmt(m['downside_brier_pooled'], '.4f')} "
+        f"vs base-rate {_fmt(m['downside_base_rate_brier_pooled'], '.4f')}, "
+        f"AUC {_fmt(m['downside_auc_pooled'], '.3f')}"
+    )
+    out(
+        f"  vol: RMSE(log) {_fmt(m['vol_rmse_log_pooled'], '.4f')}, "
+        f"QLIKE {_fmt(m['vol_qlike_pooled'], '.4f')}"
+    )
+    verdict = "GO" if m["rank_ships_ok"] else "NO-GO (rank ship gates not met)"
+    out(f"  VERDICT: {verdict} — never proceed to the paid run on a NO-GO.")
+
+
+# --------------------------------------------------------------------------
+# composition (real database + gateway)
+# --------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Lazy imports: composition layer, import side-effect free module.
+    from dynamo.config.settings import Settings
+    from dynamo.persistence.db import make_engine
+    from dynamo.persistence.repositories.learning import ModelRegistryRepository
+    from dynamo.replay.gateway import HistoricalDataGateway
+    from dynamo.replay.runner import _sessions_between
+    from dynamo.research.quant.bundle import default_bundle_dir
+
+    args = _build_parser().parse_args(argv)
+    if args.train_end <= args.train_start:
+        print("--train-end must be after --train-start")
+        return 1
+
+    engine = make_engine(args.database_url or Settings().database_url)
+    registry = ModelRegistryRepository(engine)
+    if registry.status_of(args.label) is not None:
+        print(
+            f"refused: model version {args.label!r} already exists in the registry — "
+            "pick a new --label (versions are immutable)."
+        )
+        return 1
+
+    gw_end = HistoricalDataGateway(engine, args.train_end)
+    universe = [str(s) for s in args.symbols] if args.symbols else gw_end.universe((1, 3))
+    if not universe:
+        print(
+            f"refused: universe is empty at {args.train_end} — run "
+            "`python -m dynamo.cli.backfill universe --as-of <date>` first."
+        )
+        return 1
+
+    sector_map = label_sector_map(gw_end.sectors(universe), universe)
+    sessions = _sessions_between(args.train_start, args.train_end)
+    print(
+        f"quant-train {args.label!r}: {len(universe)} symbols, "
+        f"{len(sessions)} sessions {args.train_start} -> {args.train_end} "
+        f"(last {HORIZON_SESSIONS} are label-horizon only)"
+    )
+    label_bars = gw_end.bars(
+        sorted({*universe, *sector_map.values(), BENCHMARK_FALLBACK}),
+        (args.train_end - args.train_start).days + 60,
+    )
+    panel = build_panel(
+        lambda d: HistoricalDataGateway(engine, d).feature_inputs(universe),
+        label_bars,
+        sector_map,
+        universe,
+        sessions,
+        progress=print,
+    )
+    try:
+        report = train_quant_bundle(
+            panel,
+            version=args.label,
+            artifact_dir=default_bundle_dir(),
+            train_start=args.train_start,
+            train_end=args.train_end,
+        )
+    except PanelTooSmallError as exc:
+        print(f"REFUSED: {exc}")
+        return 2
+
+    print_go_no_go(report)
+    registry.insert_candidate(
+        registry_model_version(report, args.train_start, args.train_end)
+    )
+    print(f"  bundle: {report.bundle_path}")
+    print(
+        f"  registered as CANDIDATE (model_type='quant_bundle', id={report.version!r}) — "
+        "replay uses it via --quant-model-version; production scoring requires "
+        "the promotion pipeline."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

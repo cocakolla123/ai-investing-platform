@@ -194,6 +194,28 @@ def test_quant_model_loader_failure_is_an_error(monkeypatch: pytest.MonkeyPatch)
     assert "not loadable" in errors_of(exc.value)["quant_model"]
 
 
+def test_quant_model_real_loader_unknown_version_is_an_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Phase 2 landed: the REAL artifact loader backs the check — an
+    unresolvable version (no bundle manifest on disk) fails preflight."""
+    import dynamo.research.quant.training as training
+    from dynamo.research.quant.bundle import bundle_from_version
+
+    monkeypatch.setattr(
+        training,
+        "bundle_from_version",
+        lambda version: bundle_from_version(version, tmp_path),
+    )
+    cfg = config()
+    object.__setattr__(cfg, "quant_model_version", "never-trained-v1")
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(FakeReads(), cfg)
+    detail = errors_of(exc.value)["quant_model"]
+    assert "not loadable" in detail
+    assert "unknown quant model version" in detail
+
+
 def test_quant_model_loadable_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     import dynamo.research.quant.training as training
 

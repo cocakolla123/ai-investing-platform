@@ -309,13 +309,39 @@ def quant_features_scores(
     features = build_features(inputs, as_of, universe)
     if features.empty:
         return MaterializeResult(metadata={"scores": 0, "skipped": "no features"})
-    # No promoted ML models yet -> heuristic bundle; the registry swaps this in
-    # via the promotion tool (doc 08 §7), not code changes here.
-    bundle = ModelBundle(model_version="baseline-v0")
+    # Candidate/production split (backtest-campaign Phase 2): PRODUCTION
+    # scoring loads ONLY a registry row promoted to status=production
+    # (model_type='quant_bundle') via the promotion tool (doc 08 §7).
+    # CANDIDATE bundles are replay-only, opted into explicitly with
+    # `replay run --quant-model-version <id>` — they never score the nightly
+    # pipeline. No production row -> the honest baseline-v0 abstention. A
+    # promoted bundle that fails to load (missing/corrupt artifact, feature
+    # drift) raises and fails the asset LOUDLY — an incident, never a silent
+    # fallback to the heuristic.
+    from pathlib import Path
+
+    from dynamo.persistence.repositories.learning import ModelRegistryRepository
+    from dynamo.research.quant.bundle import bundle_from_version
+
+    production = ModelRegistryRepository(dynamo.engine()).latest_production("quant_bundle")
+    if production is not None:
+        artifact_dir = (
+            Path(production.artifact_path).parent if production.artifact_path else None
+        )
+        bundle = bundle_from_version(production.id, artifact_dir)
+        context.log.info("quant_features_scores: production bundle %s", production.id)
+    else:
+        bundle = ModelBundle(model_version="baseline-v0")
     scores = score_universe(bundle, features, as_of)
     rows = [s.model_dump(mode="json") for s in scores]
     written = repo.upsert_rows(schema.quant_scores, rows) if rows else 0
-    return MaterializeResult(metadata={"scores": written, "features": len(features)})
+    return MaterializeResult(
+        metadata={
+            "scores": written,
+            "features": len(features),
+            "model_version": bundle.model_version,
+        }
+    )
 
 
 @dagster_asset(group_name=RESEARCH_GROUP, deps=["data_quality"])

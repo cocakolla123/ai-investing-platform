@@ -105,6 +105,12 @@ class ReplayConfig(BaseModel):
     initial_equity: float = Field(default=100_000.0, gt=0.0)
     horizon_sessions: int = Field(default=20, gt=0)
     quant_score_max_age_days: int = Field(default=5, ge=0)
+    # Trained quant bundle (backtest-campaign Phase 2): empty = the baseline-v0
+    # heuristic (all-None scores => honest abstention). A registered bundle
+    # version participates in config_hash automatically (frozen pydantic model:
+    # model_dump_json covers every field), so runs with and without a model can
+    # never share a run id.
+    quant_model_version: str = ""
     # Committee mode only (plan Phase 5): per-day deep-dive shortlist cap.
     committee_deep_dives_per_day: int = Field(default=4, gt=0)
     code_version: str = ""
@@ -310,13 +316,20 @@ class QuantScoreReads(Protocol):
 
 
 def quant_scores_for(
-    gw: QuantScoreReads, universe: Sequence[str], day: date, max_age_days: int
+    gw: QuantScoreReads,
+    universe: Sequence[str],
+    day: date,
+    max_age_days: int,
+    bundle: ModelBundle | None = None,
 ) -> dict[str, QuantScore]:
-    """Persisted historical scores where fresh; baseline-v0 for the rest.
+    """Persisted historical scores where fresh; the model bundle for the rest.
 
     Shared by the quant runner and committee replay (Phase 5) so the two
-    modes can never drift on what "the quant view at D" means. The baseline
-    path is production parity: ``score_universe`` with an empty
+    modes can never drift on what "the quant view at D" means. Persisted
+    rows win because they are what-was-actually-known-then; symbols without
+    a fresh persisted score are scored through ``bundle`` — a TRAINED bundle
+    when ``ReplayConfig.quant_model_version`` is set (Phase 2), else the
+    production-parity baseline: ``score_universe`` with an empty
     ``ModelBundle`` — all-None predictions, so unscored symbols synthesize
     nothing (abstention)."""
     universe = list(universe)
@@ -326,7 +339,8 @@ def quant_scores_for(
         inputs = gw.feature_inputs(universe)
         features = build_features(inputs, day, missing)
         if not features.empty:
-            for s in score_universe(ModelBundle(model_version="baseline-v0"), features, day):
+            active = bundle if bundle is not None else ModelBundle(model_version="baseline-v0")
+            for s in score_universe(active, features, day):
                 persisted[s.symbol] = s
     return persisted
 
@@ -437,6 +451,7 @@ class ReplayRunner:
         risk_config: RiskConfig | None = None,
         construction_config: ConstructionConfig | None = None,
         run_config_extras: Mapping[str, Any] | None = None,
+        bundle_factory: Callable[[str], ModelBundle] | None = None,
     ) -> None:
         if config.mode != "quant":
             raise ValueError(
@@ -463,6 +478,11 @@ class ReplayRunner:
         )
         self._engine = RiskEngine()
         self._constructor = RuleBasedConstructor()
+        # Trained-bundle seam (backtest-campaign Phase 2): the composition
+        # layer (cli/replay.py, tests) may inject a factory; the default is
+        # the artifact loader. Resolved ONCE at run start, never per session.
+        self._bundle_factory = bundle_factory
+        self._bundle: ModelBundle | None = None
         # Entry context for fills: the synthesized verdict/quant recorded when
         # the target was queued (fills happen the NEXT session, before the
         # next synthesis overwrites these).
@@ -470,9 +490,24 @@ class ReplayRunner:
         self._entry_quant: dict[str, QuantScore] = {}
 
     # ------------------------------------------------------------------ run
+    def _resolve_bundle(self) -> ModelBundle | None:
+        """Load the trained bundle ONCE at run start (loud on any failure:
+        unknown version, sha mismatch, feature drift). Empty version ⇒ None
+        ⇒ :func:`quant_scores_for` falls back to baseline-v0 abstention."""
+        version = self.config.quant_model_version
+        if not version:
+            return None
+        factory = self._bundle_factory
+        if factory is None:
+            from dynamo.research.quant.bundle import bundle_from_version
+
+            factory = bundle_from_version
+        return factory(version)
+
     def run(self, progress: Callable[[str], None] | None = None) -> ReplayResult:
         cfg = self.config
         run_id = cfg.run_id
+        self._bundle = self._resolve_bundle()  # before create_run: fail loud, write nothing
         sessions = _sessions_between(cfg.start, cfg.end)
         self._runs.create_run(
             run_id=run_id,
@@ -699,7 +734,9 @@ class ReplayRunner:
         self, gw: ReplayGateway, universe: list[str], day: date
     ) -> dict[str, QuantScore]:
         """See :func:`quant_scores_for` (shared with committee replay)."""
-        return quant_scores_for(gw, universe, day, self.config.quant_score_max_age_days)
+        return quant_scores_for(
+            gw, universe, day, self.config.quant_score_max_age_days, bundle=self._bundle
+        )
 
     def _with_horizon_exits(
         self,

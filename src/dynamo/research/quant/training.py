@@ -31,6 +31,10 @@ from dynamo.backtest.walkforward import (
     generate_folds,
 )
 from dynamo.domain.ports import ForecastModel
+
+# Re-exported for the replay preflight hook (Phase-2 contract: the loader is
+# discoverable as ``dynamo.research.quant.training.bundle_from_version``).
+from dynamo.research.quant.bundle import QuantBundleError, bundle_from_version
 from dynamo.research.quant.models import StatsforecastBaseline
 
 Task = Literal["rank", "downside", "vol"]
@@ -39,7 +43,14 @@ MIN_CROSS_SECTION = 3
 SHIP_T_STAT = 2.0
 SHIP_WIN_SHARE = 0.60
 
-__all__ = ["default_baseline_factories", "train_and_evaluate"]
+__all__ = [
+    "QuantBundleError",
+    "bundle_from_version",
+    "default_baseline_factories",
+    "feature_quantiles",
+    "fit_final_model",
+    "train_and_evaluate",
+]
 
 
 def default_baseline_factories(task: Task) -> dict[str, Callable[[], ForecastModel]]:
@@ -84,6 +95,16 @@ def _t_stat(values: list[float]) -> float:
 
 def _brier(pred: np.ndarray, actual: np.ndarray) -> float:
     return float(np.mean((np.clip(pred, 0.0, 1.0) - actual) ** 2))
+
+
+def _auc(pred: np.ndarray, actual: np.ndarray) -> float:
+    """ROC AUC of a probability score; NaN when the slice is single-class."""
+    y = (np.asarray(actual, dtype=float) > 0.5).astype(int)
+    if len(y) < 2 or len(np.unique(y)) < 2:
+        return float("nan")
+    from sklearn.metrics import roc_auc_score
+
+    return float(roc_auc_score(y, np.asarray(pred, dtype=float)))
 
 
 def _qlike(vol_pred: np.ndarray, vol_true: np.ndarray) -> float:
@@ -201,13 +222,13 @@ def train_and_evaluate(
                 per_model_date_ics[name].extend(ics)
                 fold_metrics[name] = {"rank_ic": metric}
             elif task == "downside":
-                metric = _brier(pred, np.asarray(y_test_nat, dtype=float))
+                y_arr = np.asarray(y_test_nat, dtype=float)
+                metric = _brier(pred, y_arr)
                 base_rate = float(np.mean(y_train)) if len(y_train) else 0.5
                 fold_metrics[name] = {
                     "brier": metric,
-                    "base_rate_brier": _brier(
-                        np.full(len(y_test_nat), base_rate), np.asarray(y_test_nat, dtype=float)
-                    ),
+                    "auc": _auc(pred, y_arr),
+                    "base_rate_brier": _brier(np.full(len(y_test_nat), base_rate), y_arr),
                 }
             else:  # vol: models emit log-vol
                 vol_pred = np.exp(pred)
@@ -271,6 +292,7 @@ def train_and_evaluate(
             entry["rank_ic_t_stat"] = _t_stat([v for v in fold_vals if not math.isnan(v)])
         elif task == "downside":
             entry["brier_pooled"] = _brier(preds, y_pooled)
+            entry["auc_pooled"] = _auc(preds, y_pooled)
             entry["base_rate_brier_pooled"] = _brier(
                 np.full(len(y_pooled), float(np.mean(y_pooled))), y_pooled
             )
@@ -338,6 +360,76 @@ def train_and_evaluate(
             "ships_ok": ships_ok,
         }
     )
+
+
+# --------------------------------------------------------------------------
+# final-model fitting for artifact save (backtest-campaign Phase 2)
+# --------------------------------------------------------------------------
+
+
+def _select_label(
+    labels: pd.DataFrame | pd.Series, task: Task, target: str | None
+) -> pd.Series:
+    if isinstance(labels, pd.DataFrame):
+        default_target = {
+            "rank": "excess_return_20d",
+            "downside": "downside_20d",
+            "vol": "realized_vol_20d",
+        }
+        return cast(pd.Series, labels[target or default_target[task]].astype(float))
+    return labels.astype(float)
+
+
+def fit_final_model(
+    features: pd.DataFrame,
+    labels: pd.DataFrame | pd.Series,
+    *,
+    task: Task,
+    model_factory: Callable[[], ForecastModel],
+    target: str | None = None,
+    fit_cfg: Mapping[str, Any] | None = None,
+) -> ForecastModel:
+    """Fit ONE production model for ``task`` on the FULL training window.
+
+    Sibling of :func:`train_and_evaluate` (deliberately not folded in — the
+    walk-forward report card keeps its exact signature and semantics): the
+    fold loop measures, this fits the artifact that ships. Label handling
+    mirrors the fold loop bit for bit — rows with NaN labels drop, the vol
+    task trains on log-vol (positive rows only), and rows are sorted
+    chronologically so the binary model's internal chronological calibration
+    split (``LightGBMModel.fit``, isotonic/Platt on the tail slice) is honest.
+    """
+    if not isinstance(features.index, pd.MultiIndex):
+        raise ValueError("features must be indexed by a (ts, symbol) MultiIndex")
+    label = _select_label(labels, task, target).reindex(features.index)
+    if task == "vol":
+        label = label.where(label > 0)
+        label = cast(pd.Series, np.log(label))
+    keep = label.notna().to_numpy()
+    x = features.loc[keep]
+    y = cast(pd.Series, label.loc[keep])
+    if len(x) == 0:
+        raise ValueError(f"no rows with a usable {task!r} label to fit on")
+    x = x.sort_index(level=[0, 1])
+    y = y.sort_index(level=[0, 1])
+    model = model_factory()
+    model.fit(x, y, dict(fit_cfg or {}))
+    return model
+
+
+def feature_quantiles(features: pd.DataFrame) -> pd.DataFrame:
+    """Training-window q01/q99 per feature — the coverage band the scoring
+    confidence heuristic checks live rows against (part of the artifact)."""
+    valid = features.astype(float)
+    return pd.DataFrame(
+        {
+            col: {
+                "q01": float(valid[col].quantile(0.01)),
+                "q99": float(valid[col].quantile(0.99)),
+            }
+            for col in valid.columns
+        }
+    ).reindex(["q01", "q99"])
 
 
 def _jsonify(obj: Any) -> Any:

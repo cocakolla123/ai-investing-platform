@@ -77,6 +77,7 @@ from dynamo.research.committee import (
     arbiter_context_for,
 )
 from dynamo.research.dossier import assemble_dossier_context
+from dynamo.research.quant.scoring import ModelBundle
 
 ENTRY_ACTIONS = frozenset({Action.BUY, Action.ADD})
 PRICE_STATS_LOOKBACK_DAYS = 120  # live build_deep_dive_contexts parity
@@ -183,12 +184,19 @@ def strip_namespace(run_id: str, custom_id: str) -> str:
 
 
 def committee_shortlist(
-    gw: ReplayCommitteeGateway, config: ReplayConfig, day: date
+    gw: ReplayCommitteeGateway,
+    config: ReplayConfig,
+    day: date,
+    bundle: ModelBundle | None = None,
 ) -> tuple[dict[str, QuantScore], list[str]]:
     """(all quant scores, deep-dive shortlist) for day D — the quant runner's
-    own selection logic, capped at ``committee_deep_dives_per_day``."""
+    own selection logic, capped at ``committee_deep_dives_per_day``.
+    ``bundle`` is the trained quant bundle when the run pins a
+    ``quant_model_version`` (Phase 2); None keeps baseline-v0 abstention."""
     universe = gw.universe(config.universe_tiers)
-    scores = quant_scores_for(gw, universe, day, config.quant_score_max_age_days)
+    scores = quant_scores_for(
+        gw, universe, day, config.quant_score_max_age_days, bundle=bundle
+    )
     synth = synthesize_verdicts(scores, day, config.horizon_sessions)
     watchlist = synthesize_watchlist(synth, day)
     shortlist = [w.symbol for w in watchlist[: config.committee_deep_dives_per_day]]
@@ -359,6 +367,7 @@ class CommitteeReplay:
         poll_initial_s: float = POLL_INITIAL_S,
         poll_timeout_s: float = POLL_TIMEOUT_S,
         run_config_extras: Mapping[str, Any] | None = None,
+        bundle_factory: Callable[[str], ModelBundle] | None = None,
     ) -> None:
         if config.mode != "committee":
             raise ValueError(f"CommitteeReplay requires mode='committee', got {config.mode!r}")
@@ -389,6 +398,21 @@ class CommitteeReplay:
         # Run-metadata extras (e.g. the preflight report) merged into
         # replay_runs.config_json — NOT part of ReplayConfig (run-id stability).
         self._run_config_extras = dict(run_config_extras or {})
+        # Trained-bundle seam (Phase 2), mirroring ReplayRunner: injected
+        # factory or the artifact loader; resolved ONCE at run start.
+        self._bundle_factory = bundle_factory
+        self._bundle: ModelBundle | None = None
+
+    def _resolve_bundle(self) -> ModelBundle | None:
+        version = self.config.quant_model_version
+        if not version:
+            return None
+        factory = self._bundle_factory
+        if factory is None:
+            from dynamo.research.quant.bundle import bundle_from_version
+
+            factory = bundle_from_version
+        return factory(version)
 
     # ------------------------------------------------------------------ run
     def run(self, progress: Callable[[str], None] | None = None) -> CommitteeReplayResult:
@@ -396,6 +420,7 @@ class CommitteeReplay:
 
         cfg = self.config
         run_id = cfg.run_id
+        self._bundle = self._resolve_bundle()  # loud + $0 before any run row
         sessions = _sessions_between(cfg.start, cfg.end)
         self._runs.create_run(
             run_id=run_id,
@@ -413,7 +438,7 @@ class CommitteeReplay:
         try:
             for day in sessions:
                 gw = self._gateway_factory(day)
-                scores, shortlist = committee_shortlist(gw, cfg, day)
+                scores, shortlist = committee_shortlist(gw, cfg, day, bundle=self._bundle)
                 if not shortlist:
                     if progress is not None:
                         progress(f"{day.isoformat()} shortlist empty — no deep dives ($0)")

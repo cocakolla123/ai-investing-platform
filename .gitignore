@@ -18,6 +18,9 @@ htmlcov/
 *.parquet
 *.duckdb
 models/artifacts/
+# Model artifacts (Settings().artifact_dir default: repo-root artifacts/)
+/artifacts/
+*.joblib
 
 # OS / editor
 .DS_Store

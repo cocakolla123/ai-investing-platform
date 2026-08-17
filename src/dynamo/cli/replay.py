@@ -62,6 +62,26 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--initial-equity", type=float, default=100_000.0)
     run.add_argument("--horizon-sessions", type=int, default=20)
+    run.add_argument(
+        "--quant-model-version",
+        default="",
+        help=(
+            "registered quant bundle (dynamo.cli.quant_train --label) to score "
+            "with; unset = baseline-v0 heuristic (honest abstention). Part of "
+            "config_hash, so it changes the run id."
+        ),
+    )
+    run.add_argument(
+        "--quant-score-max-age-days",
+        type=int,
+        default=5,
+        help="max staleness of persisted quant scores before the bundle rescoring (default 5)",
+    )
+    run.add_argument(
+        "--code-version",
+        default="",
+        help="code version stamp recorded in the run config (freeze across a campaign)",
+    )
     run.add_argument("--database-url", default=None)
     run.add_argument(
         "--skip-preflight",
@@ -95,6 +115,38 @@ def _engine(database_url: str | None) -> Any:
     from dynamo.persistence.db import make_engine
 
     return make_engine(database_url or Settings().database_url)
+
+
+def _bundle_factory(engine: Any) -> Any:
+    """Composition-layer bundle loading for ``--quant-model-version``: the
+    registry row's ``artifact_path`` (recorded by ``dynamo.cli.quant_train``)
+    names the bundle manifest, so artifacts move with the registry; without a
+    row the loader falls back to the trainer's default artifact directory.
+    CANDIDATE status is fine here — replay opts into candidates explicitly;
+    only the nightly production asset requires promoted status."""
+
+    def load(version: str) -> Any:
+        from pathlib import Path
+
+        from sqlalchemy import select
+
+        from dynamo.persistence import schema
+        from dynamo.research.quant.bundle import bundle_from_version
+
+        with engine.connect() as cx:
+            row = cx.execute(
+                select(schema.model_versions.c.artifact_path).where(
+                    schema.model_versions.c.id == version
+                )
+            ).first()
+        artifact_dir = (
+            Path(str(row.artifact_path)).parent
+            if row is not None and row.artifact_path
+            else None
+        )
+        return bundle_from_version(version, artifact_dir)
+
+    return load
 
 
 def _preflight_extras(engine: Any, config: Any, *, skip: bool) -> dict[str, Any] | None:
@@ -140,6 +192,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         universe_tiers=tuple(args.universe_tier or (1, 3)),
         initial_equity=args.initial_equity,
         horizon_sessions=args.horizon_sessions,
+        quant_score_max_age_days=args.quant_score_max_age_days,
+        quant_model_version=args.quant_model_version,
+        code_version=args.code_version,
     )
     extras = _preflight_extras(engine, config, skip=args.skip_preflight)
     if extras is None:
@@ -150,6 +205,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         run_repo=ReplayRepository(engine),
         config=config,
         run_config_extras=extras,
+        bundle_factory=_bundle_factory(engine),
     )
     print(f"replay {config.run_id} ({config.start} -> {config.end}, mode={config.mode})")
     result = runner.run(progress=print)
@@ -206,6 +262,9 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         initial_equity=args.initial_equity,
         horizon_sessions=args.horizon_sessions,
         committee_deep_dives_per_day=args.deep_dives_per_day,
+        quant_score_max_age_days=args.quant_score_max_age_days,
+        quant_model_version=args.quant_model_version,
+        code_version=args.code_version,
     )
     extras = _preflight_extras(engine, config, skip=args.skip_preflight)
     if extras is None:
@@ -240,6 +299,7 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         },
         embedder=LocalEmbedder(),
         run_config_extras=extras,
+        bundle_factory=_bundle_factory(engine),
     )
     print(
         f"committee replay {config.run_id} ({config.start} -> {config.end}) "

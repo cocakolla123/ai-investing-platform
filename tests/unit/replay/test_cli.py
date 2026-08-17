@@ -119,6 +119,32 @@ def test_estimate_scales_with_deep_dive_cap(capsys: pytest.CaptureFixture[str]) 
     assert total_for("8") == pytest.approx(2.0 * total_for("4"), abs=0.03)
 
 
+def test_replay_run_quant_bundle_flags_parse_with_safe_defaults() -> None:
+    """Phase-2 flags: defaults preserve old behavior (baseline-v0, age 5,
+    empty code version); explicit values parse through."""
+    parser = replay_cli._build_parser()
+    args = parser.parse_args(
+        ["run", "--start", "2026-06-01", "--end", "2026-06-10", "--run-label", "x"]
+    )
+    assert args.quant_model_version == ""
+    assert args.quant_score_max_age_days == 5
+    assert args.code_version == ""
+    args = parser.parse_args(
+        [
+            "run",
+            "--start", "2026-06-01",
+            "--end", "2026-06-10",
+            "--run-label", "x",
+            "--quant-model-version", "campaign-v1",
+            "--quant-score-max-age-days", "7",
+            "--code-version", "abc123",
+        ]
+    )
+    assert args.quant_model_version == "campaign-v1"
+    assert args.quant_score_max_age_days == 7
+    assert args.code_version == "abc123"
+
+
 def test_replay_rejects_unknown_mode() -> None:
     with pytest.raises(SystemExit):
         replay_cli._build_parser().parse_args(
