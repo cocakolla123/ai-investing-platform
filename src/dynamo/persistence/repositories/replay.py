@@ -1,8 +1,9 @@
 """Replay bookkeeping repository (plan Phase 4; committee mode Phase 5).
 
-Owns ``replay_runs``, ``replay_decisions`` and ``replay_verdicts`` — the only
-tables (besides ``decision_experience`` rows with ``source='replay'``) a
-replay run is allowed to write. Everything is idempotent-upsert on
+Owns ``replay_runs``, ``replay_decisions``, ``replay_verdicts``,
+``replay_equity`` and ``replay_fills`` — the only tables (besides
+``decision_experience`` rows with ``source='replay'``) a replay run is
+allowed to write. Everything is idempotent-upsert on
 deterministic ids so a re-run of the same configuration re-derives the same
 rows.
 
@@ -25,6 +26,8 @@ from dynamo.persistence.schema import (
     generation_results,
     replay_contexts,
     replay_decisions,
+    replay_equity,
+    replay_fills,
     replay_runs,
     replay_verdicts,
 )
@@ -140,6 +143,67 @@ class ReplayRepository:
             select(replay_decisions)
             .where(replay_decisions.c.run_id == run_id)
             .order_by(replay_decisions.c.as_of, replay_decisions.c.symbol)
+        )
+        with self._engine.connect() as cx:
+            return [dict(r._mapping) for r in cx.execute(stmt)]
+
+    # -- equity curve + fills (backtest-campaign Phase 5) ------------------
+
+    def insert_equity(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        """Idempotent upsert on the (run_id, as_of) PK — a re-run of the same
+        deterministic config updates in place, never duplicates."""
+        if not rows:
+            return 0
+        stmt = pg_insert(replay_equity).values([dict(r) for r in rows])
+        updatable = {
+            c.name: stmt.excluded[c.name]
+            for c in replay_equity.columns
+            if c.name not in ("run_id", "as_of") and c.name in rows[0]
+        }
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[replay_equity.c.run_id, replay_equity.c.as_of],
+            set_=updatable,
+        ).returning(replay_equity.c.as_of)
+        with self._engine.begin() as cx:
+            written = cx.execute(stmt).all()
+        return len(written)
+
+    def equity_for(self, run_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            select(replay_equity)
+            .where(replay_equity.c.run_id == run_id)
+            .order_by(replay_equity.c.as_of)
+        )
+        with self._engine.connect() as cx:
+            return [dict(r._mapping) for r in cx.execute(stmt)]
+
+    def insert_fills(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        """Idempotent upsert on the (run_id, session, symbol) PK."""
+        if not rows:
+            return 0
+        stmt = pg_insert(replay_fills).values([dict(r) for r in rows])
+        updatable = {
+            c.name: stmt.excluded[c.name]
+            for c in replay_fills.columns
+            if c.name not in ("run_id", "session", "symbol") and c.name in rows[0]
+        }
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[
+                replay_fills.c.run_id,
+                replay_fills.c.session,
+                replay_fills.c.symbol,
+            ],
+            set_=updatable,
+        ).returning(replay_fills.c.symbol)
+        with self._engine.begin() as cx:
+            written = cx.execute(stmt).all()
+        return len(written)
+
+    def fills_for(self, run_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            select(replay_fills)
+            .where(replay_fills.c.run_id == run_id)
+            .order_by(replay_fills.c.session, replay_fills.c.symbol)
         )
         with self._engine.connect() as cx:
             return [dict(r._mapping) for r in cx.execute(stmt)]

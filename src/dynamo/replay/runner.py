@@ -48,7 +48,16 @@ weekend price moves surface on Monday. Sizing/caps come from the same
 production constructor + cascade (crypto sleeve caps included).
 
 FIREWALL: the runner writes ONLY through ``ReplayRepository`` (replay_runs /
-replay_decisions) and ``ExperienceRepository.insert`` (source='replay').
+replay_decisions / replay_equity / replay_fills) and
+``ExperienceRepository.insert`` (source='replay').
+
+Persistence cadence (backtest-campaign Phase 5): per-session equity/fill
+rows are buffered and flushed once per calendar month (at each month
+boundary, plus a final flush) — crash-friendlier than a single end-of-run
+write (which would lose everything on a late crash) without paying one round
+trip per day. A crash loses at most the in-progress month; the deterministic
+(run_id, as_of) / (run_id, session, symbol) PKs make the re-run upsert over
+the surviving rows cleanly.
 """
 
 from __future__ import annotations
@@ -203,6 +212,8 @@ class RunSink(Protocol):
     ) -> None: ...
     def update_status(self, run_id: str, status: str) -> None: ...
     def insert_decisions(self, rows: Sequence[Mapping[str, Any]]) -> int: ...
+    def insert_equity(self, rows: Sequence[Mapping[str, Any]]) -> int: ...
+    def insert_fills(self, rows: Sequence[Mapping[str, Any]]) -> int: ...
 
 
 # --------------------------------------------------------------------------
@@ -392,6 +403,7 @@ class ReplaySessionRecord:
     session: date
     equity: float
     cash: float
+    gross: float  # gross exposure fraction (position value / equity)
     regime: str
     ladder: str
     new_risk_allowed: bool
@@ -406,7 +418,11 @@ class ReplayFill:
     side: str
     qty: float
     price: float
+    trade_value: float  # cents (qty x fill price, before costs)
     cost: float
+    # Backtest FillRecord parity (engine._execute): sells realize
+    # value - cost - qty x average-cost basis; buys carry None.
+    realized_pnl: float | None
 
 
 @dataclass(frozen=True)
@@ -419,6 +435,10 @@ class ReplayResult:
     fills: tuple[ReplayFill, ...]
     equity_curve: tuple[tuple[date, float], ...]
     status: str
+    # One-way turnover over the whole run (backtest-parity semantics: half the
+    # traded value over decision equity). Accumulates for the run's lifetime —
+    # turnover_mtd keeps its monthly reset for the constructor's budget.
+    turnover_total: float = 0.0
 
 
 @dataclass
@@ -633,7 +653,22 @@ class ReplayRunner:
         ladder = LadderState()
         hwm = cfg.initial_equity
         turnover_mtd = 0.0
+        turnover_total = 0.0
         current_month: tuple[int, int] | None = None
+
+        # Persistence buffers (Phase 5): flushed at each month boundary and at
+        # run end — see the module docstring for the crash-recovery contract.
+        equity_buffer: list[dict[str, Any]] = []
+        fill_buffer: list[dict[str, Any]] = []
+
+        def _flush_persistence() -> None:
+            nonlocal equity_buffer, fill_buffer
+            if equity_buffer:
+                self._runs.insert_equity(equity_buffer)
+                equity_buffer = []
+            if fill_buffer:
+                self._runs.insert_fills(fill_buffer)
+                fill_buffer = []
 
         pending_target: TargetPortfolio | None = None
         pending_equity = cfg.initial_equity
@@ -652,6 +687,7 @@ class ReplayRunner:
             if current_month != (day.year, day.month):
                 current_month = (day.year, day.month)
                 turnover_mtd = 0.0
+                _flush_persistence()  # month boundary: persist the prior month
 
             gw = self._gateway_factory(day)
             universe = gw.universe(cfg.universe_tiers)
@@ -678,7 +714,25 @@ class ReplayRunner:
                     pending_adv,
                 )
                 fills.extend(day_fills)
-                turnover_mtd += traded / pending_equity / 2.0 if pending_equity > 0 else 0.0
+                fill_buffer.extend(
+                    {
+                        "run_id": run_id,
+                        "session": f.session,
+                        "symbol": f.symbol,
+                        "side": f.side,
+                        "qty": f.qty,
+                        "price": f.price,
+                        "trade_value": f.trade_value,
+                        "cost": f.cost,
+                        "realized_pnl": f.realized_pnl,
+                    }
+                    for f in day_fills
+                )
+                turnover_increment = (
+                    traded / pending_equity / 2.0 if pending_equity > 0 else 0.0
+                )
+                turnover_mtd += turnover_increment
+                turnover_total += turnover_increment
                 # Entry bookkeeping + resolution of full exits.
                 # pending_equity is still YESTERDAY's decision equity here
                 # (overwritten in step 8) — the bankroll context for the lot.
@@ -704,6 +758,7 @@ class ReplayRunner:
             equity = _cents(cash + position_value)
             hwm = max(hwm, equity)
             equity_curve.append((day, equity))
+            gross = position_value / equity if equity > 0 else 0.0
 
             # 3. Real RiskEngine verdict on point-in-time inputs.
             sigma_annual, adv = _sigma_and_adv(bars)
@@ -780,12 +835,25 @@ class ReplayRunner:
                     session=day,
                     equity=equity,
                     cash=cash,
+                    gross=gross,
                     regime=verdict.regime.regime.value,
                     ladder=verdict.ladder.value,
                     new_risk_allowed=verdict.new_risk_allowed,
                     degraded=verdict.degraded,
                     vetoes=tuple((v.symbol, v.rule) for v in verdict.vetoes),
                 )
+            )
+            equity_buffer.append(
+                {
+                    "run_id": run_id,
+                    "as_of": day,
+                    "equity": equity,
+                    "cash": cash,
+                    "gross": gross,
+                    "regime": verdict.regime.regime.value,
+                    "ladder_rung": verdict.ladder.value,
+                    "vetoes": len(verdict.vetoes),
+                }
             )
             if progress is not None:
                 progress(
@@ -822,6 +890,7 @@ class ReplayRunner:
                 experiences.append(
                     self._resolve(lot, final_day, exit_price, final_bars, run_id)
                 )
+        _flush_persistence()  # final flush: the in-progress month
         return ReplayResult(
             run_id=run_id,
             sessions=tuple(sessions),
@@ -831,6 +900,7 @@ class ReplayRunner:
             fills=tuple(fills),
             equity_curve=tuple(equity_curve),
             status="completed",
+            turnover_total=turnover_total,
         )
 
     # ----------------------------------------------------------- scores/exits
@@ -938,9 +1008,14 @@ class ReplayRunner:
                     (prev_qty * prev_cost + value + cost) / new_qty if new_qty else 0.0
                 )
                 shares[sym] = new_qty
+                realized = None
                 side = "buy"
             else:
                 cash = _cents(cash + value - cost)
+                # Backtest FillRecord parity (engine._execute sell branch):
+                # realize against the average-cost basis BEFORE dropping it.
+                basis = avg_cost.get(sym, 0.0)
+                realized = _cents(value - cost - qty * basis)
                 shares[sym] = shares.get(sym, 0.0) - qty
                 if abs(shares[sym]) < 1e-9:
                     shares.pop(sym, None)
@@ -949,7 +1024,14 @@ class ReplayRunner:
             traded_value += value
             day_fills.append(
                 ReplayFill(
-                    session=day, symbol=sym, side=side, qty=qty, price=open_px, cost=cost
+                    session=day,
+                    symbol=sym,
+                    side=side,
+                    qty=qty,
+                    price=open_px,
+                    trade_value=value,
+                    cost=cost,
+                    realized_pnl=realized,
                 )
             )
         return cash, day_fills, traded_value

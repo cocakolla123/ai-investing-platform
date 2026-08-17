@@ -140,6 +140,9 @@ class FakeRunRepo:
         self.runs: list[dict[str, Any]] = []
         self.statuses: list[tuple[str, str]] = []
         self.decisions: list[dict[str, Any]] = []
+        self.equity_rows: list[dict[str, Any]] = []
+        self.fill_rows: list[dict[str, Any]] = []
+        self.equity_flushes: list[int] = []  # rows per insert_equity call
 
     def create_run(self, **kwargs: Any) -> None:
         self.runs.append(kwargs)
@@ -150,6 +153,17 @@ class FakeRunRepo:
     def insert_decisions(self, rows: Any) -> int:
         rows = [dict(r) for r in rows]
         self.decisions.extend(rows)
+        return len(rows)
+
+    def insert_equity(self, rows: Any) -> int:
+        rows = [dict(r) for r in rows]
+        self.equity_rows.extend(rows)
+        self.equity_flushes.append(len(rows))
+        return len(rows)
+
+    def insert_fills(self, rows: Any) -> int:
+        rows = [dict(r) for r in rows]
+        self.fill_rows.extend(rows)
         return len(rows)
 
 

@@ -228,6 +228,23 @@ def test_replay_never_touches_live_tables(engine) -> None:  # type: ignore[no-un
     run = replay_repo.get_run(config.run_id)
     assert run is not None and run["status"] == "completed"
     assert len(replay_repo.decisions_for(config.run_id)) == len(result.decisions)
+    # Persistence round-trip (campaign Phase 5): the durable equity curve and
+    # fills match the in-memory result exactly.
+    equity_rows = replay_repo.equity_for(config.run_id)
+    assert [(r["as_of"], r["equity"]) for r in equity_rows] == list(result.equity_curve)
+    assert [(r["regime"], r["ladder_rung"]) for r in equity_rows] == [
+        (rec.regime, rec.ladder) for rec in result.session_records
+    ]
+    fill_rows = replay_repo.fills_for(config.run_id)
+    assert len(fill_rows) == len(result.fills)
+    stored_fills = {
+        (f["session"], f["symbol"]): (f["side"], f["qty"], f["price"], f["realized_pnl"])
+        for f in fill_rows
+    }
+    for f in result.fills:
+        assert stored_fills[(f.session, f.symbol)] == (
+            f.side, f.qty, f.price, f.realized_pnl,
+        )
     exp_repo = ExperienceRepository(engine)
     assert exp_repo.count(source="replay") == len(result.experiences)
     assert exp_repo.count(source="live") == 0
@@ -245,6 +262,10 @@ def test_replay_never_touches_live_tables(engine) -> None:  # type: ignore[no-un
     assert {t: _count(engine, t) for t in LIVE_TABLES} == before
     assert exp_repo.count(source="replay") == len(result.experiences)
     assert result2.decisions == result.decisions
+    # Upsert idempotency (campaign Phase 5): same deterministic PKs, no dupes.
+    assert _count(engine, "replay_equity") == len(equity_rows)
+    assert _count(engine, "replay_fills") == len(fill_rows)
+    assert replay_repo.equity_for(config.run_id) == equity_rows
 
 
 def test_committee_replay_never_touches_live_tables(engine) -> None:  # type: ignore[no-untyped-def]

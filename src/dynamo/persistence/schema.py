@@ -978,6 +978,47 @@ replay_contexts = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
+# Replay per-session portfolio states (backtest-campaign Phase 5; migration
+# 0017): the durable equity curve of a quant/portfolio replay — one row per
+# (run, session) mirroring ReplaySessionRecord (``ladder_rung`` stores the
+# LadderRung enum VALUE string, exactly what ReplaySessionRecord.ladder
+# carries; ``vetoes`` is the session's RiskEngine veto count, the report's
+# constraint-violation input). PK (run_id, as_of): a re-run of the same
+# deterministic config upserts in place, never duplicates.
+replay_equity = Table(
+    "replay_equity",
+    metadata,
+    Column("run_id", Text, primary_key=True),
+    Column("as_of", Date, primary_key=True),
+    Column("equity", Float, nullable=False),
+    Column("cash", Float, nullable=False),
+    Column("gross", Float, nullable=False, default=0.0),
+    Column("regime", Text, nullable=False, default=""),
+    Column("ladder_rung", Text, nullable=False, default=""),
+    Column("vetoes", Integer, nullable=False, default=0),
+)
+
+# Replay fills (backtest-campaign Phase 5; migration 0017): one row per
+# (run, session, symbol) — the runner produces at most one fill per symbol
+# per session (a single signed delta), so the triple is a natural PK.
+# ``realized_pnl`` mirrors the backtest engine's FillRecord math
+# (value - cost - qty * average-cost basis; NULL on buys); a dedicated table
+# rather than a payload on replay_decisions because a held name dropped from
+# both verdicts and target weights sells with NO matching decision row.
+replay_fills = Table(
+    "replay_fills",
+    metadata,
+    Column("run_id", Text, primary_key=True),
+    Column("session", Date, primary_key=True),
+    Column("symbol", Text, primary_key=True),
+    Column("side", Text, nullable=False),
+    Column("qty", Float, nullable=False),
+    Column("price", Float, nullable=False),
+    Column("trade_value", Float, nullable=False),
+    Column("cost", Float, nullable=False),
+    Column("realized_pnl", Float),  # sells only; NULL on buys
+)
+
 # Durable evaluation-period claims (plan Phase 5; migration 0013) — the
 # database-backed sibling of backtest.walkforward.EvaluationRegistry. A
 # (period, purpose) is claimed ONCE; any later claim attempt refuses, so the

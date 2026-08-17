@@ -20,14 +20,14 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0016() -> None:
+def test_revision_chain_is_linear_through_0017() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0016" in modules, "0016_replay_contexts migration missing"
+    assert "0017" in modules, "0017_replay_equity migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0016"}, f"expected 0016 as the single head, got {heads}"
+    assert heads == {"0017"}, f"expected 0017 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
     assert down["0007"] == "0006"
@@ -40,6 +40,26 @@ def test_revision_chain_is_linear_through_0016() -> None:
     assert down["0014"] == "0013"
     assert down["0015"] == "0014"
     assert down["0016"] == "0015"
+    assert down["0017"] == "0016"
+
+
+def test_0017_targets_replay_equity_and_fills_tables() -> None:
+    from dynamo.persistence import schema
+
+    equity = schema.metadata.tables["replay_equity"]
+    assert [c.name for c in equity.primary_key.columns] == ["run_id", "as_of"]
+    for col in ("equity", "cash", "gross", "regime", "ladder_rung", "vetoes"):
+        assert not equity.c[col].nullable
+
+    fills = schema.metadata.tables["replay_fills"]
+    assert [c.name for c in fills.primary_key.columns] == ["run_id", "session", "symbol"]
+    for col in ("side", "qty", "price", "trade_value", "cost"):
+        assert not fills.c[col].nullable
+    assert fills.c.realized_pnl.nullable  # buys carry NULL
+
+    module = _load(VERSIONS / "0017_replay_equity.py")
+    assert module.EQUITY_TABLE == "replay_equity"
+    assert module.FILLS_TABLE == "replay_fills"
 
 
 def test_0015_targets_bankroll_context_columns() -> None:

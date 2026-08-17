@@ -10,6 +10,7 @@ dressing thin samples up as signal.
 
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 from sqlalchemy import func, select
 from streamlit_helpers import empty_note, safe_df
@@ -120,3 +121,67 @@ if not empty_note(
         "they never touch live calibration."
     )
     st.dataframe(replay_runs, width="stretch", hide_index=True)
+
+# --- replay equity curves (backtest-campaign Phase 5) -----------------------
+# Metrics are computed inline from the persisted curve (pandas/numpy only) —
+# deliberately NOT via dynamo.replay.report, which drags the backtest stack
+# into a page that only needs light math.
+
+st.subheader("Replay equity curves")
+req = schema.replay_equity
+available = safe_df(select(req.c.run_id).distinct().order_by(req.c.run_id))
+if not empty_note(
+    available,
+    "No persisted replay equity curves yet — quant/portfolio replays "
+    "(dynamo.cli.replay run) persist one row per session into replay_equity.",
+):
+    run_ids = list(available["run_id"])
+    selected = st.multiselect(
+        "Runs to overlay (curves are normalized to 100 at start so different "
+        "bankrolls compare directly)",
+        run_ids,
+        default=run_ids[:3],
+    )
+    if selected:
+        curves = safe_df(
+            select(req.c.run_id, req.c.as_of, req.c.equity)
+            .where(req.c.run_id.in_(selected))
+            .order_by(req.c.as_of)
+        )
+        if not curves.empty:
+            wide = curves.pivot(index="as_of", columns="run_id", values="equity")
+            wide = wide.sort_index()
+            normalized = wide.apply(lambda s: 100.0 * s / s.dropna().iloc[0])
+            st.line_chart(normalized)
+
+            metric_rows = []
+            for run_id in selected:
+                if run_id not in wide.columns:
+                    continue
+                s = wide[run_id].dropna()
+                if len(s) < 2:
+                    continue
+                r = s.pct_change().dropna()
+                std = float(r.std(ddof=1))
+                sharpe = float(r.mean()) / std * (252.0**0.5) if std > 0 else 0.0
+                metric_rows.append(
+                    {
+                        "run_id": run_id,
+                        "sessions": len(s),
+                        "start_equity": float(s.iloc[0]),
+                        "final_equity": float(s.iloc[-1]),
+                        "return_pct": (float(s.iloc[-1] / s.iloc[0]) - 1.0) * 100.0,
+                        "sharpe": sharpe,
+                        "max_drawdown_pct": float((s / s.cummax() - 1.0).min()) * 100.0,
+                        "vol_annual_pct": std * (252.0**0.5) * 100.0,
+                    }
+                )
+            if metric_rows:
+                st.dataframe(
+                    pd.DataFrame(metric_rows), width="stretch", hide_index=True
+                )
+            st.caption(
+                "Light per-curve metrics computed from replay_equity; the full "
+                "report (deflated Sharpe, benchmark, per-regime blocks) comes "
+                "from `dynamo.cli.replay report --run-id <id>`."
+            )

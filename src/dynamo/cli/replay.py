@@ -11,6 +11,9 @@ Usage:
     python -m dynamo.cli.replay estimate --start 2026-08-03 --end 2026-08-14
     python -m dynamo.cli.replay list
     python -m dynamo.cli.replay show --run-id replay-abc123def456
+    python -m dynamo.cli.replay report --run-id replay-abc123def456
+    python -m dynamo.cli.replay compare --run-ids replay-a replay-b \
+        --png artifacts/backtests/compare.png
 
 Quant and portfolio modes spend $0 (zero LLM calls anywhere in their path —
 portfolio mode replays a committee run's PERSISTED verdicts and is routed
@@ -180,6 +183,40 @@ def _build_parser() -> argparse.ArgumentParser:
     aud.add_argument("--run-id", required=True)
     aud.add_argument("--database-url", default=None)
     aud.add_argument("--out-dir", default=None)
+
+    rep = sub.add_parser(
+        "report",
+        help=(
+            "build report.json + tearsheet for a finished quant/portfolio run "
+            "-> artifacts/backtests/<run_id>/; exit 2 unknown run"
+        ),
+    )
+    rep.add_argument("--run-id", required=True)
+    rep.add_argument("--database-url", default=None)
+    rep.add_argument(
+        "--artifact-dir",
+        default=None,
+        help="artifact root (default: Settings().artifact_dir)",
+    )
+
+    cmp_ = sub.add_parser(
+        "compare",
+        help=(
+            "metrics table across finished runs (+ optional overlaid "
+            "equity-curve png); exit 2 on any unknown run id"
+        ),
+    )
+    cmp_.add_argument("--run-ids", required=True, nargs="+")
+    cmp_.add_argument(
+        "--png",
+        default=None,
+        help=(
+            "write an overlaid equity-curve png here (normalized to 100 at "
+            "start for cross-bankroll comparability; needs matplotlib — "
+            "skipped with a note when absent)"
+        ),
+    )
+    cmp_.add_argument("--database-url", default=None)
 
     lst = sub.add_parser("list", help="list replay runs")
     lst.add_argument("--database-url", default=None)
@@ -558,6 +595,181 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     return 1
 
 
+def _benchmark_closes(engine: Any, run: dict[str, Any]) -> Any:
+    """SPY closes over the run window, read through a gateway fixed at the
+    run's END date — bounded like every replay read (nothing post-window)."""
+    import pandas as pd
+
+    from dynamo.replay.gateway import HistoricalDataGateway
+
+    start, end = run["start_as_of"], run["end_as_of"]
+    gw = HistoricalDataGateway(engine, end)
+    bars = gw.bars(["SPY"], (end - start).days + 10)
+    if bars.empty:
+        return None
+    from typing import cast
+
+    spy = cast("pd.DataFrame", bars[bars["symbol"] == "SPY"]).sort_values("ts")
+    if spy.empty:
+        return None
+    return pd.Series(
+        spy["close"].astype(float).to_numpy(),
+        index=[pd.Timestamp(t).date() for t in spy["ts"]],
+        name="SPY",
+    )
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    """Report a finished quant/portfolio run: exit 0 ok, 1 no curve, 2 unknown."""
+    from pathlib import Path
+
+    from dynamo.config.settings import Settings
+    from dynamo.persistence.repositories.replay import ReplayRepository
+    from dynamo.replay.report import ReplayReportError, UnknownRunError, replay_report
+    from dynamo.replay.report import total_costs as fills_total_costs
+
+    engine = _engine(args.database_url)
+    repo = ReplayRepository(engine)
+    run = repo.get_run(args.run_id)
+    if run is None:
+        print(f"run {args.run_id!r} not found")
+        return 2
+    artifact_dir = Path(args.artifact_dir or Settings().artifact_dir)
+    try:
+        report = replay_report(
+            args.run_id,
+            repo,
+            artifact_dir,
+            benchmark_closes=_benchmark_closes(engine, run),
+        )
+    except UnknownRunError as exc:  # pragma: no cover - guarded above
+        print(str(exc))
+        return 2
+    except ReplayReportError as exc:
+        print(str(exc))
+        return 1
+    costs = fills_total_costs(repo.fills_for(args.run_id))
+    initial = float(run["config_json"].get("initial_equity") or 0.0)
+    m = report.metrics
+    print(f"report for {args.run_id} -> {artifact_dir / 'backtests' / args.run_id}")
+    print(f"  sessions:         {m.n_sessions} ({report.window_start} -> {report.window_end})")
+    print(f"  total return:     {m.total_return * 100.0:+.2f}%")
+    print(f"  sharpe:           {m.sharpe:.2f}  (deflated: {report.deflated_sharpe:.2f})")
+    print(f"  max drawdown:     {m.max_drawdown * 100.0:.2f}%")
+    print(f"  turnover 1-way:   {report.behavior.one_way_turnover_total:.2f}")
+    drag = f" ({costs / initial * 100.0:.2f}% of initial equity)" if initial > 0 else ""
+    print(f"  cost drag:        ${costs:,.2f}{drag}")
+    if report.benchmark is not None:
+        print(
+            f"  benchmark excess: {report.benchmark.excess_total_return * 100.0:+.2f}% "
+            f"vs {report.benchmark.benchmark}"
+        )
+    else:
+        print("  benchmark excess: n/a (no SPY bars over the window)")
+    return 0
+
+
+def _cmd_compare(args: argparse.Namespace) -> int:
+    """Cross-run metrics table (+ optional normalized-curve png); exit 2 on
+    any unknown run id, 1 when a run has no persisted curve."""
+    from dynamo.backtest.metrics import metrics_block
+    from dynamo.persistence.repositories.replay import ReplayRepository
+    from dynamo.replay.report import (
+        derive_turnover_total,
+        equity_series,
+        realized_pnls,
+        total_costs,
+    )
+
+    engine = _engine(args.database_url)
+    repo = ReplayRepository(engine)
+    rows: list[dict[str, Any]] = []
+    curves: dict[str, Any] = {}
+    for run_id in args.run_ids:
+        run = repo.get_run(run_id)
+        if run is None:
+            print(f"run {run_id!r} not found")
+            return 2
+        equity_rows = repo.equity_for(run_id)
+        if not equity_rows:
+            print(
+                f"run {run_id!r} has no persisted equity curve "
+                f"(mode={run['mode']!r}) — nothing to compare"
+            )
+            return 1
+        fills = repo.fills_for(run_id)
+        curve = equity_series(equity_rows)
+        curves[run_id] = curve
+        block = metrics_block(curve)
+        pnls = [p for _, _, p in realized_pnls(fills)]
+        rows.append(
+            {
+                "run_id": run_id,
+                "label": str(run["label"]),
+                "initial": float(run["config_json"].get("initial_equity") or curve.iloc[0]),
+                "final": float(curve.iloc[-1]),
+                "return_pct": block.total_return * 100.0,
+                "sharpe": block.sharpe,
+                "sortino": block.sortino,
+                "max_dd_pct": block.max_drawdown * 100.0,
+                "turnover": derive_turnover_total(equity_rows, fills),
+                "costs": total_costs(fills),
+                "win_rate_pct": (
+                    100.0 * sum(1 for p in pnls if p > 0.0) / len(pnls) if pnls else 0.0
+                ),
+            }
+        )
+    header = (
+        f"{'run':<22} {'label':<14} {'initial':>12} {'final':>12} {'return':>8} "
+        f"{'sharpe':>7} {'sortino':>8} {'maxDD':>7} {'turnover':>9} "
+        f"{'costs':>10} {'win%':>6}"
+    )
+    print(header)
+    for r in rows:
+        print(
+            f"{r['run_id']:<22} {r['label'][:14]:<14} {r['initial']:>12,.2f} "
+            f"{r['final']:>12,.2f} {r['return_pct']:>+7.2f}% {r['sharpe']:>7.2f} "
+            f"{r['sortino']:>8.2f} {r['max_dd_pct']:>6.2f}% {r['turnover']:>9.2f} "
+            f"{r['costs']:>10,.2f} {r['win_rate_pct']:>5.1f}%"
+        )
+    if args.png:
+        _write_compare_png(curves, {r["run_id"]: r["label"] for r in rows}, args.png)
+    return 0
+
+
+def _write_compare_png(
+    curves: dict[str, Any], labels: dict[str, str], path: str
+) -> None:
+    """Overlaid equity curves normalized to 100 at start (cross-bankroll
+    comparability). matplotlib is optional — absent is a note, not an error
+    (guarded importlib load, mirroring the quantstats tearsheet pattern)."""
+    import importlib
+
+    try:
+        matplotlib = importlib.import_module("matplotlib")
+        matplotlib.use("Agg")
+        plt = importlib.import_module("matplotlib.pyplot")
+    except Exception:
+        print(f"png skipped: matplotlib not installed (wanted {path})")
+        return
+    from pathlib import Path
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for run_id, curve in curves.items():
+        normalized = 100.0 * curve / float(curve.iloc[0])
+        label = labels.get(run_id) or run_id
+        ax.plot(list(normalized.index), normalized.to_numpy(), label=f"{label} ({run_id})")
+    ax.set_title("Replay equity curves (normalized to 100)")
+    ax.set_ylabel("equity (start = 100)")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.autofmt_xdate()
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote {path}")
+
+
 def _cmd_list(args: argparse.Namespace) -> int:
     from dynamo.persistence.repositories.replay import ReplayRepository
 
@@ -638,6 +850,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_estimate(args)
     if args.command == "audit":
         return _cmd_audit(args)
+    if args.command == "report":
+        return _cmd_report(args)
+    if args.command == "compare":
+        return _cmd_compare(args)
     if args.command == "list":
         return _cmd_list(args)
     return _cmd_show(args)

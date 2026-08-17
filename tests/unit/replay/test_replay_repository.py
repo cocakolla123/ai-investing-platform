@@ -25,6 +25,8 @@ def engine() -> Iterator[object]:
         generation_results,
         metadata,
         replay_decisions,
+        replay_equity,
+        replay_fills,
         replay_runs,
         replay_verdicts,
     )
@@ -34,6 +36,8 @@ def engine() -> Iterator[object]:
         replay_runs,
         replay_decisions,
         replay_verdicts,
+        replay_equity,
+        replay_fills,
         evaluation_claims,
         generation_results,
     ]
@@ -116,6 +120,80 @@ def test_decisions_upsert_idempotently(repo) -> None:  # type: ignore[no-untyped
     assert len(stored) == 1
     assert stored[0]["fill_price"] == 101.5
     assert repo.insert_decisions([]) == 0
+
+
+def test_equity_upserts_idempotently(repo) -> None:  # type: ignore[no-untyped-def]
+    """(run_id, as_of) PK: re-running the same config updates in place."""
+    _create(repo)
+    rows = [
+        {
+            "run_id": "replay-abc",
+            "as_of": date(2026, 6, 1),
+            "equity": 100_000.0,
+            "cash": 40_000.0,
+            "gross": 0.6,
+            "regime": "risk_on",
+            "ladder_rung": "normal",
+            "vetoes": 2,
+        },
+        {
+            "run_id": "replay-abc",
+            "as_of": date(2026, 6, 2),
+            "equity": 101_000.0,
+            "cash": 41_000.0,
+            "gross": 0.59,
+            "regime": "risk_on",
+            "ladder_rung": "normal",
+            "vetoes": 0,
+        },
+    ]
+    assert repo.insert_equity(rows) == 2
+    rows[1]["equity"] = 101_500.0
+    repo.insert_equity(rows)  # re-run: updates in place, no duplicate
+    stored = repo.equity_for("replay-abc")
+    assert [r["as_of"] for r in stored] == [date(2026, 6, 1), date(2026, 6, 2)]
+    assert stored[1]["equity"] == 101_500.0
+    assert stored[0]["vetoes"] == 2
+    assert repo.insert_equity([]) == 0
+    assert repo.equity_for("missing") == []
+
+
+def test_fills_upsert_idempotently(repo) -> None:  # type: ignore[no-untyped-def]
+    """(run_id, session, symbol) PK; realized_pnl NULL on buys survives."""
+    _create(repo)
+    rows = [
+        {
+            "run_id": "replay-abc",
+            "session": date(2026, 6, 2),
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": 10.0,
+            "price": 100.0,
+            "trade_value": 1_000.0,
+            "cost": 1.2,
+            "realized_pnl": None,
+        },
+        {
+            "run_id": "replay-abc",
+            "session": date(2026, 6, 3),
+            "symbol": "AAPL",
+            "side": "sell",
+            "qty": 10.0,
+            "price": 104.0,
+            "trade_value": 1_040.0,
+            "cost": 1.3,
+            "realized_pnl": 37.5,
+        },
+    ]
+    assert repo.insert_fills(rows) == 2
+    rows[1]["realized_pnl"] = 37.6
+    repo.insert_fills(rows)  # re-run: updates in place, no duplicate
+    stored = repo.fills_for("replay-abc")
+    assert len(stored) == 2
+    assert stored[0]["realized_pnl"] is None
+    assert stored[1]["realized_pnl"] == 37.6
+    assert repo.insert_fills([]) == 0
+    assert repo.fills_for("missing") == []
 
 
 def test_verdicts_upsert_idempotently(repo) -> None:  # type: ignore[no-untyped-def]
