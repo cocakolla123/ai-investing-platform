@@ -229,18 +229,29 @@ def test_quant_model_loadable_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     assert check.status == pf.OK
 
 
-# -- source-run hook (Phase 3, against replay_runs today) -------------------
+# -- source-run hook (backtest-campaign Phase 3) ----------------------------
 
 
-def _committee_run(start: date = START, end: date = END, mode: str = "committee") -> dict[str, Any]:
-    return {"id": "replay-src", "mode": mode, "start_as_of": start, "end_as_of": end}
+def _committee_run(
+    start: date = START,
+    end: date = END,
+    mode: str = "committee",
+    universe_tiers: tuple[int, ...] | None = (1, 3),
+) -> dict[str, Any]:
+    return {
+        "id": "replay-src",
+        "mode": mode,
+        "start_as_of": start,
+        "end_as_of": end,
+        "config_json": (
+            {"universe_tiers": list(universe_tiers)} if universe_tiers is not None else {}
+        ),
+    }
 
 
 def test_source_run_must_exist() -> None:
-    cfg = config()
-    object.__setattr__(cfg, "source_run_id", "replay-missing")
     with pytest.raises(pf.PreflightError) as exc:
-        pf.run_preflight(FakeReads(), cfg)
+        pf.run_preflight(FakeReads(), config(source_run_id="replay-missing"))
     assert "does not exist" in errors_of(exc.value)["source_run"]
 
 
@@ -248,20 +259,40 @@ def test_source_run_must_be_committee_mode_and_covering() -> None:
     reads = FakeReads(
         runs={"replay-src": _committee_run(start=START + timedelta(days=5), mode="quant")}
     )
-    cfg = config()
-    object.__setattr__(cfg, "source_run_id", "replay-src")
     with pytest.raises(pf.PreflightError) as exc:
-        pf.run_preflight(reads, cfg)
+        pf.run_preflight(reads, config(source_run_id="replay-src"))
     detail = errors_of(exc.value)["source_run"]
     assert "'quant'" in detail
     assert "does not cover" in detail
 
 
+def test_source_run_window_not_covering_is_an_error() -> None:
+    reads = FakeReads(
+        runs={"replay-src": _committee_run(end=END - timedelta(days=1))}
+    )
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config(source_run_id="replay-src", mode="portfolio"))
+    assert "does not cover" in errors_of(exc.value)["source_run"]
+
+
+def test_source_run_incompatible_universe_tiers_is_an_error() -> None:
+    reads = FakeReads(runs={"replay-src": _committee_run(universe_tiers=(1,))})
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config(source_run_id="replay-src", mode="portfolio"))
+    assert "universe_tiers" in errors_of(exc.value)["source_run"]
+
+
+def test_source_run_without_stored_config_tolerated() -> None:
+    """Runs recorded before config_json carried universe_tiers stay usable."""
+    reads = FakeReads(runs={"replay-src": _committee_run(universe_tiers=None)})
+    report = pf.run_preflight(reads, config(source_run_id="replay-src"))
+    check = next(c for c in report.checks if c.name == "source_run")
+    assert check.status == pf.OK
+
+
 def test_valid_source_run_passes() -> None:
     reads = FakeReads(runs={"replay-src": _committee_run()})
-    cfg = config()
-    object.__setattr__(cfg, "source_run_id", "replay-src")
-    report = pf.run_preflight(reads, cfg)
+    report = pf.run_preflight(reads, config(source_run_id="replay-src", mode="portfolio"))
     check = next(c for c in report.checks if c.name == "source_run")
     assert check.status == pf.OK
 

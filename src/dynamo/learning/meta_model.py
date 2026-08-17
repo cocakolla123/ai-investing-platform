@@ -92,6 +92,10 @@ FEATURE_NAMES: tuple[str, ...] = (
     "neighbor_count",
     "neighbor_mean_pnl_pct",
     "neighbor_hit_rate",
+    # bankroll scale (backtest-campaign Phase 3; migration 0015) — appended
+    # so the meta-model can learn scale-dependent trust. NaN-safe: legacy
+    # rows with a NULL equity_at_decision collapse to 0.0.
+    "log10_equity_at_decision",
 )
 
 
@@ -127,6 +131,7 @@ class DecisionSnapshot:
     sleeve: str | None = None
     vix: float | None = None
     spy_ret_20d: float | None = None
+    equity_at_decision: float | None = None
 
 
 def sector_code(sector: str | None) -> float:
@@ -216,6 +221,12 @@ def build_features(
         "neighbor_count": float(len(pnls)),
         "neighbor_mean_pnl_pct": _num(sum(pnls) / len(pnls) if pnls else None),
         "neighbor_hit_rate": _num(sum(wins) / len(wins) if wins else None),
+        # NaN-safe: None/NaN/non-positive equity (legacy rows) -> 0.0.
+        "log10_equity_at_decision": (
+            math.log10(_num(snap.equity_at_decision))
+            if _num(snap.equity_at_decision) > 0.0
+            else 0.0
+        ),
     }
     assert tuple(row) == FEATURE_NAMES  # ordering contract, cheap and loud
     return row
@@ -238,6 +249,7 @@ def snapshot_from_experience(exp: DecisionExperience) -> DecisionSnapshot:
         sector=exp.sector,
         sleeve=exp.sleeve,
         vix=exp.vix,
+        equity_at_decision=exp.equity_at_decision,
     )
 
 
@@ -250,6 +262,7 @@ def snapshot_from_decision(
     sleeve: str | None = None,
     vix: float | None = None,
     spy_ret_20d: float | None = None,
+    equity_at_decision: float | None = None,
 ) -> DecisionSnapshot:
     """Decision-time snapshot for tonight's verdicts (no experience row yet)."""
     return DecisionSnapshot(
@@ -271,6 +284,7 @@ def snapshot_from_decision(
         sleeve=sleeve,
         vix=vix,
         spy_ret_20d=spy_ret_20d,
+        equity_at_decision=equity_at_decision,
     )
 
 

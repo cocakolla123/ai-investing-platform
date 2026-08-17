@@ -220,6 +220,8 @@ def build_experience(
     vix: float | None = None,
     source: str = "live",
     replay_run_id: str | None = None,
+    equity_at_decision: float | None = None,
+    position_notional: float | None = None,
 ) -> DecisionExperience:
     """Assemble one resolved ``DecisionExperience`` from the joined pieces.
 
@@ -296,6 +298,9 @@ def build_experience(
         exit_price=trade.exit_price,
         qty=trade.qty,
         holding_days=trade.holding_days,
+        # bankroll context (campaign Phase 3) — None on broken joins/legacy
+        equity_at_decision=equity_at_decision,
+        position_notional=position_notional,
         # outcome
         resolved=True,
         pnl_pct=trade.pnl_pct,

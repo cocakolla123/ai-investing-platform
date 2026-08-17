@@ -182,7 +182,7 @@ def result(fixture_frames: Any) -> tuple[Any, FakeExperienceRepo, FakeRunRepo]:
 
 
 def test_runner_is_quant_only_committee_goes_through_committee_replay() -> None:
-    with pytest.raises(ValueError, match="quant-only"):
+    with pytest.raises(ValueError, match="quant/portfolio"):
         ReplayRunner(
             gateway_factory=lambda d: None,  # type: ignore[arg-type,return-value]
             experience_repo=FakeExperienceRepo(),

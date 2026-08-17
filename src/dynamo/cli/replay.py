@@ -5,11 +5,16 @@ Usage:
         --mode quant --run-label first-window
     python -m dynamo.cli.replay run --start 2026-08-03 --end 2026-08-14 \
         --mode committee --run-label first-committee --max-usd 5.00
+    python -m dynamo.cli.replay run --start 2026-08-03 --end 2026-08-14 \
+        --mode portfolio --source-run-id replay-abc123def456 \
+        --run-label 1k --initial-equity 1000 --min-order-notional 25
     python -m dynamo.cli.replay estimate --start 2026-08-03 --end 2026-08-14
     python -m dynamo.cli.replay list
     python -m dynamo.cli.replay show --run-id replay-abc123def456
 
-Quant mode spends $0 (zero LLM calls anywhere in the path). Committee mode
+Quant and portfolio modes spend $0 (zero LLM calls anywhere in their path —
+portfolio mode replays a committee run's PERSISTED verdicts and is routed
+through ``_cmd_run``, which never imports an LLM module). Committee mode
 is the ONLY token-spending code path in the platform's learning stack, and it
 refuses to start without an explicit ``--max-usd`` hard cap (no default) and
 an ``ANTHROPIC_API_KEY``. The ``estimate`` subcommand projects committee-mode
@@ -36,9 +41,41 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--end", required=True, type=date.fromisoformat)
     run.add_argument(
         "--mode",
-        choices=("quant", "committee"),
+        choices=("quant", "portfolio", "committee"),
         default="quant",
-        help="quant = free, no LLM; committee = real deep dives, REQUIRES --max-usd",
+        help=(
+            "quant = free, no LLM; portfolio = free verdict-reuse over a "
+            "committee run (REQUIRES --source-run-id, no LLM); committee = "
+            "real deep dives, REQUIRES --max-usd"
+        ),
+    )
+    run.add_argument(
+        "--source-run-id",
+        default="",
+        help=(
+            "portfolio mode: the completed committee run whose persisted "
+            "replay_verdicts this run replays (required for --mode portfolio)"
+        ),
+    )
+    run.add_argument(
+        "--whole-shares",
+        action="store_true",
+        help=(
+            "floor all desired share quantities to whole shares (crypto pairs "
+            "exempt — fractional native); part of config_hash/run id"
+        ),
+    )
+    run.add_argument(
+        "--min-order-notional",
+        type=float,
+        default=0.0,
+        help="skip orders below this dollar value entirely (default 0 = off)",
+    )
+    run.add_argument(
+        "--commission-per-order",
+        type=float,
+        default=0.0,
+        help="flat dollar commission added per executed order (default 0)",
     )
     run.add_argument("--run-label", required=True, help="human label for the run")
     run.add_argument(
@@ -176,6 +213,10 @@ def _preflight_extras(engine: Any, config: Any, *, skip: bool) -> dict[str, Any]
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    # TOKEN FIREWALL: only committee mode ever reaches the LLM wiring —
+    # quant and portfolio runs go through this function, which imports no
+    # LLM module and constructs no client. Portfolio mode replays the source
+    # committee run's PERSISTED verdicts (ReplayRepository.verdicts_for).
     if args.mode == "committee":
         return _cmd_run_committee(args)
     from dynamo.persistence.repositories.experience import ExperienceRepository
@@ -194,18 +235,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
         horizon_sessions=args.horizon_sessions,
         quant_score_max_age_days=args.quant_score_max_age_days,
         quant_model_version=args.quant_model_version,
+        source_run_id=args.source_run_id,
+        whole_shares=args.whole_shares,
+        min_order_notional=args.min_order_notional,
+        commission_per_order=args.commission_per_order,
         code_version=args.code_version,
     )
     extras = _preflight_extras(engine, config, skip=args.skip_preflight)
     if extras is None:
         return 1
+    replay_repo = ReplayRepository(engine)
     runner = ReplayRunner(
         gateway_factory=lambda d: HistoricalDataGateway(engine, d),
         experience_repo=ExperienceRepository(engine),
-        run_repo=ReplayRepository(engine),
+        run_repo=replay_repo,
         config=config,
         run_config_extras=extras,
         bundle_factory=_bundle_factory(engine),
+        verdict_source=replay_repo.verdicts_for if args.mode == "portfolio" else None,
     )
     print(f"replay {config.run_id} ({config.start} -> {config.end}, mode={config.mode})")
     result = runner.run(progress=print)
@@ -443,6 +490,10 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--mode committee requires --max-usd (hard per-run cap, no default)")
         if args.max_usd is not None and args.max_usd <= 0:
             parser.error("--max-usd must be positive")
+        if args.mode == "portfolio" and not args.source_run_id:
+            parser.error(
+                "--mode portfolio requires --source-run-id (a completed committee run)"
+            )
         return _cmd_run(args)
     if args.command == "estimate":
         return _cmd_estimate(args)

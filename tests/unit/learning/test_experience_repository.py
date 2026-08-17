@@ -59,6 +59,9 @@ def _exp(i: int, *, source: str = "live", resolved: bool = True, **overrides: ob
         "decision_quality": DecisionQuality.SOUND,
         "outcome_quality": OutcomeQuality.WIN,
         "label": "win",
+        # bankroll context (campaign Phase 3; migration 0015)
+        "equity_at_decision": 50_000.0,
+        "position_notional": 2_500.0,
     }
     base.update(overrides)
     return DecisionExperience.model_validate(base)
@@ -113,6 +116,9 @@ def test_live_readers_filter_source_and_resolution(engine) -> None:  # type: ign
     # Round trip preserves enums and values.
     assert resolved[0].outcome_quality is OutcomeQuality.WIN
     assert resolved[0].pnl_pct == 3.0
+    # Bankroll context round-trips (campaign Phase 3; migration 0015).
+    assert resolved[0].equity_at_decision == 50_000.0
+    assert resolved[0].position_notional == 2_500.0
 
     assert [e.decision_context_id for e in repo.unresolved_live()] == ["dc-2"]
     assert repo.resolved_live(since=date(2026, 8, 2)) == []  # dc-1 is as_of 08-01

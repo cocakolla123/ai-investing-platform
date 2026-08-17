@@ -180,6 +180,50 @@ def test_features_hash_is_stable() -> None:
     assert features_hash(("a", "b")) != features_hash(("b", "a"))
 
 
+# --- bankroll scale feature (backtest-campaign Phase 3) ---------------------
+
+
+def test_feature_names_contract_includes_bankroll_scale() -> None:
+    """Appended (never reordered): the scale feature is the LAST column, so
+    older saved artifacts fail loudly on the manifest name check rather than
+    silently misaligning."""
+    assert FEATURE_NAMES[-1] == "log10_equity_at_decision"
+
+
+def test_log10_equity_at_decision_from_experience() -> None:
+    row = build_feature_row(_exp(equity_at_decision=100_000.0), None, [])
+    assert row["log10_equity_at_decision"] == pytest.approx(5.0)
+    row = build_feature_row(_exp(equity_at_decision=1_000.0), None, [])
+    assert row["log10_equity_at_decision"] == pytest.approx(3.0)
+
+
+def test_log10_equity_nan_safe_on_legacy_rows() -> None:
+    """Legacy rows (columns NULL before migration 0015) collapse to 0.0."""
+    for equity in (None, 0.0, -5.0, float("nan"), float("inf")):
+        row = build_feature_row(_exp(equity_at_decision=equity), None, [])
+        assert row["log10_equity_at_decision"] == 0.0
+        assert all(math.isfinite(v) for v in row.values())
+
+
+def test_snapshot_paths_carry_equity_at_decision() -> None:
+    from_experience = snapshot_from_experience(_exp(equity_at_decision=10_000.0))
+    assert from_experience.equity_at_decision == 10_000.0
+    verdict = CommitteeVerdict(
+        id="cv-AAPL",
+        symbol="AAPL",
+        as_of=D,
+        action=Action.BUY,
+        conviction=0.7,
+        thesis="t",
+        bull_case="b",
+        bear_case="b",
+    )
+    from_decision = snapshot_from_decision(verdict, equity_at_decision=10_000.0)
+    row_e = build_features(from_experience, None, [])
+    row_d = build_features(from_decision, None, [])
+    assert row_e["log10_equity_at_decision"] == row_d["log10_equity_at_decision"] == 4.0
+
+
 # --- trainer ----------------------------------------------------------------
 
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from dynamo.domain.symbols import is_crypto_symbol
+
 # Half-spread by 20d-median-dollar-volume band (doc 08 section 3 table).
 _MEGA_ADV = 100_000_000.0  # deciles 1-2
 _MID_ADV = 20_000_000.0  # deciles 3-5
@@ -25,10 +27,23 @@ HALF_SPREAD_MICRO_BPS = 25.0
 
 @dataclass(frozen=True)
 class CostParams:
-    """Versioned cost-model parameters; changes invalidate cached reports."""
+    """Versioned cost-model parameters; changes invalidate cached reports.
+
+    Bankroll-realism knobs (backtest-campaign Phase 3), defaults preserve
+    bit-for-bit prior behavior:
+
+    - ``commission_per_order``: flat dollar commission added to the cost of
+      every EXECUTED order (Alpaca equities are $0 — nonzero models other
+      brokers / small-account realism);
+    - ``min_order_notional``: orders with ``|value| < min_order_notional``
+      are skipped entirely (never partially filled) — brokers reject dust
+      orders, and a $3 rebalance trade is fiction at any bankroll.
+    """
 
     impact_k: float = 1.0
     flat_cost_bps: float | None = None  # override for parity runs (matched flat costs)
+    commission_per_order: float = 0.0
+    min_order_notional: float = 0.0
 
 
 def half_spread_bps(adv_dollar_20d: float) -> float:
@@ -73,3 +88,49 @@ def cost_per_side_fraction(
         return p.flat_cost_bps / 10_000.0
     spread = half_spread_bps(adv_dollar_20d) / 10_000.0
     return spread + impact_fraction(order_value, sigma_daily, adv_dollar_20d, p.impact_k)
+
+
+# --- bankroll-realism helpers (backtest-campaign Phase 3) -------------------
+#
+# Shared by BOTH fill paths (replay runner._execute and backtest
+# engine._execute) so the two engines can never drift on what an order costs
+# or when it is too small to exist. Defaults (0 / 0 / False) reproduce prior
+# behavior bit-for-bit.
+
+
+def order_skipped(order_value: float, params: CostParams | None = None) -> bool:
+    """True when the order is below the minimum notional and must be skipped
+    entirely (no partial fills). ``min_order_notional=0`` never skips."""
+    p = params if params is not None else CostParams()
+    return abs(order_value) < p.min_order_notional
+
+
+def order_cost(
+    order_value: float,
+    sigma_daily: float,
+    adv_dollar_20d: float,
+    params: CostParams | None = None,
+) -> float:
+    """Total one-side dollar cost for one EXECUTED order: the fractional
+    spread+impact model times value, plus the flat per-order commission.
+    Callers round to cents exactly as they rounded the pre-commission cost,
+    so ``commission_per_order=0`` is bit-identical to the old math."""
+    p = params if params is not None else CostParams()
+    return (
+        order_value * cost_per_side_fraction(order_value, sigma_daily, adv_dollar_20d, p)
+        + p.commission_per_order
+    )
+
+
+def whole_share_qty(symbol: str, qty: float, whole_shares: bool) -> float:
+    """Desired share quantity under the whole-shares regime.
+
+    Rule (documented, deliberately simple): in whole-shares mode ALL desired
+    quantities are floored toward zero BEFORE the buy/sell delta is computed.
+    Because every buy is then a whole number, positions accumulated under the
+    regime are whole, so every delta (including partial trims) is whole and a
+    zero target sells the exact held quantity. Crypto pairs are EXEMPT —
+    fractional is native everywhere (Alpaca crypto included)."""
+    if not whole_shares or is_crypto_symbol(symbol):
+        return qty
+    return float(math.floor(qty))

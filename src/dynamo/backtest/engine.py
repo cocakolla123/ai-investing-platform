@@ -37,7 +37,12 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
-from dynamo.backtest.costs import CostParams, cost_per_side_fraction
+from dynamo.backtest.costs import (
+    CostParams,
+    order_cost,
+    order_skipped,
+    whole_share_qty,
+)
 from dynamo.domain.models.portfolio import Lot, PortfolioState, Position, TargetPortfolio
 from dynamo.domain.models.research import CommitteeVerdict, Signal, Sleeve, WatchlistRow
 from dynamo.domain.models.risk import (
@@ -68,6 +73,11 @@ class BacktestConfig(BaseModel):
     flat_cost_bps: float | None = None  # parity runs: matched flat costs
     apply_ladder: bool = True  # parity runs disable constraints entirely
     label: str = ""
+    # Bankroll realism (backtest-campaign Phase 3) — defaults preserve prior
+    # behavior bit-for-bit. Crypto pairs are exempt from whole-share flooring.
+    whole_shares: bool = False
+    min_order_notional: float = Field(default=0.0, ge=0.0)
+    commission_per_order: float = Field(default=0.0, ge=0.0)
 
     @property
     def config_hash(self) -> str:
@@ -75,7 +85,12 @@ class BacktestConfig(BaseModel):
 
     @property
     def cost_params(self) -> CostParams:
-        return CostParams(impact_k=self.impact_k, flat_cost_bps=self.flat_cost_bps)
+        return CostParams(
+            impact_k=self.impact_k,
+            flat_cost_bps=self.flat_cost_bps,
+            commission_per_order=self.commission_per_order,
+            min_order_notional=self.min_order_notional,
+        )
 
 
 @dataclass(frozen=True)
@@ -405,7 +420,11 @@ class BacktestEngine:
             weight = target_by_symbol.get(symbol, 0.0)
             close = decision_closes.get(symbol, float("nan"))
             if weight > 0.0 and math.isfinite(close) and close > 0.0:
-                desired_shares[symbol] = _cents(weight * decision_equity) / close
+                desired_shares[symbol] = whole_share_qty(
+                    symbol,
+                    _cents(weight * decision_equity) / close,
+                    self.config.whole_shares,
+                )
             else:
                 desired_shares[symbol] = 0.0
 
@@ -427,14 +446,16 @@ class BacktestEngine:
             value = _cents(qty * open_px)
             if value < 0.01:
                 continue  # sub-cent rounding residue, not a trade
+            params = self.config.cost_params
+            if order_skipped(value, params):
+                continue  # below the minimum order notional — never filled
             sigma_daily = self._sigma_daily(data, symbol)
             cost = _cents(
-                value
-                * cost_per_side_fraction(
+                order_cost(
                     value,
                     sigma_daily,
                     data.adv_dollar_20d.get(symbol, float("nan")),
-                    self.config.cost_params,
+                    params,
                 )
             )
             if delta > 0.0:  # buy

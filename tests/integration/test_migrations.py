@@ -20,14 +20,14 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0014() -> None:
+def test_revision_chain_is_linear_through_0015() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0014" in modules, "0014_failure_clusters migration missing"
+    assert "0015" in modules, "0015_bankroll_context migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0014"}, f"expected 0014 as the single head, got {heads}"
+    assert heads == {"0015"}, f"expected 0015 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
     assert down["0007"] == "0006"
@@ -38,6 +38,17 @@ def test_revision_chain_is_linear_through_0014() -> None:
     assert down["0012"] == "0011"
     assert down["0013"] == "0012"
     assert down["0014"] == "0013"
+    assert down["0015"] == "0014"
+
+
+def test_0015_targets_bankroll_context_columns() -> None:
+    module = _load(VERSIONS / "0015_bankroll_context.py")
+    assert set(module.COLUMN_TYPES) == {"equity_at_decision", "position_notional"}
+    from dynamo.persistence import schema
+
+    table = schema.metadata.tables["decision_experience"]
+    assert table.c.equity_at_decision.nullable  # NULL on legacy rows
+    assert table.c.position_notional.nullable
 
 
 def test_0014_targets_failure_clusters_table() -> None:
@@ -246,6 +257,8 @@ def test_alembic_upgrade_head_creates_table(
         assert inspector.has_table("generation_results")
         # 0014: failure-cluster provenance (plan Phase 6).
         assert inspector.has_table("failure_clusters")
+        # 0015: bankroll context on decision_experience (campaign Phase 3).
+        assert {"equity_at_decision", "position_notional"} <= experience_columns
     finally:
         engine.dispose()
 

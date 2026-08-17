@@ -18,9 +18,9 @@ Checks:
   by ``cfg.start``;
 - quant-model resolvability (Phase-2 hook): ``quant_model_version`` set but
   not loadable -> error; unset -> warning recorded (baseline-v0 abstention);
-- portfolio-mode source run (Phase-3 hook): ``source_run_id`` set -> the run
-  must exist, be committee-mode, and cover the window (checked against
-  ``replay_runs`` now, since the table already exists).
+- portfolio-mode source run (backtest-campaign Phase 3): ``source_run_id``
+  set -> the run must exist, be committee-mode, cover the window, and carry
+  compatible ``universe_tiers`` (compared via its stored ``config_json``).
 
 Zero LLM calls, zero writes: preflight only reads.
 """
@@ -326,6 +326,16 @@ def _check_source_run(reads: PreflightReads, cfg: ReplayConfig) -> PreflightChec
         problems.append(
             f"window [{start_as_of}, {end_as_of}] does not cover "
             f"[{cfg.start}, {cfg.end}]"
+        )
+    # Universe compatibility: the committee run's verdicts only make sense
+    # against the same universe tiers (checked via its stored config_json;
+    # runs recorded before the config was stored are tolerated).
+    source_config = run.get("config_json") or {}
+    source_tiers = source_config.get("universe_tiers")
+    if source_tiers is not None and tuple(source_tiers) != tuple(cfg.universe_tiers):
+        problems.append(
+            f"universe_tiers {tuple(source_tiers)} incompatible with "
+            f"this config's {tuple(cfg.universe_tiers)}"
         )
     if problems:
         return PreflightCheck(

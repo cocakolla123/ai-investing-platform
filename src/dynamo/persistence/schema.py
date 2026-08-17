@@ -865,6 +865,11 @@ decision_experience = Table(
     # calibration_update; nothing consumes calibrated_probability for sizing.
     Column("calibrated_probability", Float),
     Column("calibration_scope_used", Text),
+    # bankroll context (backtest-campaign Phase 3; migration 0015): portfolio
+    # equity at the opening decision + realized position notional, so the
+    # meta-model can learn scale-dependent trust. NULL on legacy rows.
+    Column("equity_at_decision", Float),
+    Column("position_notional", Float),
     # review / label
     Column("failure_primary", Text),
     Column("label", Text),

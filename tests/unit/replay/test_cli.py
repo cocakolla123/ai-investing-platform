@@ -145,6 +145,111 @@ def test_replay_run_quant_bundle_flags_parse_with_safe_defaults() -> None:
     assert args.code_version == "abc123"
 
 
+def test_replay_portfolio_flags_parse_with_safe_defaults() -> None:
+    """Phase-3 flags: defaults preserve old behavior; explicit values parse."""
+    parser = replay_cli._build_parser()
+    args = parser.parse_args(
+        ["run", "--start", "2026-06-01", "--end", "2026-06-10", "--run-label", "x"]
+    )
+    assert args.source_run_id == ""
+    assert args.whole_shares is False
+    assert args.min_order_notional == 0.0
+    assert args.commission_per_order == 0.0
+    args = parser.parse_args(
+        [
+            "run",
+            "--start", "2026-02-02",
+            "--end", "2026-07-31",
+            "--run-label", "1k",
+            "--mode", "portfolio",
+            "--source-run-id", "replay-abc123def456",
+            "--whole-shares",
+            "--min-order-notional", "25",
+            "--commission-per-order", "1.0",
+        ]
+    )
+    assert args.mode == "portfolio"
+    assert args.source_run_id == "replay-abc123def456"
+    assert args.whole_shares is True
+    assert args.min_order_notional == 25.0
+    assert args.commission_per_order == 1.0
+
+
+def test_replay_portfolio_mode_requires_source_run_id(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        replay_cli.main(
+            [
+                "run",
+                "--start", "2026-06-01",
+                "--end", "2026-06-10",
+                "--mode", "portfolio",
+                "--run-label", "x",
+            ]
+        )
+    assert exc.value.code == 2
+    assert "--source-run-id" in capsys.readouterr().err
+
+
+def test_replay_portfolio_mode_never_constructs_an_llm_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CLI token firewall: portfolio mode routes through the quant/
+    portfolio command, where the LLM wiring is structurally unreachable —
+    with the AnthropicClient constructor rigged to explode, a portfolio run
+    still reaches the runner (patched here) and completes."""
+    import dynamo.llm.anthropic_client as llm_mod
+    import dynamo.replay.preflight as preflight_mod
+    import dynamo.replay.runner as runner_mod
+
+    monkeypatch.setattr(
+        llm_mod.AnthropicClient,
+        "__init__",
+        lambda *a, **k: pytest.fail("portfolio mode must never construct an LLM client"),
+    )
+    monkeypatch.setattr(replay_cli, "_engine", lambda url: object())
+    monkeypatch.setattr(
+        preflight_mod, "run_preflight", lambda engine, config: pytest.fail("skipped")
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        def run(self, progress: Any = None) -> Any:
+            @dataclass
+            class R:
+                run_id: str = "replay-fake"
+                status: str = "completed"
+                sessions: tuple = ()
+                decisions: tuple = ()
+                fills: tuple = ()
+                experiences: tuple = ()
+                equity_curve: tuple = ()
+
+            return R()
+
+    monkeypatch.setattr(runner_mod, "ReplayRunner", FakeRunner)
+    rc = replay_cli.main(
+        [
+            "run",
+            "--start", "2026-06-01",
+            "--end", "2026-06-10",
+            "--mode", "portfolio",
+            "--source-run-id", "replay-src",
+            "--run-label", "x",
+            "--skip-preflight",
+        ]
+    )
+    assert rc == 0
+    assert captured["config"].mode == "portfolio"
+    assert captured["config"].source_run_id == "replay-src"
+    # The composition layer wires the repository verdict read as the source.
+    assert captured["verdict_source"] is not None
+
+
 def test_replay_rejects_unknown_mode() -> None:
     with pytest.raises(SystemExit):
         replay_cli._build_parser().parse_args(

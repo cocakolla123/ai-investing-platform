@@ -169,6 +169,7 @@ def build_experiences(
     vix_for: Callable[[date], float | None],
     sector_for: Callable[[str], str | None],
     path_for: Callable[[Any, int | None], Any],
+    equity_for: Callable[[date], float | None],
     existing_dc_ids: frozenset[str],
     insert: Callable[[Any], bool],
     now: datetime,
@@ -224,6 +225,11 @@ def build_experiences(
                 sector=sector_for(closed.symbol),
                 vix=vix_for(decided),
                 source="live",
+                # Bankroll context (campaign Phase 3): equity from the
+                # portfolio state at the decision date; notional is the
+                # realized position size (avg entry price x qty).
+                equity_at_decision=equity_for(decided),
+                position_notional=abs(closed.qty) * closed.entry_avg_price,
             )
             if insert(exp):
                 built += 1
@@ -339,6 +345,19 @@ def resolve_experiences(dynamo: DynamoResource, log: Any) -> dict[str, int]:
             row = cx.execute(sa_select(inst.c.sector).where(inst.c.symbol == symbol)).first()
         return row.sector if row is not None else None
 
+    def equity_for(as_of: date) -> float | None:
+        """Portfolio equity at the decision date: the latest equity_curve
+        snapshot at or before it (None before the curve starts)."""
+        ec = schema.equity_curve
+        with engine.connect() as cx:
+            row = cx.execute(
+                sa_select(ec.c.equity)
+                .where(ec.c.as_of <= as_of)
+                .order_by(ec.c.as_of.desc())
+                .limit(1)
+            ).first()
+        return float(row.equity) if row is not None else None
+
     def path_for(closed: Any, horizon: int | None) -> PathInputs | None:
         """Session bars entry → exit + horizon (calendar buffer over sessions),
         plus benchmark closes over the holding window."""
@@ -380,6 +399,7 @@ def resolve_experiences(dynamo: DynamoResource, log: Any) -> dict[str, int]:
         vix_for=vix_for,
         sector_for=sector_for,
         path_for=path_for,
+        equity_for=equity_for,
         existing_dc_ids=exp_repo.live_decision_context_ids(),
         insert=exp_repo.insert,
         now=utcnow(),
@@ -775,6 +795,19 @@ def _tonights_decisions(
         ).first()
     vix = float(vix_row.value) if vix_row is not None else None
 
+    # Bankroll context (campaign Phase 3): tonight's decisions are scored at
+    # the CURRENT portfolio scale — the latest equity snapshot at or before
+    # as_of (None -> NaN-safe 0.0 in the feature builder).
+    ec = schema.equity_curve
+    with engine.connect() as cx:
+        equity_row = cx.execute(
+            sa_select(ec.c.equity)
+            .where(ec.c.as_of <= as_of)
+            .order_by(ec.c.as_of.desc())
+            .limit(1)
+        ).first()
+    equity_at_decision = float(equity_row.equity) if equity_row is not None else None
+
     spy = dynamo.bars_window(["SPY"], as_of, 60)
     spy_ret_20d: float | None = None
     if not spy.empty:
@@ -840,6 +873,7 @@ def _tonights_decisions(
             sleeve=sleeve,
             vix=vix,
             spy_ret_20d=spy_ret_20d,
+            equity_at_decision=equity_at_decision,
         )
         decisions.append((vd.symbol, vd.id, snapshot, calib, neighbors))
     return decisions

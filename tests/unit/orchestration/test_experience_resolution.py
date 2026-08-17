@@ -137,6 +137,7 @@ def _run(
         vix_for=lambda as_of: 18.0,
         sector_for=lambda symbol: "Technology",
         path_for=lambda c, horizon: _path(),
+        equity_for=lambda as_of: 50_000.0,
         existing_dc_ids=existing,
         insert=sink.insert,
         now=NOW,
@@ -155,6 +156,10 @@ def test_fixture_spine_inserts_experience_row() -> None:
     assert exp.resolved is True
     assert exp.pnl_pct == 4.0
     assert exp.action == "buy" and exp.sector == "Technology" and exp.vix == 18.0
+    # Bankroll context (campaign Phase 3): equity from the injected portfolio
+    # state; notional = qty x entry price.
+    assert exp.equity_at_decision == 50_000.0
+    assert exp.position_notional == 10.0 * 100.0
 
 
 def test_unreviewed_trade_is_skipped() -> None:

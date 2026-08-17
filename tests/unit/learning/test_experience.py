@@ -337,6 +337,24 @@ def test_builder_without_decision_context_uses_verdict_expectations() -> None:
     assert exp.outcome_quality == OutcomeQuality.LOSS  # -6% beyond the 5% downside
 
 
+def test_builder_carries_bankroll_context_and_defaults_to_none() -> None:
+    """Campaign Phase 3: equity_at_decision/position_notional flow through
+    when passed and stay None otherwise (legacy/broken-join parity)."""
+    with_context = build_experience(
+        trade=_trade(pnl_pct=4.0),
+        now=NOW,
+        decision_context=_dc(),
+        verdict=_verdict(),
+        equity_at_decision=10_000.0,
+        position_notional=500.0,
+    )
+    assert with_context.equity_at_decision == 10_000.0
+    assert with_context.position_notional == 500.0
+    without = build_experience(trade=_trade(pnl_pct=4.0), now=NOW)
+    assert without.equity_at_decision is None
+    assert without.position_notional is None
+
+
 def test_builder_flags_veto_override_in_counterfactual() -> None:
     exp = build_experience(
         trade=_trade(pnl_pct=7.0),

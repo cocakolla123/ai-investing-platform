@@ -1,4 +1,16 @@
-"""Quant-only replay runner (plan Phase 4).
+"""Quant + verdict-reuse portfolio replay runner (plan Phase 4; campaign Phase 3).
+
+Two modes share one loop:
+
+- ``mode="quant"``: verdicts are synthesized deterministically from quant
+  scores (:func:`synthesize_verdicts`, NO LLM);
+- ``mode="portfolio"`` (backtest-campaign Phase 3): verdicts are REUSED from
+  a completed committee run's persisted ``replay_verdicts``
+  (``source_run_id``), keyed ``(as_of, symbol)`` — ZERO LLM calls, so three
+  bankrolls can replay one paid committee run for free. Days without
+  verdicts open no new risk; existing holdings are still managed (horizon
+  exits, ladder/risk flow unchanged). Verdicts for symbols outside the
+  day's universe (and not held) are ignored gracefully.
 
 Per session day D in [start, end] (NYSE calendar):
 
@@ -52,7 +64,12 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
-from dynamo.backtest.costs import CostParams, cost_per_side_fraction
+from dynamo.backtest.costs import (
+    CostParams,
+    order_cost,
+    order_skipped,
+    whole_share_qty,
+)
 from dynamo.domain.models.learning import DecisionExperience
 from dynamo.domain.models.portfolio import Lot, PortfolioState, Position, TargetPortfolio
 from dynamo.domain.models.research import (
@@ -113,6 +130,16 @@ class ReplayConfig(BaseModel):
     quant_model_version: str = ""
     # Committee mode only (plan Phase 5): per-day deep-dive shortlist cap.
     committee_deep_dives_per_day: int = Field(default=4, gt=0)
+    # Portfolio mode (backtest-campaign Phase 3): the completed committee run
+    # whose replay_verdicts this run replays. Required (non-empty) when
+    # mode="portfolio". In config_hash automatically, like every field.
+    source_run_id: str = ""
+    # Bankroll realism (backtest-campaign Phase 3) — defaults preserve prior
+    # behavior bit-for-bit; all in config_hash, so three bankroll configs on
+    # the same source run get three deterministic, distinct run ids.
+    whole_shares: bool = False
+    min_order_notional: float = Field(default=0.0, ge=0.0)
+    commission_per_order: float = Field(default=0.0, ge=0.0)
     code_version: str = ""
 
     @property
@@ -397,6 +424,9 @@ class _OpenLot:
     quant: QuantScore | None
     regime: RegimeState | None
     sector: str | None
+    # Bankroll context (campaign Phase 3): the portfolio equity at the
+    # DECISION that opened the lot (kept at first entry across adds).
+    equity_at_decision: float | None = None
 
 
 @dataclass
@@ -452,12 +482,24 @@ class ReplayRunner:
         construction_config: ConstructionConfig | None = None,
         run_config_extras: Mapping[str, Any] | None = None,
         bundle_factory: Callable[[str], ModelBundle] | None = None,
+        verdict_source: Callable[[str], Sequence[Mapping[str, Any]]] | None = None,
     ) -> None:
-        if config.mode != "quant":
+        if config.mode not in {"quant", "portfolio"}:
             raise ValueError(
-                f"ReplayRunner is quant-only; mode {config.mode!r} runs through "
-                "dynamo.replay.committee.CommitteeReplay"
+                f"ReplayRunner runs quant/portfolio modes; mode {config.mode!r} "
+                "runs through dynamo.replay.committee.CommitteeReplay"
             )
+        if config.mode == "portfolio":
+            if not config.source_run_id:
+                raise ValueError(
+                    "portfolio mode requires a non-empty source_run_id "
+                    "(a completed committee run whose verdicts to replay)"
+                )
+            if verdict_source is None:
+                raise ValueError(
+                    "portfolio mode requires a verdict_source (the composition "
+                    "layer passes ReplayRepository.verdicts_for)"
+                )
         self._gateway_factory = gateway_factory
         self._experiences = experience_repo
         self._runs = run_repo
@@ -483,6 +525,18 @@ class ReplayRunner:
         # the artifact loader. Resolved ONCE at run start, never per session.
         self._bundle_factory = bundle_factory
         self._bundle: ModelBundle | None = None
+        # Verdict-reuse seam (backtest-campaign Phase 3): portfolio mode
+        # preloads the source committee run's persisted verdicts ONCE at run
+        # start, keyed (as_of, symbol). Injected like the bundle factory so
+        # tests drive it with fixtures and the CLI passes the repository read.
+        self._verdict_source = verdict_source
+        self._source_verdicts: dict[date, dict[str, CommitteeVerdict]] = {}
+        # Realism cost knobs, shared helper semantics with the backtest engine
+        # (see backtest.costs) — defaults reproduce prior behavior exactly.
+        self._cost_params = CostParams(
+            commission_per_order=config.commission_per_order,
+            min_order_notional=config.min_order_notional,
+        )
         # Entry context for fills: the synthesized verdict/quant recorded when
         # the target was queued (fills happen the NEXT session, before the
         # next synthesis overwrites these).
@@ -504,10 +558,30 @@ class ReplayRunner:
             factory = bundle_from_version
         return factory(version)
 
+    def _resolve_source_verdicts(self) -> dict[date, dict[str, CommitteeVerdict]]:
+        """Portfolio mode: preload the source run's replay_verdicts ONCE,
+        keyed as_of -> symbol -> CommitteeVerdict (parsed from the persisted
+        payload). Loud on unparsable payloads — a silently dropped verdict
+        would make the portfolio replay dishonest."""
+        if self.config.mode != "portfolio":
+            return {}
+        source = self._verdict_source
+        assert source is not None  # enforced in __init__
+        out: dict[date, dict[str, CommitteeVerdict]] = {}
+        for row in source(self.config.source_run_id):
+            verdict = CommitteeVerdict.model_validate(row["payload"])
+            as_of = row["as_of"]
+            if isinstance(as_of, str):
+                as_of = date.fromisoformat(as_of)
+            out.setdefault(as_of, {})[str(row["symbol"])] = verdict
+        return out
+
     def run(self, progress: Callable[[str], None] | None = None) -> ReplayResult:
         cfg = self.config
         run_id = cfg.run_id
-        self._bundle = self._resolve_bundle()  # before create_run: fail loud, write nothing
+        # Before create_run: fail loud, write nothing.
+        self._bundle = self._resolve_bundle()
+        self._source_verdicts = self._resolve_source_verdicts()
         sessions = _sessions_between(cfg.start, cfg.end)
         self._runs.create_run(
             run_id=run_id,
@@ -591,9 +665,11 @@ class ReplayRunner:
                 fills.extend(day_fills)
                 turnover_mtd += traded / pending_equity / 2.0 if pending_equity > 0 else 0.0
                 # Entry bookkeeping + resolution of full exits.
+                # pending_equity is still YESTERDAY's decision equity here
+                # (overwritten in step 8) — the bankroll context for the lot.
                 self._track_lots(
                     day_fills, day, i, shares, avg_cost, open_lots, gw, bars,
-                    experiences, run_id,
+                    experiences, run_id, pending_equity,
                 )
                 if staged is not None:
                     fill_price = {f.symbol: f.price for f in day_fills}
@@ -637,9 +713,22 @@ class ReplayRunner:
             )
             ladder = step(ladder, equity, hwm, i)
 
-            # 4./5. Quant scores -> synthesized quant-only verdicts.
+            # 4./5. Verdicts: synthesized from quant scores (quant mode) or
+            # reused from the source committee run (portfolio mode). Either
+            # way, quant scores flow to the constructor (production parity).
             quant_scores = self._quant_scores(gw, universe, day)
-            synth = synthesize_verdicts(quant_scores, day, cfg.horizon_sessions)
+            if cfg.mode == "portfolio":
+                # Days without persisted verdicts open no new risk; verdicts
+                # for symbols outside today's universe (and not held) are
+                # ignored gracefully.
+                tradable = {*universe, *(s for s in shares if shares[s])}
+                synth = {
+                    sym: v
+                    for sym, v in self._source_verdicts.get(day, {}).items()
+                    if sym in tradable
+                }
+            else:
+                synth = synthesize_verdicts(quant_scores, day, cfg.horizon_sessions)
             synth = self._with_horizon_exits(synth, open_lots, day, i)
             watchlist = synthesize_watchlist(synth, day)
 
@@ -792,7 +881,11 @@ class ReplayRunner:
             weight = target_by_symbol.get(sym, 0.0)
             close = decision_closes.get(sym, float("nan"))
             if weight > 0.0 and math.isfinite(close) and close > 0.0:
-                desired[sym] = _cents(weight * decision_equity) / close
+                desired[sym] = whole_share_qty(
+                    sym,
+                    _cents(weight * decision_equity) / close,
+                    self.config.whole_shares,
+                )
             else:
                 desired[sym] = 0.0
 
@@ -812,12 +905,13 @@ class ReplayRunner:
             value = _cents(qty * open_px)
             if value < 0.01:
                 continue
+            if order_skipped(value, self._cost_params):
+                continue  # below the minimum order notional — never filled
             sigma = sigma_annual.get(sym, float("nan"))
             sigma_daily = sigma / _ANNUALIZE if math.isfinite(sigma) else float("nan")
             cost = _cents(
-                value
-                * cost_per_side_fraction(
-                    value, sigma_daily, adv.get(sym, float("nan")), CostParams()
+                order_cost(
+                    value, sigma_daily, adv.get(sym, float("nan")), self._cost_params
                 )
             )
             if delta > 0.0:
@@ -857,6 +951,7 @@ class ReplayRunner:
         bars: pd.DataFrame,
         experiences: list[DecisionExperience],
         run_id: str,
+        decision_equity: float | None = None,
     ) -> None:
         """Open lots on buys; resolve experiences on full exits."""
         for f in day_fills:
@@ -872,6 +967,7 @@ class ReplayRunner:
                         quant=self._entry_quant_for(f.symbol),
                         regime=gw.regime_state(),
                         sector=gw.sectors([f.symbol]).get(f.symbol),
+                        equity_at_decision=decision_equity,
                     )
                 else:
                     lot = open_lots[f.symbol]
@@ -925,6 +1021,12 @@ class ReplayRunner:
             sector=lot.sector,
             source="replay",
             replay_run_id=run_id,
+            # Bankroll context (campaign Phase 3): equity at the opening
+            # decision + the realized position notional (avg entry x qty).
+            equity_at_decision=lot.equity_at_decision,
+            position_notional=(
+                _cents(lot.qty * lot.entry_price) if lot.entry_price > 0 else None
+            ),
         )
         self._experiences.insert(exp)
         return exp

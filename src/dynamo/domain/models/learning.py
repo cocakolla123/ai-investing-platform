@@ -144,6 +144,12 @@ class DecisionExperience(Frozen):
     exit_price: float | None = None
     qty: float | None = None
     holding_days: int | None = None
+    # --- bankroll context (backtest-campaign Phase 3; migration 0015) ---
+    # Portfolio equity at the opening decision and the realized position
+    # notional (avg entry price x qty) — the meta-model's scale features.
+    # NULL on rows recorded before the columns existed (NaN-safe consumers).
+    equity_at_decision: float | None = None
+    position_notional: float | None = None
     # --- outcome ---
     resolved: bool = False
     pnl_pct: float | None = None

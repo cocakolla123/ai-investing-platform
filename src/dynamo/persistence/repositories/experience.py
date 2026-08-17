@@ -238,6 +238,8 @@ def _from_row(r: Any) -> DecisionExperience:
         exit_price=m["exit_price"],
         qty=m["qty"],
         holding_days=m["holding_days"],
+        equity_at_decision=m["equity_at_decision"],
+        position_notional=m["position_notional"],
         resolved=m["resolved"],
         pnl_pct=m["pnl_pct"],
         benchmark_excess_pct=m["benchmark_excess_pct"],
