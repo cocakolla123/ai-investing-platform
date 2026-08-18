@@ -484,6 +484,28 @@ class MarketDataRepository:
             result = conn.execute(stmt)
         return _reported_rowcount(result.rowcount, len(rows))
 
+    def seed_instrument_sectors(self, sectors: Mapping[str, str]) -> int:
+        """Upsert ``instruments.sector`` for the given symbols.
+
+        Existing rows get ONLY their ``sector`` updated (cik/name/etc are
+        preserved — the CIK seeding and this seeding compose in either
+        order); missing rows are created minimally (``name=symbol``).
+        """
+        if not sectors:
+            return 0
+        t = schema.instruments
+        rows = [
+            {"symbol": symbol, "name": symbol, "sector": sector}
+            for symbol, sector in sorted(sectors.items())
+        ]
+        stmt = pg_insert(t).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["symbol"], set_={"sector": stmt.excluded.sector}
+        )
+        with self._engine.begin() as conn:
+            result = conn.execute(stmt)
+        return _reported_rowcount(result.rowcount, len(rows))
+
     def close_membership(
         self,
         symbol: str,

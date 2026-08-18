@@ -396,6 +396,13 @@ def _cmd_universe(args: argparse.Namespace) -> int:
         f"{len(crypto)} crypto pairs)"
     )
 
+    # GICS sectors for the equity starters — sector-relative labels, dossier
+    # sector context, and risk sector caps all read instruments.sector.
+    from dynamo.data.universe import STARTER_SECTORS
+
+    n_sectors = repo.seed_instrument_sectors(STARTER_SECTORS)
+    print(f"seeded GICS sectors for {n_sectors} equity instruments")
+
     # Verification: the starter set must be fully active both at the
     # backdated as-of AND today (open-ended intervals) — anything else means
     # the backdate left a gap or a stale interval behind.

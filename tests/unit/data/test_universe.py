@@ -173,3 +173,16 @@ def test_default_sector_etf_map() -> None:
         {"AAPL": "Information Technology", "JPM": "Financials", "ODD": "Unknown Sector"}
     )
     assert mapping == {"AAPL": "XLK", "JPM": "XLF"}
+
+
+def test_starter_sectors_cover_every_equity_starter() -> None:
+    """Every equity starter has a GICS sector that resolves to a sector ETF."""
+    from dynamo.data.universe import (
+        STARTER_SECTORS,
+        STARTER_STOCKS,
+        default_sector_etf_map,
+    )
+
+    assert set(STARTER_SECTORS) == set(STARTER_STOCKS)
+    etf_map = default_sector_etf_map(STARTER_SECTORS)
+    assert set(etf_map) == set(STARTER_STOCKS)  # every sector name recognized

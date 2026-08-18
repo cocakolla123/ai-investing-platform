@@ -291,6 +291,36 @@ class UniverseManager:
         return closed
 
 
+# GICS sectors for the built-in equity starters (post-2023 GICS: V/MA are
+# Financials; GOOGL/META/NFLX/DIS are Communication Services). Keys must be
+# GICS names recognized by :func:`default_sector_etf_map`. Seeded into
+# ``instruments.sector`` by ``backfill universe`` so sector-relative labels,
+# dossier sector context, and the risk engine's sector caps all work.
+STARTER_SECTORS: dict[str, str] = {
+    "AAPL": "Information Technology", "MSFT": "Information Technology",
+    "NVDA": "Information Technology", "AMD": "Information Technology",
+    "AVGO": "Information Technology", "ADBE": "Information Technology",
+    "ORCL": "Information Technology", "CRM": "Information Technology",
+    "CSCO": "Information Technology", "IBM": "Information Technology",
+    "INTU": "Information Technology", "ACN": "Information Technology",
+    "TXN": "Information Technology",
+    "GOOGL": "Communication Services", "META": "Communication Services",
+    "NFLX": "Communication Services", "DIS": "Communication Services",
+    "AMZN": "Consumer Discretionary", "TSLA": "Consumer Discretionary",
+    "HD": "Consumer Discretionary", "MCD": "Consumer Discretionary",
+    "PG": "Consumer Staples", "KO": "Consumer Staples",
+    "PEP": "Consumer Staples", "COST": "Consumer Staples",
+    "WMT": "Consumer Staples",
+    "UNH": "Health Care", "JNJ": "Health Care", "ABBV": "Health Care",
+    "MRK": "Health Care", "TMO": "Health Care", "ABT": "Health Care",
+    "JPM": "Financials", "BAC": "Financials", "V": "Financials",
+    "MA": "Financials", "BRK.B": "Financials",
+    "XOM": "Energy",
+    "CAT": "Industrials",
+    "LIN": "Materials",
+}
+
+
 def default_sector_etf_map(sectors: Mapping[str, str]) -> dict[str, str]:
     """GICS sector → sector-SPDR map for the ``rel_strength`` detector.
 
