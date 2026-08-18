@@ -311,6 +311,149 @@ def test_build_panel_empty_sessions_yields_empty_panel() -> None:
         qt.check_panel(panel)
 
 
+# -- retune prep: tuning flags threaded into models / feature subset ---------
+
+
+def test_tuning_flags_parse_and_default_off() -> None:
+    base = ["--train-start", "2024-01-02", "--train-end", "2025-01-02", "--label", "x"]
+    args = qt._build_parser().parse_args(base)
+    assert args.lgbm_max_depth is None
+    assert args.lgbm_min_data_in_leaf is None
+    assert args.lgbm_lambda_l2 is None
+    assert args.feature_groups is None
+    tuned = qt._build_parser().parse_args(
+        [
+            *base,
+            "--lgbm-max-depth", "4",
+            "--lgbm-min-data-in-leaf", "40",
+            "--lgbm-lambda-l2", "0.5",
+            "--feature-groups", "momentum", "volatility",
+        ]
+    )
+    assert tuned.lgbm_max_depth == 4
+    assert tuned.lgbm_min_data_in_leaf == 40
+    assert tuned.lgbm_lambda_l2 == 0.5
+    assert tuned.feature_groups == ["momentum", "volatility"]
+
+
+def test_lgbm_params_from_flags_maps_to_canonical_names() -> None:
+    assert qt.lgbm_params_from_flags(None, None, None) == {}
+    assert qt.lgbm_params_from_flags(4, 40, 0.5) == {
+        "max_depth": 4,
+        "min_child_samples": 40,
+        "reg_lambda": 0.5,
+    }
+    assert qt.lgbm_params_from_flags(4, None, None) == {"max_depth": 4}
+
+
+def test_select_feature_groups_filters_by_catalog_group() -> None:
+    from dynamo.research.quant.catalog import FEATURE_CATALOG
+
+    frame = pd.DataFrame(
+        np.zeros((2, len(FEATURE_CATALOG))),
+        index=pd.Index(["AAA", "BBB"], name="symbol"),
+        columns=pd.Index(list(FEATURE_CATALOG)),
+    )
+    momentum = qt.select_feature_groups(frame, ["momentum"])
+    assert len(momentum.columns) > 0
+    assert all(FEATURE_CATALOG[c].group == "momentum" for c in momentum.columns)
+    both = qt.select_feature_groups(frame, ["momentum", "volatility"])
+    assert set(momentum.columns) < set(both.columns)
+
+
+def test_select_feature_groups_refuses_typos_and_empty_selection() -> None:
+    frame = pd.DataFrame({"ret_20d": [0.0]}, index=pd.Index(["AAA"], name="symbol"))
+    with pytest.raises(ValueError, match="unknown feature group"):
+        qt.select_feature_groups(frame, ["momentumm"])
+    with pytest.raises(ValueError, match="no columns"):
+        qt.select_feature_groups(frame, ["macro"])  # valid group, absent here
+
+
+def test_lgbm_params_reach_every_task_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The retune knobs must reach all three task factories AND the config
+    hash / registry hyperparams, so a tuned run is distinguishable."""
+    from dynamo.research.quant import models as models_mod
+
+    real = models_mod.LightGBMModel
+    captured: list[dict[str, Any]] = []
+    original_init = real.__init__
+
+    def recording_init(self: Any, objective: Any = "regression", **kwargs: Any) -> None:
+        captured.append(dict(kwargs.get("params") or {}))
+        original_init(self, objective, **kwargs)
+
+    # Patch __init__ (not the class): saved models must stay picklable.
+    monkeypatch.setattr(real, "__init__", recording_init)
+    knobs = {"max_depth": 3, "min_child_samples": 30, "reg_lambda": 1.0}
+    panel = separable_panel(n_symbols=25, n_sessions=150)
+    report = qt.train_quant_bundle(
+        panel,
+        version="tuned-v1",
+        artifact_dir=tmp_path,
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+        lgbm_params=knobs,
+    )
+    assert captured and all(p == knobs for p in captured)
+    assert report.lgbm_params == knobs
+    baseline = qt.train_quant_bundle(
+        panel,
+        version="plain-v1",
+        artifact_dir=tmp_path,
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+    )
+    assert report.config_hash != baseline.config_hash  # knobs move the hash
+    mv = qt.registry_model_version(report, TRAIN_START, TRAIN_END)
+    assert mv.hyperparams["lgbm_params"] == knobs
+    mv_plain = qt.registry_model_version(baseline, TRAIN_START, TRAIN_END)
+    assert "lgbm_params" not in mv_plain.hyperparams  # default runs unchanged
+
+
+def test_feature_groups_subset_the_trained_bundle(tmp_path: Path) -> None:
+    """Group selection drops the other groups' columns before the gate and
+    records the subset in the report + registry hyperparams."""
+    from dynamo.research.quant.catalog import FEATURE_CATALOG
+
+    panel = separable_panel(n_symbols=25, n_sessions=150)
+    # Rename the two synthetic features to real catalog names from two groups.
+    momentum_col = next(n for n, s in FEATURE_CATALOG.items() if s.group == "momentum")
+    vol_col = next(n for n, s in FEATURE_CATALOG.items() if s.group == "volatility")
+    renamed = {"signal": momentum_col, "noise": vol_col}
+    panel = qt.TrainingPanel(
+        features=panel.features.rename(columns=renamed),
+        labels=panel.labels,
+        sessions=panel.sessions,
+    )
+    report = qt.train_quant_bundle(
+        panel,
+        version="momentum-only-v1",
+        artifact_dir=tmp_path,
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+        feature_groups=["momentum"],
+    )
+    assert report.feature_names == (momentum_col,)  # volatility column dropped
+    assert report.feature_groups == ("momentum",)
+    mv = qt.registry_model_version(report, TRAIN_START, TRAIN_END)
+    assert mv.hyperparams["feature_groups"] == ["momentum"]
+
+
+def test_main_refuses_unknown_feature_group_before_any_db_work() -> None:
+    rc = qt.main(
+        [
+            "--train-start", "2026-01-05",
+            "--train-end", "2026-02-27",
+            "--label", "typo-test",
+            "--feature-groups", "momentumm",
+            "--no-cache",
+        ]
+    )
+    assert rc == 1  # refused before touching engine/registry/gateway
+
+
 # -- progress observability (the invisible-2h-run fix) -----------------------
 
 

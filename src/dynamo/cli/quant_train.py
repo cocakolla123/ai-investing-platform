@@ -50,7 +50,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, cast
@@ -90,6 +90,8 @@ class TrainReport:
     fold_ic_dispersion: float
     task_reports: dict[str, dict[str, Any]]
     registry_metrics: dict[str, Any]
+    lgbm_params: dict[str, Any] = field(default_factory=dict)
+    feature_groups: tuple[str, ...] | None = None
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -125,6 +127,24 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="append one JSON line {session_i, n_sessions, elapsed_s} per built "
         "session — machine-readable liveness for piped/buffered runs",
+    )
+    tuning = parser.add_argument_group(
+        "tuning",
+        "campaign-v3 retune knobs: each flag is one LightGBM hyperparameter "
+        "or a feature-subset selection, threaded into all three task models",
+    )
+    tuning.add_argument("--lgbm-max-depth", type=int, default=None)
+    tuning.add_argument("--lgbm-min-data-in-leaf", type=int, default=None)
+    tuning.add_argument("--lgbm-lambda-l2", type=float, default=None)
+    tuning.add_argument(
+        "--feature-groups",
+        nargs="+",
+        default=None,
+        metavar="GROUP",
+        help="train on ONLY these feature-catalog groups (e.g. momentum "
+        "volatility). NOTE: the bundle records the subset feature names, so "
+        "replay's default loader refuses it as feature drift — subset bundles "
+        "are for walk-forward report cards, not replay/production scoring.",
     )
     return parser
 
@@ -263,6 +283,48 @@ def build_panel(
     )
 
 
+def lgbm_params_from_flags(
+    max_depth: int | None, min_data_in_leaf: int | None, lambda_l2: float | None
+) -> dict[str, Any]:
+    """CLI tuning flags -> LightGBM sklearn-API params (canonical names, so
+    lightgbm never warns about alias resolution). Unset flags are omitted —
+    an empty dict means 'library defaults', identical to pre-tuning runs."""
+    params: dict[str, Any] = {}
+    if max_depth is not None:
+        params["max_depth"] = int(max_depth)
+    if min_data_in_leaf is not None:
+        params["min_child_samples"] = int(min_data_in_leaf)  # = min_data_in_leaf
+    if lambda_l2 is not None:
+        params["reg_lambda"] = float(lambda_l2)  # = lambda_l2
+    return params
+
+
+def select_feature_groups(features: Any, groups: Sequence[str]) -> Any:
+    """Column-subset ``features`` to the named FEATURE_CATALOG groups.
+
+    Unknown group names and empty selections raise ``ValueError`` — a tuning
+    typo must refuse loudly, never silently train on nothing."""
+    from dynamo.research.quant.catalog import FEATURE_CATALOG, GROUP_TARGETS
+
+    wanted = [str(g) for g in groups]
+    unknown = sorted(set(wanted) - set(GROUP_TARGETS))
+    if unknown:
+        raise ValueError(
+            f"unknown feature group(s) {unknown}; valid: {sorted(GROUP_TARGETS)}"
+        )
+    keep = [
+        c
+        for c in features.columns
+        if c in FEATURE_CATALOG and FEATURE_CATALOG[c].group in set(wanted)
+    ]
+    if not keep:
+        raise ValueError(
+            f"feature groups {wanted} select no columns from the panel "
+            f"({len(features.columns)} columns)"
+        )
+    return features[keep]
+
+
 def check_panel(panel: TrainingPanel) -> tuple[int, int]:
     """(n_sessions, n_usable_symbols); raises :class:`PanelTooSmallError`
     below the gate. A usable symbol has >= 1 non-NaN label AND >= 1 non-NaN
@@ -342,10 +404,18 @@ def train_quant_bundle(
     train_start: date,
     train_end: date,
     wf_config: Any | None = None,
+    lgbm_params: Mapping[str, Any] | None = None,
+    feature_groups: Sequence[str] | None = None,
 ) -> TrainReport:
     """Walk-forward evaluation for the three tasks, final-model fits on the
     full window, artifact + bundle-manifest save. Pure of the database —
-    callers hand in the assembled panel."""
+    callers hand in the assembled panel.
+
+    ``lgbm_params`` (retune knobs) are handed to every task's
+    :class:`LightGBMModel`; ``feature_groups`` column-subsets the panel by
+    catalog group BEFORE the gate check. Both flow into the config hash and
+    the registry hyperparams so a tuned run is never confusable with a
+    default one."""
     import math
 
     import numpy as np
@@ -359,26 +429,34 @@ def train_quant_bundle(
         train_and_evaluate,
     )
 
+    if feature_groups is not None:
+        panel = TrainingPanel(
+            features=select_feature_groups(panel.features, feature_groups),
+            labels=panel.labels,
+            sessions=panel.sessions,
+        )
+    tuned = dict(lgbm_params or {})
     n_sessions, n_symbols = check_panel(panel)
     features, labels = panel.features, panel.labels
     feature_names = tuple(str(c) for c in features.columns)
     wf = wf_config if wf_config is not None else walkforward_for(n_sessions)
-    config_hash = compute_config_hash(
-        {
-            "version": version,
-            "train_start": train_start,
-            "train_end": train_end,
-            "feature_names": list(feature_names),
-            "model": MODEL_NAME,
-            "wf": {
-                "train": wf.train_sessions,
-                "test": wf.test_sessions,
-                "purge": wf.purge_sessions,
-                "embargo": wf.embargo_sessions,
-                "roll": wf.roll_sessions,
-            },
-        }
-    )
+    config_payload: dict[str, Any] = {
+        "version": version,
+        "train_start": train_start,
+        "train_end": train_end,
+        "feature_names": list(feature_names),
+        "model": MODEL_NAME,
+        "wf": {
+            "train": wf.train_sessions,
+            "test": wf.test_sessions,
+            "purge": wf.purge_sessions,
+            "embargo": wf.embargo_sessions,
+            "roll": wf.roll_sessions,
+        },
+    }
+    if tuned:  # only when set: default-run hashes stay identical to pre-tuning
+        config_payload["lgbm_params"] = {k: tuned[k] for k in sorted(tuned)}
+    config_hash = compute_config_hash(config_payload)
     # Historic average only as the CLI's bar-to-beat: the full baseline suite
     # (seasonal-naive, AutoETS) stays available through train_and_evaluate
     # directly, but per-symbol ETS fits across folds would dominate runtime
@@ -388,9 +466,9 @@ def train_quant_bundle(
     }
 
     factories = {
-        "rank": lambda: LightGBMModel("regression"),
-        "downside": lambda: LightGBMModel("binary"),
-        "vol": lambda: LightGBMModel("regression"),
+        "rank": lambda: LightGBMModel("regression", params=tuned),
+        "downside": lambda: LightGBMModel("binary", params=tuned),
+        "vol": lambda: LightGBMModel("regression", params=tuned),
     }
     task_reports: dict[str, dict[str, Any]] = {}
     for task in ("rank", "downside", "vol"):
@@ -481,6 +559,8 @@ def train_quant_bundle(
         fold_ic_dispersion=dispersion,
         task_reports=task_reports,
         registry_metrics=registry_metrics,
+        lgbm_params=dict(tuned),
+        feature_groups=tuple(feature_groups) if feature_groups is not None else None,
     )
 
 
@@ -503,6 +583,14 @@ def registry_model_version(report: TrainReport, train_start: date, train_end: da
             "model": MODEL_NAME,
             "tasks": ["rank", "downside", "vol"],
             "config_hash": report.config_hash,
+            # Retune knobs travel with the candidate row — a tuned bundle is
+            # never confusable with a default one. Empty/None on default runs.
+            **({"lgbm_params": dict(report.lgbm_params)} if report.lgbm_params else {}),
+            **(
+                {"feature_groups": list(report.feature_groups)}
+                if report.feature_groups is not None
+                else {}
+            ),
         },
         metrics=dict(report.registry_metrics),
         artifact_path=str(report.bundle_path),
@@ -570,6 +658,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.train_end <= args.train_start:
         print("--train-end must be after --train-start")
         return 1
+    if args.feature_groups is not None:
+        # Validate the group names NOW — a typo must fail in milliseconds,
+        # not after an hours-long panel build.
+        from dynamo.research.quant.catalog import GROUP_TARGETS
+
+        unknown = sorted(set(args.feature_groups) - set(GROUP_TARGETS))
+        if unknown:
+            print(
+                f"refused: unknown feature group(s) {unknown} — "
+                f"valid: {sorted(GROUP_TARGETS)}"
+            )
+            return 1
+    lgbm_params = lgbm_params_from_flags(
+        args.lgbm_max_depth, args.lgbm_min_data_in_leaf, args.lgbm_lambda_l2
+    )
 
     engine = make_engine(args.database_url or Settings().database_url)
     registry = ModelRegistryRepository(engine)
@@ -625,6 +728,12 @@ def main(argv: list[str] | None = None) -> int:
             else None
         ),
     )
+    if lgbm_params or args.feature_groups:
+        print(
+            f"tuning: lgbm_params={lgbm_params or '{}'} "
+            f"feature_groups={args.feature_groups or 'all'}",
+            flush=True,
+        )
     try:
         report = train_quant_bundle(
             panel,
@@ -632,10 +741,15 @@ def main(argv: list[str] | None = None) -> int:
             artifact_dir=default_bundle_dir(),
             train_start=args.train_start,
             train_end=args.train_end,
+            lgbm_params=lgbm_params,
+            feature_groups=args.feature_groups,
         )
     except PanelTooSmallError as exc:
         print(f"REFUSED: {exc}")
         return 2
+    except ValueError as exc:  # bad tuning selection (e.g. groups match nothing)
+        print(f"refused: {exc}")
+        return 1
 
     print_go_no_go(report)
     registry.insert_candidate(
