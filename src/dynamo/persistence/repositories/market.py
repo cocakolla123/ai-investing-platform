@@ -451,7 +451,9 @@ class MarketDataRepository:
             set_={
                 c.name: stmt.excluded[c.name] for c in t.columns if c.name not in pk
             },
-        )
+        ).returning(t.c.symbol)
+        # RETURNING gives a reliable insert count (psycopg3 reports rowcount=-1
+        # for multi-VALUES upserts) — same pattern as ReplayRepository.
         with self._engine.begin() as conn:
             deleted = conn.execute(
                 delete(t).where(
@@ -460,8 +462,8 @@ class MarketDataRepository:
                     t.c.approved_by.in_(list(delete_approved_by)),
                 )
             ).rowcount
-            inserted = conn.execute(stmt).rowcount
-        return (int(deleted or 0), _reported_rowcount(inserted, len(rows)))
+            inserted = len(conn.execute(stmt).all())
+        return (int(deleted or 0), int(inserted))
 
     def seed_instrument_ciks(self, ciks: Mapping[str, str]) -> int:
         """Upsert ``instruments.cik`` for the given symbols (EDGAR mapping).
