@@ -525,6 +525,11 @@ class FakeUniverseRepo:
 
     def __init__(self) -> None:
         self.rows: dict[tuple[str, date], Any] = {}
+        self.sectors: dict[str, str] = {}
+
+    def seed_instrument_sectors(self, sectors: Any) -> int:
+        self.sectors = dict(sectors)
+        return len(self.sectors)
 
     def backdate_core_universe(
         self, memberships: Any, *, delete_approved_by: Any = ("seed", "replay-backdate")
