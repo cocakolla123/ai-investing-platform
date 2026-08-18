@@ -51,6 +51,13 @@ PRICING: dict[str, ModelSpec] = {
     # we meter at the POST-intro rate so the budget never under-counts.
     "claude-sonnet-5": ModelSpec(3.0, 15.0, date(2026, 1, 31)),
     "claude-opus-5": ModelSpec(5.0, 25.0, date(2026, 5, 31)),
+    # Fable 5 is reachable ONLY through the Claude Code CLI backend
+    # (ADR-0014), where cost is flat-rate subscription — not metered per
+    # token — so pricing is zero by design (the CLI client records
+    # cost_usd=0.0 with real token counts). The knowledge_cutoff entry is
+    # load-bearing: the replay cutoff gate reads it (Anthropic docs
+    # "Training data cutoff" for claude-fable-5: Jan 2026, read 2026-08-18).
+    "claude-fable-5": ModelSpec(0.0, 0.0, date(2026, 1, 31)),
 }
 
 

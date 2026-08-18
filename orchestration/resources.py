@@ -8,6 +8,7 @@ a skip and return empty metadata (the platform must run partially configured).
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +16,8 @@ from dagster import ConfigurableResource
 from pydantic import PrivateAttr
 
 from dynamo.config.settings import Settings
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
@@ -32,6 +35,7 @@ if TYPE_CHECKING:
     from dynamo.data.transcripts_av import AlphaVantageTranscripts
     from dynamo.data.transcripts_defeatbeta import DefeatBetaTranscripts
     from dynamo.llm.anthropic_client import AnthropicClient
+    from dynamo.llm.claude_code_client import ClaudeCodeResearchModel
     from dynamo.llm.cost_meter import CostMeter
     from dynamo.persistence.repositories.experience import ExperienceRepository
     from dynamo.persistence.repositories.market import MarketDataRepository
@@ -116,14 +120,47 @@ class DynamoResource(ConfigurableResource):
 
     # --- research model + committee ---
 
-    def research_model(self) -> AnthropicClient | None:
-        """None when ANTHROPIC_API_KEY is unset — degraded (quant-only) mode."""
-        if not self.settings().anthropic_api_key:
-            return None
-        if self._research_model is None:
-            from dynamo.llm.anthropic_client import AnthropicClient
+    def research_model(self) -> AnthropicClient | ClaudeCodeResearchModel | None:
+        """ResearchModel per ``settings.research_backend`` (ADR-0014).
 
-            self._research_model = AnthropicClient(self.settings(), self.cost_meter())
+        - "api" (default): AnthropicClient; None when ANTHROPIC_API_KEY is
+          unset — degraded (quant-only) mode. Byte-identical to the
+          pre-ADR-0014 behavior.
+        - "claude_code": ClaudeCodeResearchModel over the local CLI; None
+          (with a loud log, same as the missing-key path) when the `claude`
+          binary cannot be found.
+        """
+        if self._research_model is not None:
+            return self._research_model
+        settings = self.settings()
+        if settings.research_backend == "claude_code":
+            from dynamo.llm.claude_code_client import (
+                ClaudeCodeResearchModel,
+                find_claude_binary,
+            )
+
+            binary = find_claude_binary(settings.claude_code_binary)
+            if binary is None:
+                _log.error(
+                    "research_backend='claude_code' but no `claude` binary found "
+                    "($PATH + known install locations; set CLAUDE_CODE_BINARY) — "
+                    "degraded quant-only mode"
+                )
+                return None
+            api_fallback = None
+            if settings.claude_code_fallback_to_api and settings.anthropic_api_key:
+                from dynamo.llm.anthropic_client import AnthropicClient
+
+                api_fallback = AnthropicClient(settings, self.cost_meter())
+            self._research_model = ClaudeCodeResearchModel(
+                settings, self.cost_meter(), binary=binary, api_fallback=api_fallback
+            )
+            return self._research_model
+        if not settings.anthropic_api_key:
+            return None
+        from dynamo.llm.anthropic_client import AnthropicClient
+
+        self._research_model = AnthropicClient(settings, self.cost_meter())
         return self._research_model
 
     def committee_engine(self) -> CommitteeEngine | None:

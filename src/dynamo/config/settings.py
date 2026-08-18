@@ -41,6 +41,34 @@ class Settings(BaseSettings):
     deep_dive_cap_per_night: int = 8
     tier2_triage_cap_per_night: int = 60
 
+    # --- Research backend selection (ADR-0014) ---
+    # "api" (default): AnthropicClient — per-token billing, Message Batches at
+    #   50% off, prompt caching, effectively unbounded scale.
+    # "claude_code": route committee calls through the LOCAL Claude Code CLI,
+    #   covered by the user's flat-rate subscription ($0 marginal cost for the
+    #   nightly ~35-call paper-phase committee). Tradeoffs: subscription plan
+    #   windows (5-hourly/weekly usage caps) can exhaust mid-run; no batch
+    #   discount and no prompt caching (batches degrade to a sequential local
+    #   loop); the scale ceiling is the plan limit — fine for nightly paper
+    #   research, wrong for large replay campaigns. Personal-use automation
+    #   within the user's own subscription limits.
+    research_backend: str = Field(default="api", alias="RESEARCH_BACKEND")
+    # Path to the `claude` executable; empty -> auto-discover ($PATH, then
+    # known install locations — see claude_code_client.find_claude_binary).
+    claude_code_binary: str = Field(default="", alias="CLAUDE_CODE_BINARY")
+    # Tier models for the CLI backend. Fable 5 (training cutoff Jan 2026)
+    # takes the arbiter seat — subscription-covered, so the strongest
+    # available model costs the same as any other.
+    claude_code_model_screen: str = "claude-haiku-4-5"
+    claude_code_model_analyst: str = "claude-sonnet-5"
+    claude_code_model_arbiter: str = "claude-fable-5"
+    # When the plan window is exhausted mid-run: True -> fall through to the
+    # Anthropic API per-call (requires ANTHROPIC_API_KEY, resumes per-token
+    # billing); False (default) -> raise PlanLimitExhausted and stop until
+    # the next window.
+    claude_code_fallback_to_api: bool = False
+    claude_code_timeout_seconds: int = 300
+
     # --- Broker (paper first; live requires the gate, doc 09 section 7) ---
     alpaca_api_key: str = Field(default="", alias="ALPACA_API_KEY")
     alpaca_api_secret: str = Field(default="", alias="ALPACA_API_SECRET")
