@@ -493,8 +493,15 @@ def _aligned_macro(
     if len(sub) == 0:
         return np.full(n, default)
     sub = sub.sort_values(["ts", "vintage_ts"]).drop_duplicates(subset=["ts"], keep="last")
-    s = pd.Series(sub["value"].to_numpy(dtype=float), index=pd.to_datetime(sub["ts"]))
-    aligned = s.reindex(index, method="ffill").fillna(default)
+    # macro ts is a DATE column (tz-naive) while bars ts is timestamptz (UTC):
+    # normalize BOTH sides to tz-naive before reindexing — pandas refuses to
+    # compare naive and aware DatetimeIndexes (campaign dress-rehearsal bug).
+    macro_idx = pd.DatetimeIndex(pd.to_datetime(sub["ts"]))
+    if macro_idx.tz is not None:
+        macro_idx = macro_idx.tz_localize(None)
+    target = index.tz_localize(None) if index.tz is not None else index
+    s = pd.Series(sub["value"].to_numpy(dtype=float), index=macro_idx)
+    aligned = s.reindex(target, method="ffill").fillna(default)
     return np.asarray(aligned, dtype=float)
 
 

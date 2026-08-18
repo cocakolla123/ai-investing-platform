@@ -280,3 +280,31 @@ def test_same_config_twice_is_bit_identical(fixture_frames: Any) -> None:
     assert [e.model_dump() for e in exp_a.inserted] == [
         e.model_dump() for e in exp_b.inserted
     ]
+
+
+def test_aligned_macro_handles_tz_aware_session_index() -> None:
+    """Regression: bars ts is timestamptz (UTC-aware) while macro ts is a DATE
+    column (naive). _aligned_macro must align them instead of raising
+    ``TypeError: Cannot compare dtypes`` (2026-08 campaign dress-rehearsal)."""
+    import numpy as np
+
+    from dynamo.replay.runner import _aligned_macro
+
+    macro = pd.DataFrame(
+        {
+            "series_id": ["BAMLH0A0HYM2"] * 3,
+            "ts": pd.to_datetime(["2026-02-02", "2026-02-03", "2026-02-04"]),
+            "vintage_ts": pd.to_datetime(["2026-02-03", "2026-02-04", "2026-02-05"]),
+            "value": [3.0, 3.5, 4.5],
+        }
+    )
+    aware_idx = pd.DatetimeIndex(
+        pd.to_datetime(["2026-02-02", "2026-02-04", "2026-02-05"]), tz="UTC"
+    )
+    out = _aligned_macro(macro, "BAMLH0A0HYM2", aware_idx, default=4.0)
+    assert np.allclose(out, [3.0, 4.5, 4.5])
+    # naive index keeps working identically
+    naive_idx = pd.DatetimeIndex(pd.to_datetime(["2026-02-02", "2026-02-04"]))
+    assert np.allclose(
+        _aligned_macro(macro, "BAMLH0A0HYM2", naive_idx, default=4.0), [3.0, 4.5]
+    )
