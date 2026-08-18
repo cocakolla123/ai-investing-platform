@@ -311,6 +311,66 @@ def test_build_panel_empty_sessions_yields_empty_panel() -> None:
         qt.check_panel(panel)
 
 
+# -- progress observability (the invisible-2h-run fix) -----------------------
+
+
+def _panel_fixtures() -> tuple[Any, Any, dict[str, str], list[str], list[date]]:
+    universe = ["AAA", "BBB"]
+    bars = make_bars([*universe, "XLK", "SPY"], n_sessions=60)
+    inputs = FeatureInputs(bars=bars, sector_map={"AAA": "XLK"})
+    sector_map = {"AAA": "XLK", "BBB": "SPY"}
+    sessions = [
+        cast(pd.Timestamp, t).date() for t in pd.bdate_range("2024-01-02", periods=60)
+    ]
+    return inputs, bars, sector_map, universe, sessions
+
+
+def test_progress_file_is_written_and_parseable(tmp_path: Path) -> None:
+    import json
+
+    inputs, bars, sector_map, universe, sessions = _panel_fixtures()
+    progress_path = tmp_path / "progress.jsonl"
+    panel = qt.build_panel(
+        lambda d: inputs, bars, sector_map, universe, sessions,
+        horizon_sessions=20,
+        on_session=qt.progress_file_writer(progress_path),
+    )
+    lines = progress_path.read_text().splitlines()
+    assert len(lines) == len(panel.sessions)
+    records = [json.loads(line) for line in lines]  # every line parses
+    assert [r["session_i"] for r in records] == list(range(1, len(lines) + 1))
+    assert {r["n_sessions"] for r in records} == {len(panel.sessions)}
+    elapsed = [r["elapsed_s"] for r in records]
+    assert all(isinstance(e, float | int) and e >= 0 for e in elapsed)
+    assert elapsed == sorted(elapsed)  # monotonically non-decreasing
+
+
+def test_progress_lines_carry_elapsed_and_eta() -> None:
+    inputs, bars, sector_map, universe, sessions = _panel_fixtures()
+    lines: list[str] = []
+    qt.build_panel(
+        lambda d: inputs, bars, sector_map, universe, sessions,
+        horizon_sessions=20, progress=lines.append,
+    )
+    assert lines, "40 feature sessions must produce a 25-session progress line"
+    assert all("elapsed " in line and "ETA " in line for line in lines)
+
+
+def test_hms_formatting_is_clamped_and_exact() -> None:
+    assert qt._hms(3661.9) == "1:01:01"
+    assert qt._hms(59.0) == "0:00:59"
+    assert qt._hms(0.0) == "0:00:00"
+    assert qt._hms(-5.0) == "0:00:00"
+    assert qt._hms(float("nan")) == "0:00:00"
+
+
+def test_progress_file_flag_parses() -> None:
+    base = ["--train-start", "2024-01-02", "--train-end", "2025-01-02", "--label", "x"]
+    assert qt._build_parser().parse_args(base).progress_file is None
+    args = qt._build_parser().parse_args([*base, "--progress-file", "/tmp/p.jsonl"])
+    assert args.progress_file == Path("/tmp/p.jsonl")
+
+
 def test_registry_metrics_are_json_safe(smoke: dict[str, Any]) -> None:
     import json
 

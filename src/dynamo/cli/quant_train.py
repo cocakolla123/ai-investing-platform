@@ -119,12 +119,48 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="bypass the on-disk per-session feature cache (artifacts/panel_cache)",
     )
+    parser.add_argument(
+        "--progress-file",
+        type=Path,
+        default=None,
+        help="append one JSON line {session_i, n_sessions, elapsed_s} per built "
+        "session — machine-readable liveness for piped/buffered runs",
+    )
     return parser
 
 
 # --------------------------------------------------------------------------
 # panel assembly (pure given injected loaders — unit-testable without a DB)
 # --------------------------------------------------------------------------
+
+
+def _hms(seconds: float) -> str:
+    """``H:MM:SS`` for progress lines (negative/NaN-safe: clamps to zero)."""
+    total = 0 if not seconds > 0 else int(seconds)
+    return f"{total // 3600}:{total % 3600 // 60:02d}:{total % 60:02d}"
+
+
+def progress_file_writer(path: Path) -> Callable[[int, int, float], None]:
+    """``on_session`` hook appending one JSON line per built session.
+
+    Append-per-call (open/write/close) so every line is on disk the moment
+    the session finishes — a hard kill loses nothing, and ``tail -f`` on the
+    file gives live progress even when stdout is piped and block-buffered
+    (the failure mode that hid a 2h training run)."""
+    import json
+
+    def write(session_i: int, n_sessions: int, elapsed_s: float) -> None:
+        line = json.dumps(
+            {
+                "session_i": session_i,
+                "n_sessions": n_sessions,
+                "elapsed_s": round(float(elapsed_s), 3),
+            }
+        )
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
+    return write
 
 
 def label_sector_map(
@@ -150,6 +186,7 @@ def build_panel(
     horizon_sessions: int = HORIZON_SESSIONS,
     progress: Callable[[str], None] | None = None,
     cache: Any | None = None,
+    on_session: Callable[[int, int, float], None] | None = None,
 ) -> TrainingPanel:
     """Pooled panel: ``build_features`` per session (explicit as_of, the
     replay loading path) + ``build_labels`` per session from the shared
@@ -161,7 +198,13 @@ def build_panel(
     ``put(day, frame)``) short-circuits the per-session gateway build on a
     hit and persists each freshly built frame immediately (crash-safe
     incremental warm-up). Labels are always rebuilt — they are cheap slices
-    of the preloaded ``label_bars`` frame."""
+    of the preloaded ``label_bars`` frame.
+
+    ``on_session(session_i, n_sessions, elapsed_s)`` fires after EVERY
+    session (the ``--progress-file`` hook); ``progress`` lines every 25
+    sessions carry elapsed + ETA from the observed per-session rate."""
+    import time
+
     import pandas as pd
 
     from dynamo.research.quant.features import build_features, build_labels
@@ -174,6 +217,8 @@ def build_panel(
     label_frames: list[Any] = []
     keys: list[Any] = []
     cache_hits = 0
+    started = time.monotonic()
+    n_sessions = len(feature_sessions)
     for i, day in enumerate(feature_sessions):
         features = cache.get(day) if cache is not None else None
         if features is None:
@@ -190,9 +235,16 @@ def build_panel(
         feature_frames.append(features)
         label_frames.append(labels)
         keys.append(pd.Timestamp(day))
+        elapsed = time.monotonic() - started
+        if on_session is not None:
+            on_session(i + 1, n_sessions, elapsed)
         if progress is not None and (i + 1) % 25 == 0:
             hits = f" ({cache_hits} cache hits)" if cache is not None else ""
-            progress(f"panel: {i + 1}/{len(feature_sessions)} sessions built{hits}")
+            eta = elapsed / (i + 1) * (n_sessions - i - 1)
+            progress(
+                f"panel: {i + 1}/{n_sessions} sessions built{hits} — "
+                f"elapsed {_hms(elapsed)}, ETA {_hms(eta)}"
+            )
     if progress is not None and cache is not None and feature_sessions:
         progress(
             f"panel: feature cache served {cache_hits}/{len(feature_sessions)} sessions"
@@ -539,10 +591,13 @@ def main(argv: list[str] | None = None) -> int:
 
     sector_map = label_sector_map(gw_end.sectors(universe), universe)
     sessions = _sessions_between(args.train_start, args.train_end)
+    # flush=True on every progress print: piped/block-buffered stdout hid a
+    # 2h panel build entirely — liveness must not depend on a tty.
     print(
         f"quant-train {args.label!r}: {len(universe)} symbols, "
         f"{len(sessions)} sessions {args.train_start} -> {args.train_end} "
-        f"(last {HORIZON_SESSIONS} are label-horizon only)"
+        f"(last {HORIZON_SESSIONS} are label-horizon only)",
+        flush=True,
     )
     label_bars = gw_end.bars(
         sorted({*universe, *sector_map.values(), BENCHMARK_FALLBACK}),
@@ -555,15 +610,20 @@ def main(argv: list[str] | None = None) -> int:
         cache = PanelFeatureCache(
             Path(Settings().artifact_dir) / "panel_cache", universe
         )
-        print(f"panel cache: {cache.directory} (bypass with --no-cache)")
+        print(f"panel cache: {cache.directory} (bypass with --no-cache)", flush=True)
     panel = build_panel(
         lambda d: HistoricalDataGateway(engine, d).feature_inputs(universe),
         label_bars,
         sector_map,
         universe,
         sessions,
-        progress=print,
+        progress=lambda msg: print(msg, flush=True),
         cache=cache,
+        on_session=(
+            progress_file_writer(args.progress_file)
+            if args.progress_file is not None
+            else None
+        ),
     )
     try:
         report = train_quant_bundle(
