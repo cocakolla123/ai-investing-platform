@@ -616,6 +616,24 @@ trial_counter = Table(
     Column("trials", Integer, nullable=False, default=0),
 )
 
+# --- Alpha-research rails (ADR-0015; migration 0018) ---
+# Pre-registered candidate-signal hypotheses: the audition CLI refuses to
+# test a candidate whose row was not written in a PRIOR invocation
+# (registered_at strictly before the audition start).
+hypotheses = Table(
+    "hypotheses",
+    metadata,
+    Column("id", Text, primary_key=True),  # slug
+    Column("title", Text, nullable=False),
+    Column("rationale", Text, nullable=False),  # WHY — written before testing
+    Column("prediction", Text, nullable=False),  # expected sign/magnitude
+    Column("trial_family", Text, nullable=False),  # trial_counter key
+    Column("registered_at", DateTime(timezone=True), nullable=False),
+    Column("data_requirements", Text, nullable=False, default=""),
+    Column("status", Text, nullable=False, default="registered"),
+    Column("audit_results", JSONB),  # written once by the audition CLI
+)
+
 # --- Risk (doc 06) ---
 
 regime_states = Table(
