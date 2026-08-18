@@ -190,6 +190,7 @@ def test_gate_maps_to_exit_code_2(monkeypatch: pytest.MonkeyPatch) -> None:
             "--train-end", "2026-02-27",
             "--label", "gate-test",
             "--database-url", "postgresql://unused/unused",
+            "--no-cache",  # unit test: never write the real artifacts/ cache
         ]
     )
     assert rc == 2

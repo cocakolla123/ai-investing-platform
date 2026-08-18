@@ -114,6 +114,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="train on the active tier-1/3 universe at --train-end (the default)",
     )
     parser.add_argument("--database-url", default=None)
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="bypass the on-disk per-session feature cache (artifacts/panel_cache)",
+    )
     return parser
 
 
@@ -144,12 +149,19 @@ def build_panel(
     *,
     horizon_sessions: int = HORIZON_SESSIONS,
     progress: Callable[[str], None] | None = None,
+    cache: Any | None = None,
 ) -> TrainingPanel:
     """Pooled panel: ``build_features`` per session (explicit as_of, the
     replay loading path) + ``build_labels`` per session from the shared
     label-bars frame. The trailing ``horizon_sessions`` sessions are excluded
     — their forward windows extend past ``train_end`` so their labels cannot
-    be complete."""
+    be complete.
+
+    ``cache`` (a ``PanelFeatureCache``-shaped object: ``get(day)`` /
+    ``put(day, frame)``) short-circuits the per-session gateway build on a
+    hit and persists each freshly built frame immediately (crash-safe
+    incremental warm-up). Labels are always rebuilt — they are cheap slices
+    of the preloaded ``label_bars`` frame."""
     import pandas as pd
 
     from dynamo.research.quant.features import build_features, build_labels
@@ -161,9 +173,17 @@ def build_panel(
     feature_frames: list[Any] = []
     label_frames: list[Any] = []
     keys: list[Any] = []
+    cache_hits = 0
     for i, day in enumerate(feature_sessions):
-        inputs = feature_inputs_for(day)
-        features = build_features(inputs, day, universe)
+        features = cache.get(day) if cache is not None else None
+        if features is None:
+            inputs = feature_inputs_for(day)
+            features = build_features(inputs, day, universe)
+            if cache is not None:
+                cache.put(day, features)
+        else:
+            cache_hits += 1
+            features = features.reindex(universe)
         labels = build_labels(
             label_bars, sector_map, day, horizon_sessions=horizon_sessions
         ).reindex(universe)
@@ -171,7 +191,12 @@ def build_panel(
         label_frames.append(labels)
         keys.append(pd.Timestamp(day))
         if progress is not None and (i + 1) % 25 == 0:
-            progress(f"panel: {i + 1}/{len(feature_sessions)} sessions built")
+            hits = f" ({cache_hits} cache hits)" if cache is not None else ""
+            progress(f"panel: {i + 1}/{len(feature_sessions)} sessions built{hits}")
+    if progress is not None and cache is not None and feature_sessions:
+        progress(
+            f"panel: feature cache served {cache_hits}/{len(feature_sessions)} sessions"
+        )
     if not feature_frames:
         empty = pd.DataFrame(
             index=pd.MultiIndex.from_arrays([[], []], names=["ts", "symbol"])
@@ -523,6 +548,14 @@ def main(argv: list[str] | None = None) -> int:
         sorted({*universe, *sector_map.values(), BENCHMARK_FALLBACK}),
         (args.train_end - args.train_start).days + 60,
     )
+    cache = None
+    if not args.no_cache:
+        from dynamo.research.quant.panel_cache import PanelFeatureCache
+
+        cache = PanelFeatureCache(
+            Path(Settings().artifact_dir) / "panel_cache", universe
+        )
+        print(f"panel cache: {cache.directory} (bypass with --no-cache)")
     panel = build_panel(
         lambda d: HistoricalDataGateway(engine, d).feature_inputs(universe),
         label_bars,
@@ -530,6 +563,7 @@ def main(argv: list[str] | None = None) -> int:
         universe,
         sessions,
         progress=print,
+        cache=cache,
     )
     try:
         report = train_quant_bundle(
