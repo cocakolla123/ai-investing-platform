@@ -62,6 +62,13 @@ BENCHMARK_FALLBACK = "SPY"
 MODEL_NAME = "lgbm"
 ALGO = "lightgbm"
 
+# Rank-task label selection (--label-kind). 'sector_excess' is the historical
+# default and keeps config hashes bit-identical to pre-residual runs;
+# 'residual' ranks on factor-residualized idiosyncratic return
+# (features.build_labels residual_return_{h}d — betas vs SPY + sector ETF).
+LABEL_KINDS = ("sector_excess", "residual")
+DEFAULT_LABEL_KIND = "sector_excess"
+
 
 class PanelTooSmallError(RuntimeError):
     """The pooled panel is below the training gate — refuse (exit 2)."""
@@ -92,6 +99,7 @@ class TrainReport:
     registry_metrics: dict[str, Any]
     lgbm_params: dict[str, Any] = field(default_factory=dict)
     feature_groups: tuple[str, ...] | None = None
+    label_kind: str = DEFAULT_LABEL_KIND
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -116,6 +124,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="train on the active tier-1/3 universe at --train-end (the default)",
     )
     parser.add_argument("--database-url", default=None)
+    parser.add_argument(
+        "--label-kind",
+        choices=LABEL_KINDS,
+        default=DEFAULT_LABEL_KIND,
+        help="rank-task label: 'sector_excess' (historical default, "
+        "reproducible config hashes) or 'residual' (factor-residualized "
+        "return — beta_mkt x SPY + beta_sector x sector-ETF excess stripped "
+        "out, betas from ~250 trailing sessions <= as_of)",
+    )
     parser.add_argument(
         "--no-cache",
         action="store_true",
@@ -406,6 +423,7 @@ def train_quant_bundle(
     wf_config: Any | None = None,
     lgbm_params: Mapping[str, Any] | None = None,
     feature_groups: Sequence[str] | None = None,
+    label_kind: str = DEFAULT_LABEL_KIND,
 ) -> TrainReport:
     """Walk-forward evaluation for the three tasks, final-model fits on the
     full window, artifact + bundle-manifest save. Pure of the database —
@@ -415,7 +433,11 @@ def train_quant_bundle(
     :class:`LightGBMModel`; ``feature_groups`` column-subsets the panel by
     catalog group BEFORE the gate check. Both flow into the config hash and
     the registry hyperparams so a tuned run is never confusable with a
-    default one."""
+    default one. ``label_kind`` selects the RANK task's target column
+    (``sector_excess`` -> excess_return_20d, ``residual`` ->
+    residual_return_20d); the default leaves the config hash bit-identical
+    to pre-residual runs, and a non-default kind moves the hash AND travels
+    in the registry hyperparams."""
     import math
 
     import numpy as np
@@ -435,10 +457,13 @@ def train_quant_bundle(
             labels=panel.labels,
             sessions=panel.sessions,
         )
+    if label_kind not in LABEL_KINDS:
+        raise ValueError(f"unknown label kind {label_kind!r}; valid: {list(LABEL_KINDS)}")
     tuned = dict(lgbm_params or {})
     n_sessions, n_symbols = check_panel(panel)
     features, labels = panel.features, panel.labels
     feature_names = tuple(str(c) for c in features.columns)
+    rank_target = "residual_return_20d" if label_kind == "residual" else None
     wf = wf_config if wf_config is not None else walkforward_for(n_sessions)
     config_payload: dict[str, Any] = {
         "version": version,
@@ -456,6 +481,8 @@ def train_quant_bundle(
     }
     if tuned:  # only when set: default-run hashes stay identical to pre-tuning
         config_payload["lgbm_params"] = {k: tuned[k] for k in sorted(tuned)}
+    if label_kind != DEFAULT_LABEL_KIND:  # default runs keep pre-residual hashes
+        config_payload["label_kind"] = label_kind
     config_hash = compute_config_hash(config_payload)
     # Historic average only as the CLI's bar-to-beat: the full baseline suite
     # (seasonal-naive, AutoETS) stays available through train_and_evaluate
@@ -476,6 +503,7 @@ def train_quant_bundle(
             features,
             labels,
             task=task,  # type: ignore[arg-type]
+            target=rank_target if task == "rank" else None,
             model_factories={MODEL_NAME: factories[task]},
             baseline_factories=baselines,
             wf_config=wf,
@@ -494,7 +522,7 @@ def train_quant_bundle(
     )
 
     ranker = fit_final_model(
-        features, labels, task="rank", model_factory=factories["rank"]
+        features, labels, task="rank", model_factory=factories["rank"], target=rank_target
     )
     downside = fit_final_model(
         features, labels, task="downside", model_factory=factories["downside"]
@@ -561,6 +589,7 @@ def train_quant_bundle(
         registry_metrics=registry_metrics,
         lgbm_params=dict(tuned),
         feature_groups=tuple(feature_groups) if feature_groups is not None else None,
+        label_kind=label_kind,
     )
 
 
@@ -589,6 +618,11 @@ def registry_model_version(report: TrainReport, train_start: date, train_end: da
             **(
                 {"feature_groups": list(report.feature_groups)}
                 if report.feature_groups is not None
+                else {}
+            ),
+            **(
+                {"label_kind": report.label_kind}
+                if report.label_kind != DEFAULT_LABEL_KIND
                 else {}
             ),
         },
@@ -728,10 +762,11 @@ def main(argv: list[str] | None = None) -> int:
             else None
         ),
     )
-    if lgbm_params or args.feature_groups:
+    if lgbm_params or args.feature_groups or args.label_kind != DEFAULT_LABEL_KIND:
         print(
             f"tuning: lgbm_params={lgbm_params or '{}'} "
-            f"feature_groups={args.feature_groups or 'all'}",
+            f"feature_groups={args.feature_groups or 'all'} "
+            f"label_kind={args.label_kind}",
             flush=True,
         )
     try:
@@ -743,6 +778,7 @@ def main(argv: list[str] | None = None) -> int:
             train_end=args.train_end,
             lgbm_params=lgbm_params,
             feature_groups=args.feature_groups,
+            label_kind=args.label_kind,
         )
     except PanelTooSmallError as exc:
         print(f"REFUSED: {exc}")

@@ -43,6 +43,9 @@ def separable_panel(
             "excess_return_20d": excess,
             "downside_20d": (excess < np.quantile(excess, 0.2)).astype(float),
             "realized_vol_20d": np.exp(0.5 * signal) * 0.2,
+            # Parallel residual label (features.build_labels emits it): keep
+            # it NOISELESS so a residual-kind run is sharply distinguishable.
+            "residual_return_20d": 0.05 * signal,
         },
         index=idx,
     )
@@ -439,6 +442,61 @@ def test_feature_groups_subset_the_trained_bundle(tmp_path: Path) -> None:
     assert report.feature_groups == ("momentum",)
     mv = qt.registry_model_version(report, TRAIN_START, TRAIN_END)
     assert mv.hyperparams["feature_groups"] == ["momentum"]
+
+
+# -- factor-residualized rank labels (--label-kind) ---------------------------
+
+
+def test_label_kind_flag_parses_and_defaults_to_sector_excess() -> None:
+    base = ["--train-start", "2024-01-02", "--train-end", "2025-01-02", "--label", "x"]
+    assert qt._build_parser().parse_args(base).label_kind == "sector_excess"
+    args = qt._build_parser().parse_args([*base, "--label-kind", "residual"])
+    assert args.label_kind == "residual"
+    with pytest.raises(SystemExit):
+        qt._build_parser().parse_args([*base, "--label-kind", "bogus"])
+
+
+def test_residual_label_kind_trains_rank_on_residual_column(tmp_path: Path) -> None:
+    """--label-kind residual: the rank task targets residual_return_20d, the
+    config hash moves, and the registry hyperparams record the kind; the
+    default run stays bit-compatible (no label_kind key, unchanged target)."""
+    panel = separable_panel(n_symbols=25, n_sessions=150)
+    residual = qt.train_quant_bundle(
+        panel,
+        version="residual-v1",
+        artifact_dir=tmp_path,
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+        label_kind="residual",
+    )
+    default = qt.train_quant_bundle(
+        panel,
+        version="default-v1",
+        artifact_dir=tmp_path,
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+    )
+    assert residual.task_reports["rank"]["target"] == "residual_return_20d"
+    assert default.task_reports["rank"]["target"] == "excess_return_20d"
+    assert residual.config_hash != default.config_hash
+    # The noiseless residual label is easier to rank than the noisy excess one.
+    assert residual.registry_metrics["rank_ic_pooled"] > 0.9
+    mv = qt.registry_model_version(residual, TRAIN_START, TRAIN_END)
+    assert mv.hyperparams["label_kind"] == "residual"
+    mv_default = qt.registry_model_version(default, TRAIN_START, TRAIN_END)
+    assert "label_kind" not in mv_default.hyperparams
+
+
+def test_train_quant_bundle_refuses_unknown_label_kind(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unknown label kind"):
+        qt.train_quant_bundle(
+            separable_panel(n_symbols=25, n_sessions=150),
+            version="bad-kind",
+            artifact_dir=tmp_path,
+            train_start=TRAIN_START,
+            train_end=TRAIN_END,
+            label_kind="bogus",
+        )
 
 
 def test_main_refuses_unknown_feature_group_before_any_db_work() -> None:
