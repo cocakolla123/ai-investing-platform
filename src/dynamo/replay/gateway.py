@@ -37,6 +37,9 @@ from dynamo.persistence.repositories.market import MarketDataRepository
 
 FEATURE_BARS_LOOKBACK_DAYS = 420
 FUNDAMENTALS_LOOKBACK_DAYS = 500
+# The dossier's fundamentals section needs a longer filing window than the
+# feature path: a 3-year CAGR spans sixteen filed quarters.
+DOSSIER_FUNDAMENTALS_LOOKBACK_DAYS = 1500
 INSIDER_LOOKBACK_DAYS = 200
 MACRO_LOOKBACK_DAYS = 400
 EARNINGS_LOOKAHEAD_DAYS = 30
@@ -184,6 +187,51 @@ class HistoricalDataGateway:
             earnings_calendar=earnings if not earnings.empty else None,
             sector_map=default_sector_etf_map(sectors),
         )
+
+    def fundamentals(
+        self,
+        symbols: Sequence[str] | None = None,
+        lookback_days: int = DOSSIER_FUNDAMENTALS_LOOKBACK_DAYS,
+    ) -> pd.DataFrame:
+        """``xbrl_facts`` as ``[symbol, tag, period_end, value, filed_at]``
+        with ``as_of - lookback <= filed_at <= as_of`` — facts filed after
+        ``as_of`` are invisible (same bound and tripwire as the fundamentals
+        frame inside :meth:`feature_inputs`).
+
+        The dossier's ``## Fundamentals`` section reads through here rather
+        than through ``feature_inputs`` for one reason: a 3-year revenue CAGR
+        needs sixteen filed quarters, and the 500-day feature window carries
+        about eleven. Symbol-filtered, so it stays cheaper than the
+        universe-wide feature read despite the longer window.
+        """
+        inst = schema.instruments
+        inst_df = self._read_df(select(inst.c.symbol, inst.c.cik))
+        cik_to_symbol = {
+            str(r["cik"]): str(r["symbol"])
+            for r in inst_df.to_dict(orient="records")
+            if r["cik"]
+        }
+        wanted = set(symbols) if symbols is not None else None
+        ciks = [
+            cik
+            for cik, symbol in cik_to_symbol.items()
+            if wanted is None or symbol in wanted
+        ]
+        cols = ["symbol", "tag", "period_end", "value", "filed_at"]
+        if not ciks:
+            return pd.DataFrame(columns=pd.Index(cols))
+        x = schema.xbrl_facts
+        frame = self._read_df(
+            select(x.c.cik, x.c.tag, x.c.period_end, x.c.value, x.c.filed_at).where(
+                x.c.cik.in_(ciks),
+                x.c.filed_at >= self._since(lookback_days),
+                x.c.filed_at <= self._cutoff,
+            )
+        )
+        if frame.empty:
+            return pd.DataFrame(columns=pd.Index(cols))
+        frame["symbol"] = frame["cik"].astype(str).map(cik_to_symbol.get)
+        return frame.dropna(subset=["symbol"]).loc[:, cols]
 
     def quant_scores(self, symbols: Sequence[str] | None = None) -> pd.DataFrame:
         """Latest quant score per (symbol, model_version) with

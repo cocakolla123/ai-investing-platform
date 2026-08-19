@@ -823,6 +823,70 @@ def _sectors_for(dynamo: DynamoResource, symbols: Sequence[str]) -> dict[str, st
     }
 
 
+# Dossier price history: 52-week range, 250-session returns and a 120-session
+# beta need more than the 120 days the four original stats used (replay's
+# PRICE_STATS_LOOKBACK_DAYS carries the same value — the paths stay identical).
+DOSSIER_BARS_LOOKBACK_DAYS = 420
+# Filed-fundamentals window for the dossier: a 3-year revenue CAGR spans
+# sixteen filed quarters, which the 500-day feature window does not reach.
+DOSSIER_FUNDAMENTALS_LOOKBACK_DAYS = 1500
+
+
+def _all_sectors(dynamo: DynamoResource) -> dict[str, str]:
+    """symbol -> GICS sector for every instrument that has one."""
+    inst = schema.instruments
+    frame = _read_df(dynamo, select(inst.c.symbol, inst.c.sector))
+    return {
+        str(r["symbol"]): str(r["sector"])
+        for r in frame.to_dict(orient="records")
+        if r["sector"]
+    }
+
+
+def _dossier_fundamentals(
+    dynamo: DynamoResource, symbols: Sequence[str], as_of: date
+) -> Any:
+    """``xbrl_facts`` as ``[symbol, tag, period_end, value, filed_at]`` with
+    ``filed_at <= as_of`` — the live twin of
+    ``HistoricalDataGateway.fundamentals`` (same columns, same bounds, same
+    lookback), so both dossier paths see the same fundamentals."""
+    inst = schema.instruments
+    inst_df = _read_df(dynamo, select(inst.c.symbol, inst.c.cik))
+    cik_to_symbol = {
+        str(r["cik"]): str(r["symbol"]) for r in inst_df.to_dict(orient="records") if r["cik"]
+    }
+    wanted = set(symbols)
+    ciks = [cik for cik, symbol in cik_to_symbol.items() if symbol in wanted]
+    cols = ["symbol", "tag", "period_end", "value", "filed_at"]
+    if not ciks:
+        return pd.DataFrame(columns=pd.Index(cols))
+    x = schema.xbrl_facts
+    frame = _read_df(
+        dynamo,
+        select(x.c.cik, x.c.tag, x.c.period_end, x.c.value, x.c.filed_at).where(
+            x.c.cik.in_(ciks),
+            x.c.filed_at >= _since(as_of, DOSSIER_FUNDAMENTALS_LOOKBACK_DAYS),
+            x.c.filed_at <= datetime.combine(as_of, time.max, tzinfo=UTC),
+        ),
+    )
+    if frame.empty:
+        return pd.DataFrame(columns=pd.Index(cols))
+    frame["symbol"] = frame["cik"].astype(str).map(cik_to_symbol.get)
+    return frame.dropna(subset=["symbol"]).loc[:, cols]
+
+
+def _latest_closes(bars: Any) -> dict[str, float]:
+    """symbol -> most recent close in an as-of bounded bars frame."""
+    if bars is None or bars.empty:
+        return {}
+    last = bars.sort_values("ts").drop_duplicates(subset=["symbol"], keep="last")
+    return {
+        str(r["symbol"]): float(r["close"])
+        for r in last.to_dict(orient="records")
+        if pd.notna(r["close"])
+    }
+
+
 def _regime_at(dynamo: DynamoResource, as_of: date) -> str | None:
     rs = schema.regime_states
     frame = _read_df(
@@ -884,6 +948,9 @@ def build_deep_dive_contexts(
     """Deterministic per-ticker dossier context (doc 03 §3, stable -> volatile)."""
     from dynamo.domain.models.market import Instrument, NewsItem
     from dynamo.research.dossier import assemble_dossier_context
+    from dynamo.research.fundamentals import build_fundamentals
+    from dynamo.research.market_stats import peer_context, peer_symbols, price_stats
+    from dynamo.research.news_digest import partition_news
 
     inst_t = schema.instruments
     inst_df = _read_df(dynamo, select(inst_t).where(inst_t.c.symbol.in_(list(symbols))))
@@ -894,7 +961,14 @@ def build_deep_dive_contexts(
     digest_payload = dynamo.market_repo().latest_macro_digest()
     macro_text = str((digest_payload or {}).get("narrative", ""))
 
-    bars = dynamo.bars_window(list(symbols), as_of, 120)
+    # Peers, sector ETFs and the benchmark ride along in the same bars read,
+    # over the window the 52-week range / 250-session returns need.
+    sectors = _all_sectors(dynamo)
+    reference_symbols = peer_symbols(sectors, list(symbols))
+    all_symbols = sorted(set(symbols) | set(reference_symbols))
+    bars = dynamo.bars_window(all_symbols, as_of, DOSSIER_BARS_LOOKBACK_DAYS)
+    facts = _dossier_fundamentals(dynamo, all_symbols, as_of)
+    closes = _latest_closes(bars)
     n = schema.news
     news_df = _read_df(dynamo, select(n).where(n.c.published_at >= _since(as_of, 7)))
 
@@ -930,30 +1004,31 @@ def build_deep_dive_contexts(
     contexts: dict[str, str] = {}
     for sym in symbols:
         instrument = instruments.get(sym) or Instrument(symbol=sym, name=sym)
-        price_stats: dict[str, float] = {}
-        sym_bars = bars[bars["symbol"] == sym].sort_values("ts") if not bars.empty else bars
-        if sym_bars is not None and not sym_bars.empty:
-            closes = sym_bars["close"].astype(float)
-            price_stats["close"] = float(closes.iloc[-1])
-            if len(closes) > 21:
-                price_stats["ret_20d_pct"] = float(
-                    (closes.iloc[-1] / closes.iloc[-21] - 1.0) * 100.0
-                )
-                price_stats["vol_20d_ann_pct"] = float(
-                    closes.pct_change().tail(20).std() * (252**0.5) * 100.0
-                )
-            dollar = sym_bars["close"].astype(float) * sym_bars["volume"].astype(float)
-            price_stats["dollar_volume"] = float(dollar.tail(20).median())
+        sector = instrument.sector or sectors.get(sym)
         sym_news: list[NewsItem] = []
         if not news_df.empty:
             for r in news_df.to_dict(orient="records"):
                 if sym in (r.get("symbols") or []):
                     sym_news.append(NewsItem.model_validate(_subset(NewsItem, r)))
+        primary_news, market_news = partition_news(
+            sym_news, symbol=sym, name=instrument.name, max_items=10
+        )
         contexts[sym] = assemble_dossier_context(
             instrument=instrument,
             quant_score=_quant_score_for(dynamo, sym),
-            price_stats=price_stats,
-            news_items=sym_news[:10],
+            price_stats=price_stats(bars, sym),
+            fundamentals=build_fundamentals(
+                facts,
+                symbol=sym,
+                as_of=as_of,
+                close=closes.get(sym),
+                sector=sector,
+                peer_closes=closes,
+                peer_sectors=sectors,
+            ),
+            peers=peer_context(bars, sym, sector=sector),
+            news_items=primary_news,
+            market_news_items=market_news,
             macro_digest_text=macro_text,
             journal_hits=[text for _, text in journal_hits.get(sym, [])],
             earnings_call_excerpt=transcript_by_symbol.get(sym, ""),

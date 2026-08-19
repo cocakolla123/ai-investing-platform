@@ -46,7 +46,7 @@ import time as _time
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 import pandas as pd
 import structlog
@@ -83,13 +83,18 @@ from dynamo.research.committee import (
     split_custom_id,
 )
 from dynamo.research.dossier import assemble_dossier_context, transcript_excerpt
+from dynamo.research.fundamentals import build_fundamentals
+from dynamo.research.market_stats import peer_context, peer_symbols, price_stats
+from dynamo.research.news_digest import partition_news
 from dynamo.research.quant.scoring import ModelBundle
 
 log = structlog.get_logger(__name__)
 
 
 ENTRY_ACTIONS = frozenset({Action.BUY, Action.ADD})
-PRICE_STATS_LOOKBACK_DAYS = 120  # live build_deep_dive_contexts parity
+# 250-session returns, the 52-week range and a 120-session beta need more than
+# a 120-day window (live build_deep_dive_contexts uses the same constant).
+PRICE_STATS_LOOKBACK_DAYS = 420
 NEWS_LOOKBACK_DAYS = 7  # live parity
 NEWS_MAX_ITEMS = 10  # live parity
 JOURNAL_TOP_K = 3  # live experience_retrieval_top_k default
@@ -163,6 +168,8 @@ class ReplayCommitteeGateway(Protocol):
     def universe(self, tiers: tuple[int, ...] | None = None) -> list[str]: ...
     def bars(self, symbols: Sequence[str] | None, lookback_days: int) -> pd.DataFrame: ...
     def feature_inputs(self, symbols: Sequence[str]) -> Any: ...
+    # Optional (duck-typed): the dossier's longer-window fundamentals read.
+    # ``_fundamentals_frame`` falls back to ``feature_inputs`` without it.
     def quant_scores(self, symbols: Sequence[str] | None = None) -> pd.DataFrame: ...
     def macro_digest(self) -> dict[str, Any] | None: ...
     def macro_series(self, lookback_days: int) -> pd.DataFrame: ...
@@ -394,7 +401,13 @@ def build_replay_contexts(
     else:
         macro_text = macro_digest_text
     transcripts_by_symbol = _transcript_excerpts(gw, symbols)
-    bars = gw.bars(symbols, PRICE_STATS_LOOKBACK_DAYS)
+    sectors = gw.sectors()
+    # Peers/sector ETFs/benchmark share ONE bars read with the subject names,
+    # over the window the 250-session and 52-week statistics need.
+    reference_symbols = peer_symbols(sectors, symbols)
+    bars = gw.bars(sorted(set(symbols) | set(reference_symbols)), PRICE_STATS_LOOKBACK_DAYS)
+    facts = _fundamentals_frame(gw, sorted(set(symbols) | set(reference_symbols)))
+    closes = _latest_closes(bars)
     journal_hits = replay_journal_hits(
         gw, symbols, embedder=embedder, include_replay_run_id=include_replay_run_id
     )
@@ -402,31 +415,63 @@ def build_replay_contexts(
     contexts: dict[str, str] = {}
     for sym in symbols:
         instrument = instruments.get(sym) or Instrument(symbol=sym, name=sym)
-        price_stats: dict[str, float] = {}
-        if not bars.empty:
-            sym_bars = cast(pd.DataFrame, bars[bars["symbol"] == sym]).sort_values("ts")
-            if not sym_bars.empty:
-                closes = sym_bars["close"].astype(float)
-                price_stats["close"] = float(closes.iloc[-1])
-                if len(closes) > 21:
-                    price_stats["ret_20d_pct"] = float(
-                        (closes.iloc[-1] / closes.iloc[-21] - 1.0) * 100.0
-                    )
-                    price_stats["vol_20d_ann_pct"] = float(
-                        closes.pct_change().tail(20).std() * (252**0.5) * 100.0
-                    )
-                dollar = sym_bars["close"].astype(float) * sym_bars["volume"].astype(float)
-                price_stats["dollar_volume"] = float(dollar.tail(20).median())
+        sector = instrument.sector or sectors.get(sym)
+        fundamentals = build_fundamentals(
+            facts,
+            symbol=sym,
+            as_of=gw.as_of,
+            close=closes.get(sym),
+            sector=sector,
+            peer_closes=closes,
+            peer_sectors=sectors,
+        )
+        primary_news, market_news = partition_news(
+            news_by_symbol.get(sym, []),
+            symbol=sym,
+            name=instrument.name,
+            max_items=NEWS_MAX_ITEMS,
+        )
         contexts[sym] = assemble_dossier_context(
             instrument=instrument,
             quant_score=quant_scores.get(sym),
-            price_stats=price_stats,
-            news_items=news_by_symbol.get(sym, [])[:NEWS_MAX_ITEMS],
+            price_stats=price_stats(bars, sym),
+            fundamentals=fundamentals,
+            peers=peer_context(bars, sym, sector=sector),
+            news_items=primary_news,
+            market_news_items=market_news,
             macro_digest_text=macro_text,
             journal_hits=[text for _, text in journal_hits.get(sym, [])],
             earnings_call_excerpt=transcripts_by_symbol.get(sym, ""),
         )
     return contexts, journal_hits
+
+
+def _fundamentals_frame(gw: ReplayCommitteeGateway, symbols: Sequence[str]) -> pd.DataFrame:
+    """Point-in-time XBRL facts for the dossier's fundamentals section.
+
+    The gateway's dedicated (longer-window, symbol-filtered) read when it has
+    one; otherwise the fundamentals frame inside ``feature_inputs`` — both are
+    ``filed_at <= as_of`` bounded and swept by the leakage tripwire."""
+    reader = getattr(gw, "fundamentals", None)
+    if callable(reader):
+        frame = reader(list(symbols))
+        return frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+    inputs = gw.feature_inputs(list(symbols))
+    frame = getattr(inputs, "fundamentals", None)
+    return frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+
+
+def _latest_closes(bars: pd.DataFrame) -> dict[str, float]:
+    """symbol -> last close in the (already as-of bounded) bars frame."""
+    if bars.empty:
+        return {}
+    ordered = bars.sort_values("ts")
+    last = ordered.drop_duplicates(subset=["symbol"], keep="last")
+    return {
+        str(r["symbol"]): float(r["close"])
+        for r in last.to_dict(orient="records")
+        if pd.notna(r["close"])
+    }
 
 
 # --------------------------------------------------------------------------

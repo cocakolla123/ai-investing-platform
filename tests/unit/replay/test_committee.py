@@ -335,6 +335,116 @@ def test_dossier_context_from_gateway_only_future_news_invisible(frames: Any) ->
     assert "## Journal hits\nnone" in ctx
 
 
+def _facts_frame(symbol: str) -> pd.DataFrame:
+    """xbrl-shaped rows: three quarters plus a fiscal-year row in the Q4 slot."""
+    quarters = (
+        ("2025-03-31", 100.0, "2025-04-20"),
+        ("2025-06-30", 110.0, "2025-07-20"),
+        ("2025-09-30", 120.0, "2025-10-20"),
+        ("2025-12-31", 460.0, "2026-02-20"),
+        ("2026-03-31", 130.0, "2026-04-20"),
+    )
+    return pd.DataFrame(
+        [
+            {
+                "symbol": symbol,
+                "tag": "Revenues",
+                "period_end": pd.Timestamp(period),
+                "value": value * 1e6,
+                "filed_at": datetime.fromisoformat(filed).replace(tzinfo=UTC),
+            }
+            for period, value, filed in quarters
+        ]
+    )
+
+
+class FundamentalsGateway(CommitteeGateway):
+    """CommitteeGateway + the dossier's dedicated fundamentals read."""
+
+    def fundamentals(self, symbols: Any = None, lookback_days: int = 1500) -> pd.DataFrame:
+        return _facts_frame("LIQ")
+
+
+def test_dossier_carries_fundamentals_peers_and_filtered_news(frames: Any) -> None:
+    sessions, bars, scores = frames
+    day = sessions[-1]
+    stamp = datetime(day.year, day.month, day.day, 9, tzinfo=UTC)
+    own = NewsItem(
+        id="n-own",
+        symbols=("LIQ",),
+        headline="LIQ raises guidance",
+        source="test",
+        published_at=stamp - timedelta(days=1),
+    )
+    unrelated = NewsItem(
+        id="n-other",
+        symbols=("LIQ",),
+        headline="Rival chipmaker cuts prices",
+        source="test",
+        published_at=stamp - timedelta(days=2),
+    )
+    gw = FundamentalsGateway(day, bars, scores, news=[own, unrelated])
+    all_scores, _ = committee_shortlist(gw, _config(frames), day)
+    ctx = build_replay_contexts(gw, ["LIQ"], all_scores)[0]["LIQ"]
+
+    # Fundamentals: the fiscal-year row is differenced into a Q4 (460 - 100 -
+    # 110 - 120 = 130), so TTM is 110 + 120 + 130 + 130 = 490, not 820.
+    assert "## Fundamentals" in ctx
+    assert "revenue_ttm: 490.0M USD [xbrl:LIQ:Revenues:2025-06-30..2026-03-31" in ctx
+
+    # Peers: relative strength against the benchmark in the bars fixture.
+    assert "## Peer / relative strength" in ctx
+    assert "excess_vs_SPY_20d_pct:" in ctx
+
+    # Extended price stats beyond the original four.
+    assert "high_52w:" in ctx and "max_drawdown_52w_pct:" in ctx
+
+    # News: only the ticker's own item leads; the rest is labelled market news.
+    digest = ctx.split("## News digest", 1)[1].split("## Market news", 1)[0]
+    assert "[n-own]" in digest and "[n-other]" not in digest
+    assert "[n-other]" in ctx.split("## Market news", 1)[1]
+
+
+def test_replay_section_signature_matches_the_live_builder(frames: Any) -> None:
+    """Both call sites must render the same sections in the same order —
+    ``tests/unit/orchestration/test_dossier_contexts.py`` asserts this list."""
+    sessions, bars, scores = frames
+    day = sessions[-1]
+    gw = FundamentalsGateway(day, bars, scores)
+    all_scores, _ = committee_shortlist(gw, _config(frames), day)
+    ctx = build_replay_contexts(gw, ["LIQ"], all_scores)[0]["LIQ"]
+    assert [line for line in ctx.splitlines() if line.startswith("## ")] == [
+        "## Instrument profile",
+        "## Fundamentals",
+        "## Quant score",
+        "## Price/volume stats",
+        "## Peer / relative strength",
+        "## Filing excerpts",
+        "## News digest",
+        "## Macro digest",
+        "## Journal hits",
+    ]
+
+
+def test_dossier_falls_back_to_feature_inputs_without_a_fundamentals_read(
+    frames: Any,
+) -> None:
+    """A gateway without the dedicated read still gets a fundamentals section."""
+    sessions, bars, scores = frames
+    day = sessions[-1]
+
+    class FeatureInputsOnlyGateway(CommitteeGateway):
+        def feature_inputs(self, symbols: Any) -> Any:
+            from dynamo.research.quant.catalog import FeatureInputs
+
+            return FeatureInputs(fundamentals=_facts_frame("LIQ"))
+
+    gw = FeatureInputsOnlyGateway(day, bars, scores)
+    all_scores, _ = committee_shortlist(gw, _config(frames), day)
+    ctx = build_replay_contexts(gw, ["LIQ"], all_scores)[0]["LIQ"]
+    assert "revenue_ttm: 490.0M USD" in ctx
+
+
 # --------------------------------------------------------------------------
 # custom-id namespacing
 # --------------------------------------------------------------------------
