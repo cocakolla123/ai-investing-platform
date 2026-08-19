@@ -276,6 +276,28 @@ Committee mode is sizing-free: it produces verdicts once; the three bankrolls re
 for free in step 9. Within-run learning is on by default (live parity: month 2 benefits
 from month 1's resolved experiences, firewalled to this run).
 
+### Claude Code subscription backend (ADR-0014) — optional
+
+With `RESEARCH_BACKEND=claude_code` (or `--backend claude_code` on the command above)
+the committee routes through the local `claude` CLI on the flat-rate subscription:
+real token counts are recorded but **metered cost is $0**, so `--max-usd` is still
+required and mechanically enforced yet effectively inert — the run consumes Claude plan
+usage windows instead of dollars. Tier models come from `CLAUDE_CODE_MODEL_*`
+(defaults: screen=haiku-4-5, analyst=sonnet-5, arbiter=**fable-5**), and the
+knowledge-cutoff gate resolves THOSE models' documented cutoffs (fable-5/sonnet-5:
+2026-01-31) — at the default 30-day margin any start from 2026-03-03 onward is clean,
+so the July-1 window above passes with margin to spare. Run
+`replay estimate --backend claude_code` first: it names the backend, prints the
+resolved cutoffs and gate verdict, and projects no dollars.
+
+**Resumability.** If the subscription plan window (5-hour/weekly cap) exhausts mid-run,
+the remaining days soft-fail exactly like the quarantine/partial path — no verdicts,
+$0 — and the run still finishes with partial results. **Re-run the exact same command
+after the window resets**: the run id is deterministic, `replay_verdicts` upserts are
+idempotent, and days that already have persisted verdicts are skipped (not
+re-submitted), so each re-run fills in only the missing days. Repeat until `replay show
+--run-id <run-id>` lists verdicts across the whole window.
+
 **Mid-run checkpoint at ~$15–20 spent** (roughly the end of the first two weeks): in a
 second terminal —
 

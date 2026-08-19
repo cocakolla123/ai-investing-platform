@@ -22,6 +22,23 @@ is the ONLY token-spending code path in the platform's learning stack, and it
 refuses to start without an explicit ``--max-usd`` hard cap (no default) and
 an ``ANTHROPIC_API_KEY``. The ``estimate`` subcommand projects committee-mode
 cost with ZERO API calls — run it first to pick a sane ``--max-usd``.
+
+Committee mode routes through the research backend selected by
+``Settings.research_backend`` (ADR-0014), overridable per-invocation with
+``--backend {api,claude_code}``:
+
+- ``api`` (default): ``AnthropicClient`` — metered per token; ``--max-usd``
+  is the real hard cap. Requires ``ANTHROPIC_API_KEY``.
+- ``claude_code``: the LOCAL Claude Code CLI on the flat-rate subscription —
+  every metered entry lands at $0 (real token counts, ``cost_usd=0.0``), so
+  ``--max-usd`` is still required and mechanically enforced but effectively
+  inert; the run consumes Claude plan usage windows instead of dollars. Tier
+  models come from ``Settings.claude_code_model_*`` (arbiter default
+  ``claude-fable-5``) and the knowledge-cutoff gate resolves THOSE models'
+  cutoffs. A plan-window exhaustion mid-run soft-fails the remaining days
+  ($0, no verdicts) and the run is RESUMABLE: re-run the SAME command after
+  the window resets — the run id is deterministic and days with persisted
+  verdicts are skipped, so re-runs are incremental.
 """
 
 from __future__ import annotations
@@ -29,6 +46,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import Callable
 from datetime import date
 from typing import Any
 
@@ -86,7 +104,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--max-usd",
         type=float,
         default=None,
-        help="HARD per-run dollar cap (required for --mode committee; no default)",
+        help=(
+            "HARD per-run dollar cap (required for --mode committee; no "
+            "default). With --backend claude_code every metered entry is $0 "
+            "(flat-rate subscription), so the cap is still enforced "
+            "mechanically but effectively inert"
+        ),
+    )
+    run.add_argument(
+        "--backend",
+        choices=("api", "claude_code"),
+        default=None,
+        help=(
+            "committee-mode research backend (default: Settings"
+            ".research_backend). api = Anthropic API, metered dollars; "
+            "claude_code = local Claude Code CLI, flat-rate subscription "
+            "(metered cost $0, consumes Claude plan usage windows; a "
+            "plan-window exhaustion mid-run soft-fails the remaining days — "
+            "re-run the SAME command after the window resets and days with "
+            "persisted verdicts are skipped)"
+        ),
     )
     run.add_argument(
         "--deep-dives-per-day",
@@ -166,6 +203,15 @@ def _build_parser() -> argparse.ArgumentParser:
     est.add_argument("--start", required=True, type=date.fromisoformat)
     est.add_argument("--end", required=True, type=date.fromisoformat)
     est.add_argument("--deep-dives-per-day", type=int, default=4)
+    est.add_argument(
+        "--backend",
+        choices=("api", "claude_code"),
+        default=None,
+        help=(
+            "backend to project for (default: Settings.research_backend); "
+            "claude_code projects no dollars — flat-rate subscription"
+        ),
+    )
     est.add_argument(
         "--no-macro-digest",
         action="store_true",
@@ -363,10 +409,86 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _committee_backend(
+    settings: Any, backend: str
+) -> tuple[Callable[[Any], Any], dict[str, str]] | None:
+    """(client factory over a CostMeter, tier models) for the chosen research
+    backend, or ``None`` (after printing why) when prerequisites are missing.
+
+    - ``api``: ``AnthropicClient`` — metered per token; needs
+      ``ANTHROPIC_API_KEY``. Byte-identical to the pre-ADR-0014 wiring.
+    - ``claude_code``: ``ClaudeCodeResearchModel`` over the local ``claude``
+      CLI — flat-rate subscription, every metered entry lands at $0 (so
+      ``--max-usd`` is effectively inert); needs a discoverable binary. When
+      ``claude_code_fallback_to_api`` is set (and a key exists) plan-window
+      exhaustion falls through to the API per-call — those calls ARE metered
+      and the run cap applies to them for real.
+
+    The factory defers client construction until after preflight, so a failed
+    preflight never builds a client.
+    """
+    if backend == "claude_code":
+        from dynamo.llm.claude_code_client import (
+            ClaudeCodeResearchModel,
+            find_claude_binary,
+        )
+
+        binary = find_claude_binary(settings.claude_code_binary)
+        if binary is None:
+            print(
+                "research backend 'claude_code' needs the `claude` binary "
+                "($PATH, known install locations, or CLAUDE_CODE_BINARY) — "
+                "refusing to start."
+            )
+            return None
+        tier_models = {
+            "screen": settings.claude_code_model_screen,
+            "analyst": settings.claude_code_model_analyst,
+            "arbiter": settings.claude_code_model_arbiter,
+        }
+
+        def make_claude_code(meter: Any) -> Any:
+            api_fallback = None
+            if settings.claude_code_fallback_to_api and settings.anthropic_api_key:
+                from dynamo.llm.anthropic_client import AnthropicClient
+
+                api_fallback = AnthropicClient(settings, meter)
+            return ClaudeCodeResearchModel(
+                settings, meter, binary=binary, api_fallback=api_fallback
+            )
+
+        return make_claude_code, tier_models
+    if backend != "api":
+        print(f"unknown research backend {backend!r} (expected 'api' or 'claude_code')")
+        return None
+    if not settings.anthropic_api_key:
+        print("committee replay requires ANTHROPIC_API_KEY — refusing to start.")
+        return None
+    tier_models = {
+        "screen": settings.model_screen,
+        "analyst": settings.model_analyst,
+        "arbiter": settings.model_arbiter,
+    }
+
+    def make_api(meter: Any) -> Any:
+        from dynamo.llm.anthropic_client import AnthropicClient
+
+        return AnthropicClient(settings, meter)
+
+    return make_api, tier_models
+
+
 def _cmd_run_committee(args: argparse.Namespace) -> int:
-    """Committee replay: the only token-spending path, human-triggered, capped."""
+    """Committee replay: the only token-spending path, human-triggered, capped.
+
+    Backend per ``--backend`` (default ``Settings().research_backend``) — see
+    :func:`_committee_backend`. In claude_code mode a plan-window exhaustion
+    mid-run soft-fails the remaining days (requests come back None, exactly
+    the quarantine/partial path); the run is RESUMABLE: re-running the SAME
+    command after the window resets skips days with persisted verdicts
+    (deterministic run id + idempotent replay_verdicts upserts).
+    """
     from dynamo.config.settings import Settings
-    from dynamo.llm.anthropic_client import AnthropicClient
     from dynamo.llm.cost_meter import CostMeter, SqlAlchemyLedgerWriter
     from dynamo.llm.embeddings import LocalEmbedder
     from dynamo.persistence.repositories.experience import ExperienceRepository
@@ -377,9 +499,11 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
     from dynamo.replay.runner import ReplayConfig
 
     settings = Settings()
-    if not settings.anthropic_api_key:
-        print("committee replay requires ANTHROPIC_API_KEY — refusing to start.")
+    backend = args.backend or settings.research_backend
+    selected = _committee_backend(settings, backend)
+    if selected is None:
         return 2
+    make_model, tier_models = selected
 
     engine = _engine(args.database_url)
     run_repo = ReplayRepository(engine)
@@ -406,10 +530,16 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
     # backend actually loaded is recorded into config_json for the audit.
     embedder = LocalEmbedder()
     extras["embedder_backend"] = embedder.backend
+    extras["research_backend"] = backend
     # Resume accounting: a re-run of the same config (same deterministic
-    # run id) starts from the durable spent_usd, not from zero.
+    # run id) starts from the durable spent_usd, not from zero — and never
+    # re-submits a day whose verdicts are already persisted (incremental
+    # resume after a crash or a claude_code plan-window exhaustion).
     prior = run_repo.get_run(config.run_id)
     prior_spent = float(prior["spent_usd"]) if prior is not None else 0.0
+    done_days: frozenset[date] = frozenset()
+    if prior is not None:
+        done_days = frozenset(v["as_of"] for v in run_repo.verdicts_for(config.run_id))
     budget = ReplayBudget(
         cap_usd=args.max_usd,
         run_repo=run_repo,
@@ -425,30 +555,40 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
     try:
         replay = CommitteeReplay(
             gateway_factory=lambda d: HistoricalDataGateway(engine, d),
-            research_model=AnthropicClient(settings, meter),
+            research_model=make_model(meter),
             budget=budget,
             run_repo=run_repo,
             experience_repo=ExperienceRepository(engine),
             config=config,
-            tier_models={
-                "screen": settings.model_screen,
-                "analyst": settings.model_analyst,
-                "arbiter": settings.model_arbiter,
-            },
+            tier_models=tier_models,
             embedder=embedder,
             run_config_extras=extras,
             bundle_factory=_bundle_factory(engine),
             acknowledge_model_knowledge=args.acknowledge_model_knowledge,
             cutoff_margin_days=settings.replay_cutoff_margin_days,
+            resume_skip_days=done_days,
         )
     except ModelKnowledgeError as exc:
         print(f"model knowledge gate BLOCKED the run ($0 spent):\n  {exc}")
         return 1
     print(
         f"committee replay {config.run_id} ({config.start} -> {config.end}) "
-        f"cap=${budget.cap_usd:.2f}"
+        f"backend={backend} cap=${budget.cap_usd:.2f}"
         + (f" resuming from ${prior_spent:.2f} spent" if prior_spent else "")
+        + (
+            f", skipping {len(done_days)} day(s) with persisted verdicts"
+            if done_days
+            else ""
+        )
     )
+    if backend == "claude_code":
+        print(
+            "claude_code backend: flat-rate subscription — metered cost $0; "
+            "consumes Claude plan usage windows (--max-usd enforced mechanically "
+            "but effectively inert). A plan-window exhaustion mid-run soft-fails "
+            "the remaining days; re-run this exact command after the reset to "
+            "fill them in."
+        )
     result = replay.run(progress=print)
     print(
         "\n".join(
@@ -473,71 +613,104 @@ def _cmd_estimate(args: argparse.Namespace) -> int:
     ``replay.budget``): full shortlist every session, ~6k-char thin dossier
     context, full ``max_tokens`` output per stage, no cache and no batch
     discount (real runs batch at 50% off with 1h prompt caching).
+
+    With ``--backend claude_code`` (or ``Settings.research_backend ==
+    "claude_code"``) there is no dollar projection — the flat-rate
+    subscription meters every call at $0 and the run consumes Claude plan
+    usage windows instead. The knowledge gate then resolves the
+    ``claude_code_model_*`` tiers' cutoffs (incl. claude-fable-5).
     """
     from dynamo.config.settings import Settings
-    from dynamo.replay.budget import (
-        ASSUMED_CONTEXT_CHARS,
-        ASSUMED_MACRO_CONTEXT_CHARS,
-        estimate_deep_dive_cost,
-        estimate_request_cost,
-        estimate_run_cost,
-    )
-    from dynamo.replay.committee import (
-        MACRO_DIGEST_MAX_TOKENS,
-        model_knowledge_gate,
-    )
+    from dynamo.replay.committee import model_knowledge_gate
     from dynamo.replay.runner import _sessions_between
-    from dynamo.research.committee import _DEFAULT_MAX_TOKENS, STAGES
-    from dynamo.research.prompt_loader import load_prompt
 
     settings = Settings()
-    tier_models = {
-        "screen": settings.model_screen,
-        "analyst": settings.model_analyst,
-        "arbiter": settings.model_arbiter,
-    }
-    stage_specs = {
-        stage: (tier, len(load_prompt(prompt_name).system), _DEFAULT_MAX_TOKENS[stage])
-        for stage, (prompt_name, _schema, tier) in STAGES.items()
-    }
-    per_dive = estimate_deep_dive_cost(
-        tier_models, stage_specs, context_chars=ASSUMED_CONTEXT_CHARS
-    )
+    backend = args.backend or settings.research_backend
+    if backend == "claude_code":
+        tier_models = {
+            "screen": settings.claude_code_model_screen,
+            "analyst": settings.claude_code_model_analyst,
+            "arbiter": settings.claude_code_model_arbiter,
+        }
+    else:
+        tier_models = {
+            "screen": settings.model_screen,
+            "analyst": settings.model_analyst,
+            "arbiter": settings.model_arbiter,
+        }
     sessions = _sessions_between(args.start, args.end)
-    per_session = 0.0
-    if not args.no_macro_digest:
-        per_session = estimate_request_cost(
-            tier_models["analyst"],
-            prompt_chars=len(load_prompt("macro_digest").system)
-            + ASSUMED_MACRO_CONTEXT_CHARS,
-            max_tokens=MACRO_DIGEST_MAX_TOKENS,
-        )
-    total = estimate_run_cost(
-        n_sessions=len(sessions),
-        deep_dives_per_day=args.deep_dives_per_day,
-        per_dive_usd=per_dive,
-        per_session_usd=per_session,
-    )
     print(f"committee replay estimate {args.start} -> {args.end} (NO API calls made)")
+    print(f"  backend:             {backend}")
     print(f"  sessions:            {len(sessions)}")
     print(f"  deep dives per day:  {args.deep_dives_per_day} (cap; real days may run fewer)")
-    print(f"  per deep dive:       ${per_dive:.4f} (4 stages, conservative overestimate)")
-    if per_session:
+    if backend == "claude_code":
         print(
-            f"  macro digest/day:    ${per_session:.4f} "
-            "(generated on days without a persisted digest; --no-macro-digest to drop)"
+            f"  models:              screen={tier_models['screen']} "
+            f"analyst={tier_models['analyst']} arbiter={tier_models['arbiter']}"
         )
-    print(
-        f"  models:              analyst={tier_models['analyst']} "
-        f"arbiter={tier_models['arbiter']}"
-    )
-    print(
-        f"  assumptions:         ~{ASSUMED_CONTEXT_CHARS} context chars, ~3 chars/token, "
-        "full max_tokens output, no cache/batch discounts"
-    )
-    print(f"  projected total:     ${total:.2f}")
-    print("  suggested --max-usd: at or below the projected total — the run-time")
-    print("  projection uses the same conservative math, so real spend lands lower.")
+        print(
+            "  projected cost:      flat-rate subscription — metered cost $0; "
+            "consumes Claude plan usage windows"
+        )
+        print(
+            "  --max-usd:           still required and mechanically enforced, but "
+            "every metered entry lands at $0 — effectively inert in this mode"
+        )
+        print(
+            "  resume:              plan-window exhaustion mid-run soft-fails the "
+            "remaining days ($0, no verdicts); re-running the SAME command after "
+            "the window resets skips days with persisted verdicts"
+        )
+    else:
+        from dynamo.replay.budget import (
+            ASSUMED_CONTEXT_CHARS,
+            ASSUMED_MACRO_CONTEXT_CHARS,
+            estimate_deep_dive_cost,
+            estimate_request_cost,
+            estimate_run_cost,
+        )
+        from dynamo.replay.committee import MACRO_DIGEST_MAX_TOKENS
+        from dynamo.research.committee import _DEFAULT_MAX_TOKENS, STAGES
+        from dynamo.research.prompt_loader import load_prompt
+
+        stage_specs = {
+            stage: (tier, len(load_prompt(prompt_name).system), _DEFAULT_MAX_TOKENS[stage])
+            for stage, (prompt_name, _schema, tier) in STAGES.items()
+        }
+        per_dive = estimate_deep_dive_cost(
+            tier_models, stage_specs, context_chars=ASSUMED_CONTEXT_CHARS
+        )
+        per_session = 0.0
+        if not args.no_macro_digest:
+            per_session = estimate_request_cost(
+                tier_models["analyst"],
+                prompt_chars=len(load_prompt("macro_digest").system)
+                + ASSUMED_MACRO_CONTEXT_CHARS,
+                max_tokens=MACRO_DIGEST_MAX_TOKENS,
+            )
+        total = estimate_run_cost(
+            n_sessions=len(sessions),
+            deep_dives_per_day=args.deep_dives_per_day,
+            per_dive_usd=per_dive,
+            per_session_usd=per_session,
+        )
+        print(f"  per deep dive:       ${per_dive:.4f} (4 stages, conservative overestimate)")
+        if per_session:
+            print(
+                f"  macro digest/day:    ${per_session:.4f} "
+                "(generated on days without a persisted digest; --no-macro-digest to drop)"
+            )
+        print(
+            f"  models:              analyst={tier_models['analyst']} "
+            f"arbiter={tier_models['arbiter']}"
+        )
+        print(
+            f"  assumptions:         ~{ASSUMED_CONTEXT_CHARS} context chars, ~3 chars/token, "
+            "full max_tokens output, no cache/batch discounts"
+        )
+        print(f"  projected total:     ${total:.2f}")
+        print("  suggested --max-usd: at or below the projected total — the run-time")
+        print("  projection uses the same conservative math, so real spend lands lower.")
     # Model knowledge gate verdict — the same check CommitteeReplay enforces,
     # surfaced here BEFORE any dollar is at stake.
     gate = model_knowledge_gate(

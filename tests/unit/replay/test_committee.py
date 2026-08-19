@@ -242,6 +242,7 @@ def _replay(
     cap: float = 100.0,
     cost_per_batch: float = 0.0,
     news: list[NewsItem] | None = None,
+    **replay_kwargs: Any,
 ) -> tuple[CommitteeReplay, FakeResearchModel, FakeRunRepo, FakeExperienceRepo, ReplayConfig]:
     _, bars, scores = frames
     config = _config(frames)
@@ -250,6 +251,7 @@ def _replay(
     budget = ReplayBudget(cap_usd=cap, run_repo=run_repo, run_id=config.run_id)
     model = FakeResearchModel(budget=budget, cost_per_batch=cost_per_batch)
     replay = CommitteeReplay(
+        **replay_kwargs,
         gateway_factory=lambda d: CommitteeGateway(d, bars, scores, news or []),
         research_model=model,
         budget=budget,
@@ -435,3 +437,185 @@ def test_exhaustion_midway_keeps_partial_results(frames: Any) -> None:
     assert run_repo.spends and sum(d for _, d in run_repo.spends) == pytest.approx(
         result.spent_usd
     )
+
+
+# --------------------------------------------------------------------------
+# incremental resume: days with persisted verdicts are never re-submitted
+# --------------------------------------------------------------------------
+
+
+def _submitted_days(model: FakeResearchModel, run_id: str) -> set[date]:
+    days: set[date] = set()
+    for batch in model.submitted:
+        for req in batch:
+            live_id = strip_namespace(run_id, str(req["custom_id"]))
+            as_of, _symbol, _stage = split_custom_id(live_id)
+            days.add(as_of)
+    return days
+
+
+def test_resume_skip_days_are_never_resubmitted(frames: Any) -> None:
+    """A resumed run (same deterministic run id) with days already holding
+    persisted verdicts submits NOTHING for those days — no re-spend, no
+    plan-usage burn — and still completes the remaining days."""
+    sessions, _, _ = frames
+    window = sessions[-RUN_SESSIONS:]
+    done = frozenset(window[:2])
+    replay, model, run_repo, _exp_repo, config = _replay(
+        frames, resume_skip_days=done
+    )
+    progress: list[str] = []
+    result = replay.run(progress=progress.append)
+    assert result.status == "completed"
+    submitted = _submitted_days(model, config.run_id)
+    assert submitted and submitted.isdisjoint(done)
+    assert submitted == set(window[2:]) & submitted  # only non-skipped days
+    assert {r["as_of"] for r in run_repo.verdicts}.isdisjoint(done)
+    assert sum("skipped (resume)" in line for line in progress) == 2
+
+
+def test_no_resume_skip_by_default(frames: Any) -> None:
+    replay, model, _run_repo, _exp_repo, config = _replay(frames)
+    replay.run()
+    assert len(_submitted_days(model, config.run_id)) == RUN_SESSIONS  # every day submitted
+
+
+# --------------------------------------------------------------------------
+# ClaudeCodeResearchModel through CommitteeReplay (ADR-0014): the eager
+# sequential batch loop, $0 metering, plan-limit soft-fail + resume
+# --------------------------------------------------------------------------
+
+CLAUDE_CODE_TIERS = {
+    "screen": "claude-haiku-4-5",
+    "analyst": "claude-sonnet-5",
+    "arbiter": "claude-fable-5",
+}
+
+_SYSTEM_TO_STAGE = {
+    "system prompt for dossier_analyst": "dossier",
+    "system prompt for bull_advocate": "bull",
+    "system prompt for bear_advocate": "bear",
+    "system prompt for arbiter": "arbiter",
+}
+
+
+class StageCliRunner:
+    """Fake `claude -p` runner: reads the stage off --system-prompt and
+    returns a canned JSON envelope. After ``fail_after`` calls it reports a
+    plan-window usage limit (the subscription exhaustion shape)."""
+
+    def __init__(self, fail_after: int | None = None) -> None:
+        self.calls: list[str] = []
+        self._fail_after = fail_after
+
+    def __call__(self, cmd: list[str], prompt: str, timeout: float) -> Any:
+        import json as _json
+
+        from dynamo.llm.claude_code_client import CliResult
+
+        stage = _SYSTEM_TO_STAGE[cmd[cmd.index("--system-prompt") + 1]]
+        self.calls.append(stage)
+        if self._fail_after is not None and len(self.calls) > self._fail_after:
+            return CliResult(1, "", "5-hour limit reached - resets at 6pm")
+        envelope = {
+            "is_error": False,
+            "subtype": "success",
+            "result": _json.dumps(canned_payload(stage, "X")),
+            "usage": {"input_tokens": 100, "output_tokens": 10},
+        }
+        return CliResult(0, _json.dumps(envelope), "")
+
+
+def _claude_code_replay(
+    frames: Any, runner: StageCliRunner, run_repo: FakeRunRepo
+) -> tuple[CommitteeReplay, ReplayBudget, ReplayConfig]:
+    from dynamo.config.settings import Settings
+    from dynamo.llm.claude_code_client import ClaudeCodeResearchModel
+    from dynamo.llm.cost_meter import CostMeter, InMemoryLedgerWriter
+    from dynamo.replay.budget import BudgetLedgerTee
+
+    _, bars, scores = frames
+    config = _config(frames)
+    exp_repo = FakeExperienceRepo()
+    budget = ReplayBudget(cap_usd=100.0, run_repo=run_repo, run_id=config.run_id)
+    meter = CostMeter(BudgetLedgerTee(InMemoryLedgerWriter(), budget), 90.0)
+    model = ClaudeCodeResearchModel(
+        Settings(ANTHROPIC_API_KEY=""),
+        meter,
+        binary="/fake/claude",
+        runner=runner,
+    )
+    done = frozenset(r["as_of"] for r in run_repo.verdicts)
+    replay = CommitteeReplay(
+        gateway_factory=lambda d: CommitteeGateway(d, bars, scores),
+        research_model=model,
+        budget=budget,
+        run_repo=run_repo,
+        experience_repo=exp_repo,
+        config=config,
+        tier_models=CLAUDE_CODE_TIERS,
+        prompts=PROMPTS,
+        schemas=SCHEMAS,
+        sleep_fn=lambda s: pytest.fail("eager local batches end immediately — no sleep"),
+        resume_skip_days=done,
+    )
+    return replay, budget, config
+
+
+def test_claude_code_eager_batches_flow_through_submit_and_collect(frames: Any) -> None:
+    """The CLI backend's eager sequential submit_batch (status immediately
+    'ended') satisfies CommitteeReplay's submit -> poll -> collect loop with
+    ZERO sleeps; verdicts/contexts persist normally and every metered entry
+    is $0 (flat-rate) so the budget never accumulates spend."""
+    run_repo = FakeRunRepo()
+    runner = StageCliRunner()
+    replay, budget, _config = _claude_code_replay(frames, runner, run_repo)
+    result = replay.run()
+    assert result.status == "completed"
+    assert result.deep_dives and run_repo.verdicts
+    # The June-2026 window is CLEAN for the claude_code tiers (fable/sonnet
+    # cutoffs 2026-01-31 + 30d margin) — no acknowledgement needed.
+    gate = replay._run_config_extras["model_knowledge"]
+    assert gate["blocked"] is False
+    assert gate["cutoffs"]["claude-fable-5"] == "2026-01-31"
+    # 4-stage flow ran through the real CLI adapter for every dive.
+    assert set(runner.calls) == {"dossier", "bull", "bear", "arbiter"}
+    # Flat-rate: real token counts metered at $0 — no spend, no checkpoints.
+    assert budget.spent_usd == 0.0
+    assert run_repo.spends == []
+    assert result.spent_usd == 0.0 and result.cap_usd == pytest.approx(100.0)
+    # Decision-time contexts persisted before every submission.
+    assert run_repo.contexts
+    assert {r["model_id"] for r in run_repo.contexts} <= set(CLAUDE_CODE_TIERS.values())
+
+
+def test_claude_code_plan_exhaustion_soft_fails_then_resumes(frames: Any) -> None:
+    """Plan-window exhaustion mid-run: the exhausted batch marks its requests
+    failed (None), the affected days yield no verdicts ($0), and the run
+    still completes with partial results. A second run of the SAME config
+    (resume_skip_days = days with persisted verdicts) submits ONLY the
+    missing days and completes the window."""
+    sessions, _, _ = frames
+    window = sessions[-RUN_SESSIONS:]
+    run_repo = FakeRunRepo()
+    # Day 1 = 2 dossier + 2 bull + 2 bear + 2 arbiter = 8 CLI calls; the 9th
+    # call (day 2's first dossier) hits the subscription limit.
+    runner = StageCliRunner(fail_after=8)
+    replay, budget, config = _claude_code_replay(frames, runner, run_repo)
+    result = replay.run()
+    assert result.status == "completed"  # soft-fail, not a crash
+    assert {r["as_of"] for r in run_repo.verdicts} == {window[0]}
+    assert budget.spent_usd == 0.0
+
+    # The plan window reset — the SAME deterministic run id resumes: day 1
+    # is skipped (no resubmission), days 2..N run to completion.
+    healthy = StageCliRunner()
+    resumed, _budget2, config2 = _claude_code_replay(frames, healthy, run_repo)
+    assert config2.run_id == config.run_id  # deterministic resume identity
+    result2 = resumed.run()
+    assert result2.status == "completed"
+    verdict_days = {r["as_of"] for r in run_repo.verdicts}
+    assert verdict_days == set(window)  # the resumed run filled in days 2..N
+    # Day 1 was never re-submitted on resume: the healthy runner only saw
+    # the remaining days' stages.
+    assert len(healthy.calls) == 8 * (RUN_SESSIONS - 1)

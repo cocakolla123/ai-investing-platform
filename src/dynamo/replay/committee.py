@@ -43,7 +43,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time as _time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol, cast
@@ -499,6 +499,7 @@ class CommitteeReplay:
         bundle_factory: Callable[[str], ModelBundle] | None = None,
         acknowledge_model_knowledge: bool = False,
         cutoff_margin_days: int = DEFAULT_CUTOFF_MARGIN_DAYS,
+        resume_skip_days: Collection[date] = (),
     ) -> None:
         if config.mode != "committee":
             raise ValueError(f"CommitteeReplay requires mode='committee', got {config.mode!r}")
@@ -553,6 +554,13 @@ class CommitteeReplay:
         # factory or the artifact loader; resolved ONCE at run start.
         self._bundle_factory = bundle_factory
         self._bundle: ModelBundle | None = None
+        # Incremental resume (ADR-0014 claude_code plan windows, but backend-
+        # agnostic): days whose verdicts are ALREADY persisted for this run id
+        # are never re-submitted — no re-spend, no plan-usage burn. Their
+        # experiences were persisted by the prior attempt's resolution pass,
+        # and today's within-run-learning retrieval still sees them through
+        # the gateway's DB-backed reads.
+        self._resume_skip_days = frozenset(resume_skip_days)
 
     def _resolve_bundle(self) -> ModelBundle | None:
         version = self.config.quant_model_version
@@ -590,6 +598,13 @@ class CommitteeReplay:
         status = "completed"
         try:
             for day_index, day in enumerate(sessions):
+                if day in self._resume_skip_days:
+                    if progress is not None:
+                        progress(
+                            f"{day.isoformat()} verdicts already persisted — "
+                            "skipped (resume)"
+                        )
+                    continue
                 gw = self._gateway_factory(day)
                 # Within-run learning: resolve any dive whose horizon exit
                 # already CLOSED strictly before today, so today's prior-case

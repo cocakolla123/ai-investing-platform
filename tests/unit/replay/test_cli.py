@@ -13,6 +13,10 @@ import pytest
 from dynamo.cli import backfill as backfill_cli
 from dynamo.cli import replay as replay_cli
 
+# Captured BEFORE any test monkeypatches dynamo.config.settings.Settings —
+# the backend tests build real Settings instances after patching the module.
+from dynamo.config.settings import Settings as RealSettings
+
 # --------------------------------------------------------------------------
 # replay CLI
 # --------------------------------------------------------------------------
@@ -69,6 +73,7 @@ def test_replay_committee_refuses_without_api_key(
 
     class KeylessSettings:
         anthropic_api_key = ""
+        research_backend = "api"
 
     monkeypatch.setattr("dynamo.config.settings.Settings", lambda: KeylessSettings())
     rc = replay_cli.main(
@@ -995,6 +1000,10 @@ def test_replay_committee_preflight_runs_before_any_client(
 
     class KeyedSettings:
         anthropic_api_key = "k"
+        research_backend = "api"
+        model_screen = "claude-haiku-4-5"
+        model_analyst = "claude-sonnet-5"
+        model_arbiter = "claude-opus-5"
 
     monkeypatch.setattr("dynamo.config.settings.Settings", lambda: KeyedSettings())
     monkeypatch.setattr(replay_cli, "_engine", lambda url: object())
@@ -1174,3 +1183,265 @@ def test_backfill_fundamentals_skips_symbols_without_companyfacts(
     assert rc == 0
     assert len(repo.facts) == 1  # AAA landed despite DIA's 404
     assert "DIA" in out and "skipped" in out
+
+
+# --------------------------------------------------------------------------
+# committee research-backend selection (ADR-0014): api vs claude_code
+# --------------------------------------------------------------------------
+
+
+def _backend_settings(tmp_path: Any, **overrides: Any) -> Any:
+    """Real Settings with an executable fake `claude` binary on disk."""
+    binary = tmp_path / "claude"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    kwargs: dict[str, Any] = {
+        "ANTHROPIC_API_KEY": "test-key",
+        "CLAUDE_CODE_BINARY": str(binary),
+    }
+    kwargs.update(overrides)
+    return RealSettings(**kwargs)
+
+
+def _committee_harness(
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Any,
+    *,
+    run_row: dict[str, Any] | None = None,
+    verdict_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Monkeypatch every seam behind _cmd_run_committee; capture the kwargs
+    handed to CommitteeReplay. NO network, NO database, NO CLI processes."""
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr("dynamo.config.settings.Settings", lambda: settings)
+    monkeypatch.setattr(replay_cli, "_engine", lambda url: object())
+
+    class FakeReplayRepo:
+        def __init__(self, engine: Any) -> None:
+            pass
+
+        def get_run(self, run_id: str) -> dict[str, Any] | None:
+            return run_row
+
+        def verdicts_for(self, run_id: str) -> list[dict[str, Any]]:
+            return list(verdict_rows or [])
+
+        def record_spend(self, run_id: str, delta_usd: float) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "dynamo.persistence.repositories.replay.ReplayRepository", FakeReplayRepo
+    )
+    monkeypatch.setattr(
+        "dynamo.persistence.repositories.experience.ExperienceRepository",
+        lambda engine: object(),
+    )
+
+    class FakeEmbedder:
+        backend = "hash-fallback"
+
+    monkeypatch.setattr("dynamo.llm.embeddings.LocalEmbedder", FakeEmbedder)
+
+    class FakeCommitteeReplay:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        def run(self, progress: Any = None) -> Any:
+            @dataclass
+            class R:
+                run_id: str = "replay-fake"
+                status: str = "completed"
+                sessions: tuple = ()
+                deep_dives: tuple = ()
+                experiences: tuple = ()
+                spent_usd: float = 0.0
+                cap_usd: float = 5.0
+
+            return R()
+
+    monkeypatch.setattr("dynamo.replay.committee.CommitteeReplay", FakeCommitteeReplay)
+    return captured
+
+
+def _committee_argv(*extra: str) -> list[str]:
+    return [
+        "run",
+        "--start", "2026-03-16",
+        "--end", "2026-03-20",
+        "--mode", "committee",
+        "--run-label", "x",
+        "--max-usd", "5.0",
+        "--skip-preflight",
+        *extra,
+    ]
+
+
+def test_committee_claude_code_backend_selected_from_settings(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Any
+) -> None:
+    """RESEARCH_BACKEND=claude_code routes the committee through the CLI
+    client with the claude_code tier models (fable arbiter), no flag needed."""
+    from dynamo.llm.claude_code_client import ClaudeCodeResearchModel
+
+    settings = _backend_settings(tmp_path, RESEARCH_BACKEND="claude_code")
+    captured = _committee_harness(monkeypatch, settings)
+    rc = replay_cli.main(_committee_argv())
+    assert rc == 0
+    assert isinstance(captured["research_model"], ClaudeCodeResearchModel)
+    assert captured["tier_models"] == {
+        "screen": "claude-haiku-4-5",
+        "analyst": "claude-sonnet-5",
+        "arbiter": "claude-fable-5",
+    }
+    assert captured["run_config_extras"]["research_backend"] == "claude_code"
+    out = capsys.readouterr().out
+    assert "backend=claude_code" in out
+    assert "flat-rate subscription" in out and "metered cost $0" in out
+    assert "effectively inert" in out
+
+
+def test_committee_backend_flag_overrides_settings_both_ways(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Any
+) -> None:
+    from dynamo.llm.anthropic_client import AnthropicClient
+    from dynamo.llm.claude_code_client import ClaudeCodeResearchModel
+
+    # Settings say api; --backend claude_code wins.
+    settings = _backend_settings(tmp_path, RESEARCH_BACKEND="api")
+    captured = _committee_harness(monkeypatch, settings)
+    assert replay_cli.main(_committee_argv("--backend", "claude_code")) == 0
+    assert isinstance(captured["research_model"], ClaudeCodeResearchModel)
+    assert captured["tier_models"]["arbiter"] == "claude-fable-5"
+    capsys.readouterr()
+
+    # Settings say claude_code; --backend api wins (and uses the API tiers).
+    settings = _backend_settings(tmp_path, RESEARCH_BACKEND="claude_code")
+    captured = _committee_harness(monkeypatch, settings)
+    assert replay_cli.main(_committee_argv("--backend", "api")) == 0
+    assert isinstance(captured["research_model"], AnthropicClient)
+    assert captured["tier_models"]["arbiter"] == "claude-opus-5"
+    assert "backend=api" in capsys.readouterr().out
+
+
+def test_committee_api_backend_default_regression(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Any
+) -> None:
+    """Default settings (research_backend='api') keep the AnthropicClient
+    path byte-for-byte: API tier models, no claude_code note printed."""
+    from dynamo.llm.anthropic_client import AnthropicClient
+
+    settings = _backend_settings(tmp_path)
+    assert settings.research_backend == "api"
+    captured = _committee_harness(monkeypatch, settings)
+    rc = replay_cli.main(_committee_argv())
+    assert rc == 0
+    assert isinstance(captured["research_model"], AnthropicClient)
+    assert captured["tier_models"] == {
+        "screen": "claude-haiku-4-5",
+        "analyst": "claude-sonnet-5",
+        "arbiter": "claude-opus-5",
+    }
+    assert captured["resume_skip_days"] == frozenset()
+    out = capsys.readouterr().out
+    assert "backend=api" in out
+    assert "flat-rate subscription" not in out
+
+
+def test_committee_claude_code_refuses_without_binary(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Any
+) -> None:
+    settings = RealSettings(
+        ANTHROPIC_API_KEY="",
+        RESEARCH_BACKEND="claude_code",
+        CLAUDE_CODE_BINARY=str(tmp_path / "no-such-claude"),
+    )
+    captured = _committee_harness(monkeypatch, settings)
+    rc = replay_cli.main(_committee_argv())
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "claude" in out and "binary" in out
+    assert captured == {}  # never reached CommitteeReplay construction
+
+
+def test_committee_resume_skips_days_with_persisted_verdicts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Any
+) -> None:
+    """A re-run of the same deterministic run id hands CommitteeReplay the
+    days that already have persisted verdicts (deduplicated) and resumes the
+    durable spend — the incremental-resume contract."""
+    settings = _backend_settings(tmp_path, RESEARCH_BACKEND="claude_code")
+    d1, d2 = date(2026, 3, 16), date(2026, 3, 17)
+    captured = _committee_harness(
+        monkeypatch,
+        settings,
+        run_row={"spent_usd": 1.25},
+        verdict_rows=[
+            {"as_of": d1, "symbol": "AAA"},
+            {"as_of": d1, "symbol": "BBB"},
+            {"as_of": d2, "symbol": "AAA"},
+        ],
+    )
+    rc = replay_cli.main(_committee_argv())
+    assert rc == 0
+    assert captured["resume_skip_days"] == frozenset({d1, d2})
+    assert captured["budget"].spent_usd == pytest.approx(1.25)
+    out = capsys.readouterr().out
+    assert "skipping 2 day(s) with persisted verdicts" in out
+    assert "resuming from $1.25 spent" in out
+
+
+# --------------------------------------------------------------------------
+# estimate: claude_code backend (flat-rate — no dollar projection)
+# --------------------------------------------------------------------------
+
+
+def test_estimate_claude_code_prints_flat_rate_and_fable_cutoff(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """claude_code estimate: backend named, NO dollar projection, the gate
+    resolves the claude_code tiers' cutoffs — a March-2026 start clears
+    fable/sonnet (cutoffs 2026-01-31 + 30d margin) and reads ALLOWED."""
+    settings = RealSettings(ANTHROPIC_API_KEY="", RESEARCH_BACKEND="claude_code")
+    monkeypatch.setattr("dynamo.config.settings.Settings", lambda: settings)
+    rc = replay_cli.main(["estimate", "--start", "2026-03-16", "--end", "2026-03-27"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "backend:             claude_code" in out
+    assert "flat-rate subscription — metered cost $0" in out
+    assert "consumes Claude plan usage windows" in out
+    assert "effectively inert" in out
+    assert "projected total:" not in out
+    assert "per deep dive:" not in out
+    assert "suggested --max-usd" not in out
+    # The gate resolved the claude_code tiers — fable included — and ALLOWED.
+    assert "claude-fable-5: cutoff 2026-01-31 [ok]" in out
+    assert "claude-sonnet-5: cutoff 2026-01-31 [ok]" in out
+    assert "claude-opus-5" not in out
+    assert "gate verdict:        OK" in out
+
+
+def test_estimate_backend_flag_overrides_settings(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings = RealSettings(ANTHROPIC_API_KEY="", RESEARCH_BACKEND="api")
+    monkeypatch.setattr("dynamo.config.settings.Settings", lambda: settings)
+    rc = replay_cli.main(
+        [
+            "estimate",
+            "--start", "2026-03-16",
+            "--end", "2026-03-27",
+            "--backend", "claude_code",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "backend:             claude_code" in out and "projected total:" not in out
+
+    # And the api projection is unchanged when selected explicitly.
+    rc = replay_cli.main(
+        ["estimate", "--start", "2026-03-16", "--end", "2026-03-27", "--backend", "api"]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "backend:             api" in out
+    assert "projected total:" in out and "claude-opus-5" in out
