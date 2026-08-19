@@ -8,6 +8,7 @@ over (equity, high-water mark). Downgrades are immediate; recovery requires
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from dynamo.domain.models.risk import LadderRung
@@ -64,6 +65,53 @@ RUNG_EFFECTS: dict[LadderRung, RungEffects] = {
     LadderRung.DD15: RungEffects(0.0, 0.0, False, False, 0.5, True, True, False),
     LadderRung.DD20: RungEffects(0.0, 0.0, False, False, 0.0, True, True, True),
 }
+
+
+# Ballast (passive index floor) de-risking schedule — campaign findings item
+# 20. The table above is correct for THESIS-driven positions: cut risk when a
+# thesis is going wrong. Applied to a passive index floor it is market
+# timing, and it lost money. Verified from the control run's equity curve: on
+# 2026-04-01 the DD5 rung cut invested exposure 94.9% -> 47.7%, then restored
+# 95.2% by 2026-04-15 — selling half the index near the local bottom (equity
+# 953) and rebuying higher (985), which accounts for most of the gap between
+# the portfolio's +5.14% and SPY's +10.29%.
+#
+# Ballast therefore gets its own, much deeper schedule: a -5% portfolio
+# drawdown is NOISE for a passive floor. This table is the multiplier applied
+# to the ballast residual per rung (overridable per run via
+# ``ConstructionConfig.ballast_ladder_multipliers``):
+#
+#   NORMAL/DD5/DD8/DD10  1.00  untouched — shallow dips are noise
+#   DD15                 0.75  modest trim, on TOP of DD15's 0.5 gross override
+#   DD20                 0.00  full exit (kill switch; gross override is 0.0 too)
+#
+# The hard protections are unchanged and still bind first: the risk engine's
+# gross cap and cash floor bound the residual by construction, a risk veto on
+# the ballast symbol still exits it, and blocked rungs still hold ballast
+# without ever increasing it.
+BALLAST_RUNG_MULTIPLIERS: dict[LadderRung, float] = {
+    LadderRung.NORMAL: 1.0,
+    LadderRung.DD5: 1.0,
+    LadderRung.DD8: 1.0,
+    LadderRung.DD10: 1.0,
+    LadderRung.DD15: 0.75,
+    LadderRung.DD20: 0.0,
+}
+
+
+def ballast_multiplier_for(
+    rung: LadderRung, overrides: Sequence[tuple[LadderRung, float]] = ()
+) -> float:
+    """Ballast residual multiplier for a rung (:data:`BALLAST_RUNG_MULTIPLIERS`).
+
+    ``overrides`` is the run's configured ``(rung, multiplier)`` table; empty
+    (the default) means the documented schedule above. Later entries win, so
+    the result is deterministic however the table was assembled.
+    """
+    if not overrides:
+        return BALLAST_RUNG_MULTIPLIERS[rung]
+    table = {**BALLAST_RUNG_MULTIPLIERS, **dict(overrides)}
+    return table[rung]
 
 
 def severity(rung: LadderRung) -> int:

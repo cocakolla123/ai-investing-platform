@@ -74,6 +74,30 @@ Measured on portfolio equity vs trailing 12-month high-water mark, evaluated dai
 Ladder state changes fire alerts and are sticky: recovery requires equity back above the
 trigger −1% band for 5 consecutive sessions (hysteresis prevents flapping).
 
+### 3a. The ballast exception (passive index floor)
+
+The table above governs **active, thesis-driven positions**: cut risk when a thesis is going
+wrong. It is the wrong instrument for the **idle-cash ballast** (`ConstructionConfig.
+ballast_symbol` — the diversified index the residual above the cash floor rides): trimming a
+passive floor on a shallow portfolio dip is market timing, and it lost money. Measured on the
+committee control run: on 2026-04-01 the −5% rung cut invested exposure 94.9% → 47.7%, then
+restored 95.2% by 2026-04-15 — selling half the index near the local bottom and rebuying
+higher, which accounts for most of the gap between that portfolio's +5.14% and SPY's +10.29%.
+
+Ballast therefore follows its own, much deeper schedule (`ladder.BALLAST_RUNG_MULTIPLIERS`,
+overridable per run via `ConstructionConfig.ballast_ladder_multipliers`), applied as a ceiling
+on the ballast residual:
+
+| Rung | Ballast multiplier |
+|---|---|
+| NORMAL / −5% / −8% / −10% | 1.00 — untouched; shallow dips are noise for a passive floor |
+| −15% | 0.75 — modest trim, on top of that rung's 0.5 gross override |
+| −20% | 0.00 — full exit |
+
+Every hard protection is unchanged and binds first: the gross cap and cash floor bound the
+residual by construction, blocked rungs still hold ballast without ever increasing it, and a
+risk veto on the ballast symbol still exits it outright.
+
 ## 4. Position sizing
 
 Sizing is computed by the risk engine, taking advisory conviction only as a bounded tilt:

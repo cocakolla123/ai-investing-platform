@@ -44,7 +44,7 @@ from dynamo.domain.models.research import (
 from dynamo.domain.models.risk import Regime, RiskConfig, RiskVerdict
 from dynamo.domain.symbols import is_crypto_symbol
 from dynamo.portfolio.config import ConstructionConfig
-from dynamo.risk.ladder import RungEffects, effects_for
+from dynamo.risk.ladder import RungEffects, ballast_multiplier_for, effects_for
 from dynamo.risk.sizing import SizingCandidate, SizingContext, size_positions
 
 # Below this weight a position is dropped rather than opened (doc 06 section 4).
@@ -906,15 +906,25 @@ class RuleBasedConstructor:
           un-investable. This is exactly why the production default is the
           diversified index (SPY): a single name carrying uncapped residual
           weight is not ballast, it is a concentrated bet.
-        - Ladder/risk governance: the residual scales with the rung's
-          ``risk_multiplier`` (DD5's 0.5 halves ballast, remainder to cash);
-          when increases are blocked (``new_risk_allowed`` false, a rung with
-          ``new_positions_allowed`` false, or a degraded verdict) existing
-          ballast is HELD but never increased — mirroring how active
-          positions are retained while no new risk opens. Defensive rungs
-          de-risk through ``verdict.gross_exposure_cap`` (DD15's 0.5 gross
-          override shrinks the residual; DD20's 0.0 exits ballast entirely).
-          A risk veto on the ballast symbol zeroes it (exit).
+        - Ladder governance uses ballast's OWN, much deeper schedule
+          (:data:`dynamo.risk.ladder.BALLAST_RUNG_MULTIPLIERS`, overridable
+          per run via ``config.ballast_ladder_multipliers``) and NOT the
+          active rung's ``risk_multiplier`` — campaign findings item 20. A
+          -5% portfolio drawdown is noise for a passive index floor: the
+          control run cut invested exposure 94.9% -> 47.7% at DD5, rebought
+          higher two weeks later, and gave back most of its benchmark gap.
+          Ballast is therefore untouched at DD5/DD8/DD10, trimmed modestly at
+          DD15 (0.75, on top of that rung's 0.5 gross override) and fully
+          exited at DD20. ACTIVE positions' ladder behavior is unchanged —
+          this function is the only consumer of the ballast table.
+        - Every hard protection still binds: the residual is bounded by
+          ``verdict.gross_exposure_cap`` and the cash floor BY CONSTRUCTION
+          (so DD15's 0.5 gross override and DD20's 0.0 de-risk regardless of
+          the table); when increases are blocked (``new_risk_allowed`` false,
+          a rung with ``new_positions_allowed`` false, or a degraded verdict)
+          existing ballast is HELD but never increased — mirroring how active
+          positions are retained while no new risk opens; and a risk veto on
+          the ballast symbol zeroes it (exit).
         - If the ballast symbol also earns an ACTIVE weight, the active
           weight wins and ballast is the residual on top (merged per-symbol
           at execution).
@@ -941,23 +951,31 @@ class RuleBasedConstructor:
             and effects.new_positions_allowed
             and not verdict.degraded
         )
+        # Ballast's own ladder schedule, not the active risk multiplier: a
+        # CEILING on the ballast weight, so it binds whether ballast is being
+        # sized up or merely held (a deep rung must be able to TRIM a held
+        # floor, not just refuse to add to it).
+        ballast_multiplier = ballast_multiplier_for(
+            verdict.ladder, config.ballast_ladder_multipliers
+        )
+        ceiling = residual * ballast_multiplier
         if vetoed:
             desired = 0.0
             rationale = "ballast exited: risk veto on ballast symbol"
         elif increase_ok:
-            desired = residual * effects.risk_multiplier
+            desired = ceiling
             rationale = (
                 f"idle-cash ballast: residual {residual:.4f} above the "
-                f"{floor:.0%} cash floor x risk multiplier "
-                f"{effects.risk_multiplier:g}"
+                f"{floor:.0%} cash floor x ballast ladder multiplier "
+                f"{ballast_multiplier:g} ({verdict.ladder.value})"
             )
         else:
-            desired = min(held_ballast, residual)
+            desired = min(held_ballast, ceiling)
             rationale = "ballast held, not increased (new risk blocked)"
         if not vetoed:
             current_total = cur_w.get(symbol, 0.0)
             if abs((active_sym + desired) - current_total) < config.min_trade_weight:
-                desired = min(held_ballast, residual)
+                desired = min(held_ballast, ceiling)
         if desired < MIN_POSITION_WEIGHT:
             return None  # dust never opens; a held dust position exits via diff
         return _Lot(

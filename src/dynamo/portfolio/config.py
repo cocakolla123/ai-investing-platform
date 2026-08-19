@@ -11,7 +11,7 @@ import hashlib
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from dynamo.domain.models.risk import Regime, RiskBucket
+from dynamo.domain.models.risk import LadderRung, Regime, RiskBucket
 from dynamo.domain.symbols import is_crypto_symbol
 
 # Bucket presets (doc 07 section 3 table).
@@ -79,6 +79,28 @@ class ConstructionConfig(BaseModel):
     # (any non-crypto symbol validates) but is not the default.
     ballast_symbol: str = ""
     ballast_cash_floor: float = Field(default=0.05, ge=0.0, le=1.0)
+    # Per-rung multipliers on the ballast residual, overriding
+    # ``dynamo.risk.ladder.BALLAST_RUNG_MULTIPLIERS`` (empty = that
+    # documented default schedule). Ballast deliberately does NOT follow the
+    # ACTIVE drawdown ladder: it is a passive index floor, and cutting it on
+    # a -5% portfolio dip is market timing, not risk management (campaign
+    # findings item 20 — the control run did exactly that and gave back most
+    # of its benchmark gap). A tuple of pairs rather than a dict so the
+    # frozen config stays hashable and ``config_hash`` stays stable.
+    ballast_ladder_multipliers: tuple[tuple[LadderRung, float], ...] = ()
+
+    @field_validator("ballast_ladder_multipliers")
+    @classmethod
+    def _ballast_multipliers_in_unit_range(
+        cls, v: tuple[tuple[LadderRung, float], ...]
+    ) -> tuple[tuple[LadderRung, float], ...]:
+        for rung, multiplier in v:
+            if not 0.0 <= multiplier <= 1.0:
+                raise ValueError(
+                    f"ballast multiplier for {rung.value} must be in [0, 1], "
+                    f"got {multiplier}"
+                )
+        return v
 
     @field_validator("ballast_symbol")
     @classmethod
