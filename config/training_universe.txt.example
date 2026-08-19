@@ -1,0 +1,148 @@
+# Training-universe file — universe-breadth prep (--symbols-file)
+#
+# Format: one symbol per line. '#' starts a comment (full-line or trailing);
+# blank lines are ignored; duplicates are dropped keeping first occurrence;
+# case is preserved (crypto pairs like BTC/USD are allowed but note that
+# `backfill bars` routes them to `backfill crypto-bars`).
+#
+# Purpose: widen the TRAINING panel far beyond the 55-name trading universe.
+# Cross-sectional models learn from breadth — 500+ names give the ranker a
+# real cross-section per date instead of 54. Training on a wider universe
+# than you trade is STANDARD quant practice: the model learns general
+# structure from breadth; the portfolio still only ever holds the vetted
+# trading universe (which stays 55 and is NOT changed by this file).
+#
+# Usage (once Tiingo Power is active — the free tier will throttle/refuse
+# a 500-name daily-history backfill):
+#   python -m dynamo.cli.backfill bars --start 2020-01-01 --end 2026-08-01 \
+#       --symbols-file config/training_universe.txt
+#   python -m dynamo.cli.backfill fundamentals --symbols-file ... (n/a yet —
+#       fundamentals takes --symbols/--universe; use the seed-ciks path)
+#   python -m dynamo.cli.quant_train --train-start 2024-01-01 \
+#       --train-end 2026-06-30 --label breadth-v1 \
+#       --symbols-file config/training_universe.txt
+#
+# SURVIVORSHIP BIAS — read before building this file:
+#   Using TODAY'S constituent list for a historical training window is
+#   survivorship-biased: names that were delisted, acquired, or dropped from
+#   the index during the window are missing, and today's members are, by
+#   construction, the winners. Effects on THIS pipeline:
+#     * the ranker's label distribution skews positive (losers vanished);
+#     * the downside classifier under-sees blowups (the exact events it
+#       should learn);
+#   Mitigations (documented, in order of strength):
+#     1. Prefer a point-in-time constituent list for the training-window
+#        start (e.g. an archived index membership snapshot) and INCLUDE the
+#        since-delisted names — Tiingo serves delisted tickers' history.
+#     2. If only today's list is available, keep the walk-forward report
+#        card's honesty checks in mind: the survivorship lift inflates
+#        absolute IC but affects model AND baselines alike; the ship gates
+#        compare against baselines on the SAME panel, which cancels much
+#        (not all) of the bias.
+#     3. Record the list provenance and snapshot date in the tuning log for
+#        every trained label (docs/tuning_log_campaign_v3.md convention).
+#   The trading universe is unaffected either way — it stays the vetted 55.
+#
+# Example large-cap list (S&P 100-style; REPLACE with your provenance-tracked
+# list and note its snapshot date in the tuning log):
+AAPL
+MSFT
+NVDA
+AMZN
+GOOGL
+META
+BRK-B    # Tiingo uses dash-class tickers (BRK-B, BF-B)
+LLY
+AVGO
+JPM
+TSLA
+UNH
+XOM
+V
+PG
+MA
+JNJ
+COST
+HD
+ABBV
+WMT
+MRK
+KO
+NFLX
+BAC
+CRM
+ORCL
+CVX
+AMD
+PEP
+TMO
+ACN
+LIN
+ADBE
+MCD
+CSCO
+ABT
+IBM
+GE
+WFC
+CAT
+DHR
+QCOM
+PM
+INTU
+DIS
+VZ
+TXN
+AMGN
+NOW
+NEE
+GS
+ISRG
+RTX
+CMCSA
+UBER
+BKNG
+SPGI
+T
+PFE
+UNP
+AXP
+LOW
+BLK
+HON
+SYK
+COP
+ETN
+MS
+BSX
+VRTX
+PANW
+C
+ADP
+SCHW
+TJX
+GILD
+MMC
+BMY
+DE
+LMT
+MU
+FI
+ADI
+SBUX
+UPS
+MDT
+PLD
+AMT
+SO
+BA
+ANET
+CB
+INTC
+LRCX
+KLAC
+ELV
+REGN
+MO
+DUK
+CI

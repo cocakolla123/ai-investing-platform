@@ -89,3 +89,24 @@ every report.
 
 Tuning-run registry hygiene: tune-a..h remain registered candidates (labels are
 single-use and never deleted, per runbook); none of them may be promoted.
+
+## Universe-breadth prep (2026-08-18, code only — data blocked on Tiingo Power)
+
+The biggest remaining lever is breadth: 54 usable training names → 500+. The code
+path is ready; the data waits on the Tiingo Power subscription (the free tier
+cannot serve a 500-name daily-history backfill).
+
+- `backfill bars --symbols-file FILE` and `quant_train --symbols-file FILE`
+  accept a one-symbol-per-line file (`#` comments); format + usage documented in
+  `config/training_universe.txt.example`.
+- The TRAINING panel may be much wider than the trading universe — standard
+  practice (train on breadth, trade a subset). The trading universe stays 55 and
+  is not touched by any of this.
+- **Survivorship bias caveat**: training historically on TODAY'S constituent
+  list omits delisted/acquired losers and skews labels positive (the downside
+  head under-sees exactly the blowups it must learn). Mitigations, in order:
+  (1) use a point-in-time constituent snapshot for the window start and include
+  since-delisted names (Tiingo serves delisted history); (2) failing that, rely
+  on the report card's model-vs-baseline comparisons on the SAME panel, which
+  cancel much (not all) of the lift; (3) record list provenance + snapshot date
+  here for every trained label. Full text in the example file header.

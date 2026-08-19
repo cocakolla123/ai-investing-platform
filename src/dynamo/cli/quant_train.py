@@ -131,6 +131,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--symbols", nargs="+", default=None, help="explicit training symbols"
     )
     group.add_argument(
+        "--symbols-file",
+        type=Path,
+        default=None,
+        help="training symbols from a file (one per line, '#' comments) — "
+        "the universe-breadth path: the TRAINING panel may be much wider "
+        "than the trading universe (standard practice: train on breadth, "
+        "trade a subset; the trading universe stays untouched). CAVEAT: "
+        "using TODAY'S constituent list historically carries survivorship "
+        "bias — see config/training_universe.txt.example for the documented "
+        "mitigations.",
+    )
+    group.add_argument(
         "--universe",
         action="store_true",
         help="train on the active tier-1/3 universe at --train-end (the default)",
@@ -825,7 +837,18 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     gw_end = HistoricalDataGateway(engine, args.train_end)
-    universe = [str(s) for s in args.symbols] if args.symbols else gw_end.universe((1, 3))
+    if args.symbols:
+        universe = [str(s) for s in args.symbols]
+    elif args.symbols_file is not None:
+        from dynamo.cli.backfill import read_symbols_file
+
+        universe = read_symbols_file(args.symbols_file)
+        if not universe:
+            print(f"refused: --symbols-file {args.symbols_file} contains no symbols")
+            return 1
+        print(f"symbols-file: {len(universe)} training symbols from {args.symbols_file}")
+    else:
+        universe = gw_end.universe((1, 3))
     if not universe:
         print(
             f"refused: universe is empty at {args.train_end} — run "

@@ -4,7 +4,7 @@ Bulk range loads that bypass the one-day-per-partition Dagster ingestion,
 feeding the replay foundation:
 
     python -m dynamo.cli.backfill bars --start 2025-01-01 --end 2026-08-01 \
-        --symbols AAPL MSFT            # or --universe
+        --symbols AAPL MSFT            # or --universe, or --symbols-file FILE
     python -m dynamo.cli.backfill fundamentals --universe --seed-ciks
     python -m dynamo.cli.backfill macro --start 2020-01-01
     python -m dynamo.cli.backfill universe --as-of 2024-12-01
@@ -52,6 +52,7 @@ import argparse
 import sys
 import time
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 # Production FRED series (mirrors orchestration.resources.DEFAULT_FRED_SERIES;
@@ -97,6 +98,14 @@ def _build_parser() -> argparse.ArgumentParser:
     bars.add_argument("--end", required=True, type=date.fromisoformat)
     group = bars.add_mutually_exclusive_group(required=True)
     group.add_argument("--symbols", nargs="+")
+    group.add_argument(
+        "--symbols-file",
+        type=Path,
+        help="file with one symbol per line ('#' comments and blank lines "
+        "ignored) — the universe-breadth path: backfill a wide TRAINING "
+        "panel (e.g. config/training_universe.txt) without touching the "
+        "trading universe (see config/training_universe.txt.example)",
+    )
     group.add_argument("--universe", action="store_true")
     bars.add_argument(
         "--allow-missing-tiingo",
@@ -245,6 +254,24 @@ def _split_crypto(symbols: list[str]) -> tuple[list[str], list[str]]:
     return equities, crypto
 
 
+def read_symbols_file(path: Path) -> list[str]:
+    """Symbols from a text file: one per line, ``#`` starts a comment
+    (full-line or trailing), blank lines skipped, duplicates dropped
+    keeping first occurrence, case preserved (crypto pairs like BTC/USD).
+
+    The universe-breadth prep path: a TRAINING universe file may be much
+    wider than the trading universe (standard quant practice — train on
+    breadth, trade a subset). See config/training_universe.txt.example for
+    the documented format and the survivorship-bias caveats.
+    """
+    seen: dict[str, None] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        symbol = line.split("#", 1)[0].strip()
+        if symbol:
+            seen.setdefault(symbol, None)
+    return list(seen)
+
+
 # -- subcommands ------------------------------------------------------------
 
 
@@ -263,8 +290,20 @@ def _cmd_bars(args: argparse.Namespace) -> int:
             "--allow-missing-tiingo to skip gracefully."
         )
         return 1
-    repo = _repo(args.database_url)
-    raw = list(args.symbols) if args.symbols else _universe_symbols(repo, args.end)
+    if args.symbols_file is not None:
+        # Fail fast on an unusable file BEFORE any engine/network work.
+        raw = read_symbols_file(args.symbols_file)
+        if not raw:
+            print(f"ERROR: --symbols-file {args.symbols_file} contains no symbols")
+            return 1
+        print(f"symbols-file: {len(raw)} symbols from {args.symbols_file}")
+        repo = _repo(args.database_url)
+    elif args.symbols:
+        raw = list(args.symbols)
+        repo = _repo(args.database_url)
+    else:
+        repo = _repo(args.database_url)
+        raw = _universe_symbols(repo, args.end)
     symbols, crypto = _split_crypto(raw)
     if crypto:
         # Tiingo's equity endpoint 404s on pairs; crypto history comes from `crypto-bars`.
