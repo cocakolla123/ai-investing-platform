@@ -287,7 +287,13 @@ def test_build_panel_mixed_equity_crypto_no_crash_and_nan_coverage() -> None:
         )
     }
     assert 0.0 < scores["BTC/USD"].feature_coverage < 1.0
-    assert scores["BTC/USD"].feature_coverage < scores["AAA"].feature_coverage
+    # Coverage is asset-class aware: the pair is measured against the features
+    # a crypto pair can produce (no fundamentals / insider / estimates /
+    # earnings date), NOT against all ~51 columns. This fixture supplies no
+    # fundamentals to ANYONE, so the two equities — which are expected to have
+    # them — honestly score lower than the pair, and the number now means
+    # "how much of what this name should have is present".
+    assert scores["AAA"].feature_coverage < scores["BTC/USD"].feature_coverage
 
     # 3 symbols is below the symbol gate — the trainer refuses this panel.
     with pytest.raises(qt.PanelTooSmallError, match="usable symbols"):

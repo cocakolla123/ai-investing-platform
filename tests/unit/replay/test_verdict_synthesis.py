@@ -14,7 +14,12 @@ from dynamo.replay.runner import (
 AS_OF = date(2026, 6, 1)
 
 
-def _score(symbol: str, eer: float | None, downside: float | None = 0.1) -> QuantScore:
+def _score(
+    symbol: str,
+    eer: float | None,
+    downside: float | None = 0.1,
+    coverage: float = 1.0,
+) -> QuantScore:
     return QuantScore(
         symbol=symbol,
         as_of=AS_OF,
@@ -22,6 +27,7 @@ def _score(symbol: str, eer: float | None, downside: float | None = 0.1) -> Quan
         expected_excess_return=eer,
         downside_prob=downside,
         confidence=0.5,
+        feature_coverage=coverage,
     )
 
 
@@ -95,6 +101,45 @@ def test_synthesis_is_deterministic_and_tie_stable() -> None:
     }
     # Ties break by symbol: AAA gets the best percentile.
     assert first["AAA"].conviction >= first["BBB"].conviction >= first["CCC"].conviction
+
+
+# -- minimum-coverage gate (campaign findings Phase 1) -----------------------
+
+
+def test_low_coverage_symbols_abstain_instead_of_being_ranked() -> None:
+    """A name whose feature row is mostly holes should not compete for a
+    deep-dive slot: it abstains entirely rather than being ranked."""
+    scores = _five()
+    scores["THIN"] = _score("THIN", 0.07, coverage=0.22)  # would rank FIRST
+    verdicts = synthesize_verdicts(scores, AS_OF, 20, 0.35)
+    assert "THIN" not in verdicts
+    assert set(verdicts) == set(_five())
+    # ...and the gate does not distort the survivors' percentiles.
+    assert verdicts["TOP"].conviction == 1.0
+
+
+def test_coverage_gate_defaults_off_and_is_inclusive_at_the_threshold() -> None:
+    scores = {
+        "AT": _score("AT", 0.05, coverage=0.35),
+        "BELOW": _score("BELOW", 0.04, coverage=0.3499),
+    }
+    assert set(synthesize_verdicts(scores, AS_OF, 20)) == {"AT", "BELOW"}  # 0.0 default
+    assert set(synthesize_verdicts(scores, AS_OF, 20, 0.35)) == {"AT"}
+
+
+def test_coverage_gate_can_abstain_completely() -> None:
+    scores = {s: _score(s, 0.05, coverage=0.1) for s in ("AAA", "BBB")}
+    assert synthesize_verdicts(scores, AS_OF, 20, 0.35) == {}
+
+
+def test_replay_config_carries_the_gate_into_the_config_hash() -> None:
+    from dynamo.replay.runner import ReplayConfig
+
+    base = dict(start=AS_OF, end=AS_OF, label="gate")
+    default = ReplayConfig(**base)  # type: ignore[arg-type]
+    assert default.min_feature_coverage == 0.35
+    loosened = ReplayConfig(**base, min_feature_coverage=0.0)  # type: ignore[arg-type]
+    assert loosened.run_id != default.run_id
 
 
 def test_watchlist_rows_only_for_buys_ranked_by_conviction() -> None:

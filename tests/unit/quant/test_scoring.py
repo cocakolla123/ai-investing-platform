@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import date
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -98,6 +99,87 @@ def test_empty_universe_and_missing_models() -> None:
     scores = score_universe(no_models, features, date(2026, 8, 3))
     assert scores[0].expected_excess_return is None
     assert scores[0].rank is None
+
+
+# -- asset-class-aware coverage (campaign findings Phase 1) ------------------
+
+
+def _catalog_row(values: dict[str, float]) -> pd.Series:
+    """A full catalog-shaped feature row, NaN except for ``values``."""
+    from dynamo.research.quant.catalog import FEATURE_CATALOG
+
+    row = dict.fromkeys(FEATURE_CATALOG, np.nan)
+    row.update(values)
+    return pd.Series(row, dtype=float)
+
+
+def _bars_only_frame(symbols: list[str]) -> pd.DataFrame:
+    """Everyone has the bars-driven features and nobody has fundamentals —
+    the real shape of an ETF/crypto row on any night."""
+    from dynamo.research.quant.catalog import FEATURE_CATALOG
+
+    bars_driven = {
+        name: 0.5
+        for name, spec in FEATURE_CATALOG.items()
+        if spec.group in {"momentum", "meanrev", "volatility", "volume"}
+        and name != "rs_20d_sector"
+    }
+    return pd.DataFrame(
+        {sym: _catalog_row(bars_driven) for sym in symbols}, dtype=float
+    ).T
+
+
+def test_coverage_denominator_is_asset_class_aware() -> None:
+    """An ETF lacking fcf_yield is expected, not a defect: measured against
+    every column an index fund scored 0.219 purely for being an index fund."""
+    frame = _bars_only_frame(["XLK", "AAPL", "BTC/USD"])
+    bundle = ModelBundle(model_version="baseline-v0")
+    # The rows are IDENTICAL, so the old all-columns denominator gave all
+    # three the same (misleading) number.
+    all_columns = cast(pd.Series, frame.notna().mean(axis=1))
+    assert all_columns.nunique() == 1
+    aware = {
+        s.symbol: s.feature_coverage
+        for s in score_universe(
+            bundle,
+            frame,
+            date(2026, 3, 3),
+            asset_classes={"XLK": "etf", "AAPL": "equity", "BTC/USD": "crypto"},
+        )
+    }
+    assert aware["XLK"] > aware["AAPL"]
+    assert aware["BTC/USD"] > aware["AAPL"]
+    # An equity IS still charged for missing fundamentals it should have.
+    assert abs(aware["AAPL"] - float(all_columns.iloc[0])) < 1e-12
+    # Without an explicit map, crypto is still inferred from the symbol form.
+    inferred = {
+        s.symbol: s.feature_coverage for s in score_universe(bundle, frame, date(2026, 3, 3))
+    }
+    assert inferred["BTC/USD"] == aware["BTC/USD"]
+    assert inferred["XLK"] == aware["AAPL"]  # unknowable without a sector map
+
+
+def test_confidence_discriminates_once_coverage_is_honest() -> None:
+    """Every one of the campaign's 4,070 scored rows hit the 0.20 clamp.
+    A well-covered ETF must now clear it while a genuinely thin row does not."""
+    from dynamo.research.quant.catalog import FEATURE_CATALOG
+
+    thin = _catalog_row({"ret_20d": 0.1, "month_of_year": 3.0})
+    frame = pd.concat(
+        [_bars_only_frame(["XLK"]), pd.DataFrame({"THIN": thin}, dtype=float).T]
+    )
+    frame = frame.reindex(columns=pd.Index(list(FEATURE_CATALOG)))
+    scores = {
+        s.symbol: s
+        for s in score_universe(
+            ModelBundle(model_version="baseline-v0"),
+            frame,
+            date(2026, 3, 3),
+            asset_classes={"XLK": "etf", "THIN": "equity"},
+        )
+    }
+    assert scores["XLK"].confidence > 0.2  # no longer clamped
+    assert scores["THIN"].confidence <= 0.2  # genuinely missing data still is
 
 
 # -- AveragingEnsemble (seed ensembling, --ensemble-seeds) --------------------

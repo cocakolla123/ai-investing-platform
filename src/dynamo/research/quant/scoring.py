@@ -4,16 +4,23 @@
 feature matrix into ``QuantScore`` rows: predictions, cross-sectional rank
 (1 = best), a documented confidence heuristic, and feature coverage.
 
+Coverage is ASSET-CLASS AWARE (see ``catalog.applicable_features``): the
+denominator is the set of features that symbol's asset class can actually
+produce, so an ETF is not charged for having no ``fcf_yield`` and a crypto
+pair is not charged for having no earnings date. Measured against every
+column, an index fund scored 0.219 coverage purely for being an index fund.
+
 Confidence (doc 04 section 6) is a 0-1 heuristic, not a posterior:
 ``(1 - missing_fraction) x training-distribution coverage x 1/(1 + fold
-dispersion)``. Symbols missing more than 30% of features are clamped low
-(doc 04 section 2.2) and flagged via the low confidence itself.
+dispersion)``, on the same asset-class-aware missing fraction. Symbols
+missing more than 30% of their APPLICABLE features are clamped low (doc 04
+section 2.2) and flagged via the low confidence itself.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -23,6 +30,12 @@ import pandas as pd
 
 from dynamo.domain.models.research import QuantScore
 from dynamo.domain.ports import ForecastModel
+from dynamo.domain.symbols import is_crypto_symbol
+from dynamo.research.quant.catalog import (
+    ASSET_CLASS_CRYPTO,
+    ASSET_CLASS_EQUITY,
+    applicable_features,
+)
 
 MISSING_CLAMP_THRESHOLD = 0.30
 MISSING_CLAMP_CEILING = 0.20
@@ -103,6 +116,28 @@ def _coverage_fraction(row: pd.Series, quantiles: pd.DataFrame | None) -> float:
     return float(inside.mean())
 
 
+def _asset_class(symbol: str, asset_classes: Mapping[str, str] | None) -> str:
+    """Caller-supplied class, else inferred (crypto by symbol form).
+
+    Callers that know the universe's sector map (the replay runner) pass
+    ``asset_classes`` so ETFs are recognized; without it the only inference
+    a bare feature matrix supports is crypto-vs-not."""
+    if asset_classes is not None:
+        supplied = asset_classes.get(symbol)
+        if supplied:
+            return supplied
+    return ASSET_CLASS_CRYPTO if is_crypto_symbol(symbol) else ASSET_CLASS_EQUITY
+
+
+def _missing_fraction(row: pd.Series, asset_class: str) -> float:
+    """Fraction of the row's APPLICABLE features that are NaN."""
+    expected = applicable_features(asset_class, [str(c) for c in row.index])
+    if not expected:
+        return 0.0
+    present = int(row.loc[expected].notna().sum())
+    return 1.0 - present / len(expected)
+
+
 def _confidence(missing_fraction: float, coverage: float, dispersion: float) -> float:
     conf = (1.0 - missing_fraction) * coverage / (1.0 + max(0.0, dispersion))
     if missing_fraction > MISSING_CLAMP_THRESHOLD:
@@ -117,9 +152,18 @@ def _opt(value: float | None) -> float | None:
 
 
 def score_universe(
-    bundle: ModelBundle, features: pd.DataFrame, as_of: date
+    bundle: ModelBundle,
+    features: pd.DataFrame,
+    as_of: date,
+    *,
+    asset_classes: Mapping[str, str] | None = None,
 ) -> list[QuantScore]:
     """Score every symbol in ``features`` (indexed by symbol) at ``as_of``.
+
+    ``asset_classes`` (symbol -> ``equity`` | ``etf`` | ``crypto``, e.g. from
+    ``catalog.asset_classes_for``) sets each row's coverage denominator; when
+    omitted, crypto is inferred from the symbol form and everything else is
+    treated as an equity.
 
     Deterministic: rank ties break by symbol; identical inputs produce
     identical rows.
@@ -134,7 +178,11 @@ def score_universe(
     if vol_raw is not None:
         vol = np.exp(vol_raw) if bundle.vol_is_log else vol_raw
 
-    missing_fraction = np.asarray(features.isna().mean(axis=1), dtype=float)
+    classes = [_asset_class(sym, asset_classes) for sym in symbols]
+    missing_fraction = np.asarray(
+        [_missing_fraction(features.iloc[i], classes[i]) for i in range(len(features))],
+        dtype=float,
+    )
     coverage = np.asarray(
         [
             _coverage_fraction(features.iloc[i], bundle.train_feature_quantiles)

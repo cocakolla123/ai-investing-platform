@@ -209,6 +209,13 @@ class Settings(BaseSettings):
     # refuse when window start <= cutoff + margin unless the run explicitly
     # acknowledges (--acknowledge-model-knowledge, recorded in config_json).
     replay_cutoff_margin_days: int = 30
+    # Minimum asset-class-aware feature_coverage a symbol needs before replay
+    # will rank it (campaign findings Phase 1). Below it the name abstains
+    # instead of competing for a deep-dive slot off a mostly-empty feature
+    # row. This is the platform default that composition roots pass into
+    # ``ReplayConfig.min_feature_coverage`` (which is what actually
+    # participates in the run's config_hash).
+    replay_min_feature_coverage: float = 0.35
 
     # --- Learning loop (doc 10; journal retrieval feeds dossier contexts) ---
     journal_retrieval_enabled: bool = True

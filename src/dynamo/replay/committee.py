@@ -252,12 +252,16 @@ def committee_shortlist(
     """(all quant scores, deep-dive shortlist) for day D — the quant runner's
     own selection logic, capped at ``committee_deep_dives_per_day``.
     ``bundle`` is the trained quant bundle when the run pins a
-    ``quant_model_version`` (Phase 2); None keeps baseline-v0 abstention."""
+    ``quant_model_version`` (Phase 2); None keeps baseline-v0 abstention.
+    Names below ``config.min_feature_coverage`` abstain rather than compete
+    for a deep-dive slot (campaign findings Phase 1)."""
     universe = gw.universe(config.universe_tiers)
     scores = quant_scores_for(
         gw, universe, day, config.quant_score_max_age_days, bundle=bundle
     )
-    synth = synthesize_verdicts(scores, day, config.horizon_sessions)
+    synth = synthesize_verdicts(
+        scores, day, config.horizon_sessions, config.min_feature_coverage
+    )
     watchlist = synthesize_watchlist(synth, day)
     shortlist = [w.symbol for w in watchlist[: config.committee_deep_dives_per_day]]
     return scores, shortlist

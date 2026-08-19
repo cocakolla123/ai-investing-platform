@@ -93,6 +93,7 @@ from dynamo.domain.models.risk import RegimeState, RiskConfig
 from dynamo.learning.experience import PathInputs, TradeFacts, build_experience
 from dynamo.portfolio.config import ConstructionConfig
 from dynamo.portfolio.constructor import AdvisoryInputs, RuleBasedConstructor
+from dynamo.research.quant.catalog import asset_classes_for
 from dynamo.research.quant.features import build_features
 from dynamo.research.quant.scoring import ModelBundle, score_universe
 from dynamo.risk.engine import RiskEngine, RiskEngineInputs
@@ -165,6 +166,13 @@ class ReplayConfig(BaseModel):
     # automatically like every field, so a ballast baseline re-run can never
     # collide with the cash baseline's run id.
     ballast_symbol: str = ""
+    # Minimum asset-class-aware feature_coverage a symbol needs before it may
+    # be ranked at all (campaign findings Phase 1): below it the name abstains
+    # instead of competing for a deep-dive slot on a feature matrix that is
+    # mostly holes. Defaults to Settings.replay_min_feature_coverage's value;
+    # in config_hash like every field, so raising or lowering the gate yields
+    # a distinct run id. 0.0 restores the pre-gate behavior bit-for-bit.
+    min_feature_coverage: float = Field(default=0.35, ge=0.0, le=1.0)
     code_version: str = ""
 
     @property
@@ -228,7 +236,10 @@ class RunSink(Protocol):
 
 
 def synthesize_verdicts(
-    scores: Mapping[str, QuantScore], as_of: date, horizon_sessions: int
+    scores: Mapping[str, QuantScore],
+    as_of: date,
+    horizon_sessions: int,
+    min_feature_coverage: float = 0.0,
 ) -> dict[str, CommitteeVerdict]:
     """Deterministic quant-only verdict synthesis (NO LLM).
 
@@ -237,6 +248,13 @@ def synthesize_verdicts(
     - only symbols with a non-None ``expected_excess_return`` participate;
       baseline-v0's all-None scores therefore synthesize NOTHING — honest
       abstention, exactly what a quant-only night without models produces;
+    - symbols whose ``feature_coverage`` is below ``min_feature_coverage``
+      ABSTAIN (no verdict at all) instead of being ranked off a feature
+      matrix that is mostly holes — a structurally handicapped name should
+      not compete for the run's scarcest resource, a deep-dive slot. The
+      coverage denominator is asset-class aware (``scoring.score_universe``),
+      so this gate catches genuinely thin DATA, not "is an ETF". 0.0 (the
+      default) disables the gate and restores prior behavior bit-for-bit;
     - percentile = cross-sectional rank of expected excess return among
       today's scored symbols, in (0, 1] (1 = best; ties break by symbol);
     - action: AVOID when ``downside_prob >= 0.5``; else BUY when percentile
@@ -251,6 +269,7 @@ def synthesize_verdicts(
         (sym, s)
         for sym, s in sorted(scores.items())
         if s.expected_excess_return is not None
+        and float(s.feature_coverage) >= min_feature_coverage
     ]
     if not scored:
         return {}
@@ -394,7 +413,11 @@ def quant_scores_for(
         features = build_features(inputs, day, missing)
         if not features.empty:
             active = bundle if bundle is not None else ModelBundle(model_version="baseline-v0")
-            for s in score_universe(active, features, day):
+            # Asset classes from the gateway's own sector map, so an ETF's
+            # missing fundamentals do not read as missing DATA (they are the
+            # expected shape of an index fund) — see scoring.score_universe.
+            classes = asset_classes_for(missing, getattr(inputs, "sector_map", {}) or {})
+            for s in score_universe(active, features, day, asset_classes=classes):
                 persisted[s.symbol] = s
     return persisted
 
@@ -824,7 +847,9 @@ class ReplayRunner:
                     if sym in tradable
                 }
             else:
-                synth = synthesize_verdicts(quant_scores, day, cfg.horizon_sessions)
+                synth = synthesize_verdicts(
+                    quant_scores, day, cfg.horizon_sessions, cfg.min_feature_coverage
+                )
             synth = self._with_horizon_exits(synth, open_lots, day, i)
             watchlist = synthesize_watchlist(synth, day)
 

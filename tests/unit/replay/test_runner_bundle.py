@@ -74,6 +74,11 @@ def _run(fixture, *, version: str, factory, gateway_cls=NoPersistedScoresGateway
         label="bundle-test",
         horizon_sessions=3,
         quant_model_version=version,
+        # The fake gateway returns an EMPTY FeatureInputs on purpose (the stub
+        # bundle predicts from the row index, not from feature values), so
+        # every row's coverage is ~1/51. This test is about bundle wiring, not
+        # the coverage gate — the gate has its own tests.
+        min_feature_coverage=0.0,
     )
     exp_repo = FakeExperienceRepo()
     run_repo = FakeRunRepo()
