@@ -138,6 +138,92 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="universe tier(s) to replay (repeatable; default: 1 3)",
     )
+    run.add_argument(
+        "--min-feature-coverage",
+        type=float,
+        default=None,
+        help=(
+            "minimum asset-class-aware feature_coverage a symbol needs before "
+            "replay ranks it at all; below it the name abstains instead of "
+            "competing for a deep-dive slot off a mostly-empty feature row "
+            "(default: Settings.replay_min_feature_coverage; 0 restores the "
+            "pre-gate behavior). Part of config_hash/run id"
+        ),
+    )
+    shipping = run.add_mutually_exclusive_group()
+    shipping.add_argument(
+        "--require-shipping-bundle",
+        dest="require_shipping_bundle",
+        action="store_true",
+        default=None,
+        help=(
+            "preflight ERRORS when the pinned quant bundle's training report "
+            "says ships_ok=False on any task (default: Settings"
+            ".replay_require_shipping_bundle). Run metadata only — never part "
+            "of config_hash"
+        ),
+    )
+    shipping.add_argument(
+        "--no-require-shipping-bundle",
+        dest="require_shipping_bundle",
+        action="store_false",
+        default=None,
+        help=(
+            "downgrade the preflight ship gate to a loud WARNING — e.g. to "
+            "deliberately re-run a control experiment on a bundle that lost "
+            "to its own baseline"
+        ),
+    )
+    run.add_argument(
+        "--candidate-percentile",
+        type=float,
+        default=None,
+        help=(
+            "committee mode: minimum cross-sectional percentile a name needs "
+            "to be ELIGIBLE for a deep dive (default: Settings"
+            ".replay_shortlist_candidate_percentile = 0.6, the top 40%%). "
+            "Distinct from the BUY threshold, which is unchanged: this widens "
+            "what may be DEBATED, not what counts as a BUY. Part of "
+            "config_hash/run id"
+        ),
+    )
+    run.add_argument(
+        "--crypto-slots",
+        type=int,
+        default=None,
+        help=(
+            "committee mode: hard cap on crypto pairs in a day's deep-dive "
+            "slate (default 1; 0 = no crypto deep dives). Part of config_hash"
+        ),
+    )
+    run.add_argument(
+        "--cooldown-sessions",
+        type=int,
+        default=None,
+        help=(
+            "committee mode: exclude any symbol debated in the last K "
+            "sessions of this run (default 5; 0 = off). Part of config_hash"
+        ),
+    )
+    run.add_argument(
+        "--rotation-slots",
+        type=int,
+        default=None,
+        help=(
+            "committee mode: slots reserved for the highest-ranked candidate "
+            "NOT debated in the last --rotation-lookback-sessions sessions, so "
+            "the universe gets swept (default 1). Part of config_hash"
+        ),
+    )
+    run.add_argument(
+        "--rotation-lookback-sessions",
+        type=int,
+        default=None,
+        help=(
+            "committee mode: how far back the rotation slot looks for an "
+            "unseen name (default 20). Part of config_hash"
+        ),
+    )
     run.add_argument("--initial-equity", type=float, default=100_000.0)
     run.add_argument("--horizon-sessions", type=int, default=20)
     run.add_argument(
@@ -326,12 +412,58 @@ def _bundle_factory(engine: Any) -> Any:
     return load
 
 
-def _preflight_extras(engine: Any, config: Any, *, skip: bool) -> dict[str, Any] | None:
+def _selection_kwargs(args: argparse.Namespace, settings: Any) -> dict[str, Any]:
+    """``ReplayConfig`` selection fields: the CLI flag when given, else the
+    ``Settings`` default (campaign findings items 19 + the Phase-1 coverage
+    gate, whose Settings field previously had no reader at all — the literal
+    ``ReplayConfig`` default was what actually applied).
+
+    Every one of these participates in ``config_hash``, so changing any of
+    them yields a distinct, reproducible run id.
+    """
+
+    def pick(flag: str, setting: str) -> Any:
+        value = getattr(args, flag, None)
+        return getattr(settings, setting) if value is None else value
+
+    return {
+        "min_feature_coverage": pick(
+            "min_feature_coverage", "replay_min_feature_coverage"
+        ),
+        "shortlist_candidate_percentile": pick(
+            "candidate_percentile", "replay_shortlist_candidate_percentile"
+        ),
+        "shortlist_crypto_slots": pick(
+            "crypto_slots", "replay_shortlist_crypto_slots"
+        ),
+        "shortlist_cooldown_sessions": pick(
+            "cooldown_sessions", "replay_shortlist_cooldown_sessions"
+        ),
+        "shortlist_rotation_slots": pick(
+            "rotation_slots", "replay_shortlist_rotation_slots"
+        ),
+        "shortlist_rotation_lookback_sessions": pick(
+            "rotation_lookback_sessions",
+            "replay_shortlist_rotation_lookback_sessions",
+        ),
+    }
+
+
+def _preflight_extras(
+    engine: Any,
+    config: Any,
+    *,
+    skip: bool,
+    require_shipping_bundle: bool | None = None,
+) -> dict[str, Any] | None:
     """The ``{"preflight": ...}`` config_json extras, or ``None`` on failure.
 
     Runs :func:`dynamo.replay.preflight.run_preflight` before EVERY run.
     ``skip=True`` records the skip in run metadata instead of checking (kept
     out of ``ReplayConfig`` so the deterministic run id never changes).
+    ``require_shipping_bundle`` (``--[no-]require-shipping-bundle``) decides
+    whether a bundle that failed its own ship gate is an ERROR or a loud
+    warning; ``None`` reads ``Settings.replay_require_shipping_bundle``.
     """
     from dynamo.replay.preflight import PreflightError, run_preflight
 
@@ -339,7 +471,9 @@ def _preflight_extras(engine: Any, config: Any, *, skip: bool) -> dict[str, Any]
         print("preflight SKIPPED (--skip-preflight) — skip recorded in run metadata")
         return {"preflight": {"skipped": True}}
     try:
-        report = run_preflight(engine, config)
+        report = run_preflight(
+            engine, config, require_shipping_bundle=require_shipping_bundle
+        )
     except PreflightError as exc:
         print("preflight FAILED — refusing to run:")
         for check in exc.report.checks:
@@ -359,6 +493,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # committee run's PERSISTED verdicts (ReplayRepository.verdicts_for).
     if args.mode == "committee":
         return _cmd_run_committee(args)
+    from dynamo.config.settings import Settings
     from dynamo.persistence.repositories.experience import ExperienceRepository
     from dynamo.persistence.repositories.replay import ReplayRepository
     from dynamo.replay.gateway import HistoricalDataGateway
@@ -366,6 +501,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     engine = _engine(args.database_url)
     config = ReplayConfig(
+        **_selection_kwargs(args, Settings()),
         start=args.start,
         end=args.end,
         mode=args.mode,
@@ -384,7 +520,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
         ballast_symbol=args.ballast,
         code_version=args.code_version,
     )
-    extras = _preflight_extras(engine, config, skip=args.skip_preflight)
+    extras = _preflight_extras(
+        engine,
+        config,
+        skip=args.skip_preflight,
+        require_shipping_bundle=args.require_shipping_bundle,
+    )
     if extras is None:
         return 1
     replay_repo = ReplayRepository(engine)
@@ -530,6 +671,7 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
     engine = _engine(args.database_url)
     run_repo = ReplayRepository(engine)
     config = ReplayConfig(
+        **_selection_kwargs(args, settings),
         start=args.start,
         end=args.end,
         mode="committee",
@@ -544,7 +686,12 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         within_run_learning=not args.no_within_run_learning,
         code_version=args.code_version,
     )
-    extras = _preflight_extras(engine, config, skip=args.skip_preflight)
+    extras = _preflight_extras(
+        engine,
+        config,
+        skip=args.skip_preflight,
+        require_shipping_bundle=args.require_shipping_bundle,
+    )
     if extras is None:
         return 1
     # Network isolation (Phase 4): the embedder must never download model
@@ -560,8 +707,14 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
     prior = run_repo.get_run(config.run_id)
     prior_spent = float(prior["spent_usd"]) if prior is not None else 0.0
     done_days: frozenset[date] = frozenset()
+    # Persisted (day -> debated symbols) for this run: the resume skip list
+    # AND the shortlist cooldown/rotation history, so a resumed run does not
+    # restart its diversity windows empty and re-debate what it just covered.
+    prior_dives: dict[date, list[str]] = {}
     if prior is not None:
-        done_days = frozenset(v["as_of"] for v in run_repo.verdicts_for(config.run_id))
+        for verdict in run_repo.verdicts_for(config.run_id):
+            prior_dives.setdefault(verdict["as_of"], []).append(verdict["symbol"])
+        done_days = frozenset(prior_dives)
     budget = ReplayBudget(
         cap_usd=args.max_usd,
         run_repo=run_repo,
@@ -589,6 +742,7 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
             acknowledge_model_knowledge=args.acknowledge_model_knowledge,
             cutoff_margin_days=settings.replay_cutoff_margin_days,
             resume_skip_days=done_days,
+            prior_dives=prior_dives,
         )
     except ModelKnowledgeError as exc:
         print(f"model knowledge gate BLOCKED the run ($0 spent):\n  {exc}")

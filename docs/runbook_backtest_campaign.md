@@ -276,6 +276,30 @@ Committee mode is sizing-free: it produces verdicts once; the three bankrolls re
 for free in step 9. Within-run learning is on by default (live parity: month 2 benefits
 from month 1's resolved experiences, firewalled to this run).
 
+### Shortlist diversity knobs (campaign findings item 19)
+
+The daily slate is no longer `argmax_k(expected_excess_return)` — that debated WMT on 52 of
+74 days in the control run and never once reached AAPL/GOOGL/AMZN/MSFT. Selection now runs a
+sector-bucketed round-robin over a widened candidate band, with a crypto cap, a cooldown and
+a rotation slot. Defaults come from `Settings` and are overridable per run (each is part of
+`config_hash`, so a different setting means a different, reproducible run id):
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--candidate-percentile` | 0.6 | Eligibility band for a deep dive (top 40%). **Separate from the BUY threshold**, which is unchanged — this widens what may be *debated*, never what counts as a BUY |
+| `--crypto-slots` | 1 | Hard cap on crypto pairs per day (0 disables crypto dives) |
+| `--cooldown-sessions` | 5 | Exclude names debated in the last K sessions |
+| `--rotation-slots` | 1 | Slots reserved for the longest-unseen candidate |
+| `--rotation-lookback-sessions` | 20 | How far back "unseen" looks |
+| `--min-feature-coverage` | 0.35 | Coverage gate below which a name abstains instead of competing for a slot |
+
+The cooldown history is seeded from persisted `replay_verdicts`, so a resumed run continues
+its rotation instead of re-debating the days it just covered. If the cooldown would leave a
+day short of candidates (tiny universe), the stalest names backfill — the crypto cap never
+relaxes. Preflight's ship gate is likewise overridable per run with
+`--require-shipping-bundle` / `--no-require-shipping-bundle` (run metadata, never
+`config_hash`).
+
 ### Claude Code subscription backend (ADR-0014) — optional
 
 With `RESEARCH_BACKEND=claude_code` (or `--backend claude_code` on the command above)

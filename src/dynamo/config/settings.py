@@ -222,6 +222,20 @@ class Settings(BaseSettings):
     # REPLAY_REQUIRE_SHIPPING_BUNDLE=false to downgrade the refusal to a loud
     # warning — e.g. to deliberately re-run a control experiment.
     replay_require_shipping_bundle: bool = True
+    # Deep-dive shortlist diversity defaults (campaign findings item 19).
+    # Platform defaults that composition roots pass into the matching
+    # ``ReplayConfig.shortlist_*`` fields (which are what actually
+    # participate in the run's config_hash). The control run's plain
+    # top-4-by-score slate debated WMT on 70% of days, never once debated
+    # AAPL/GOOGL/AMZN/MSFT, and gave crypto 29% of the slots on 9% of the
+    # universe. Candidate band 0.6 (= top 40%) is deliberately WIDER than
+    # the BUY percentile, which is unchanged: this widens what may be
+    # DEBATED, never what counts as a BUY.
+    replay_shortlist_candidate_percentile: float = 0.6
+    replay_shortlist_crypto_slots: int = 1
+    replay_shortlist_cooldown_sessions: int = 5
+    replay_shortlist_rotation_slots: int = 1
+    replay_shortlist_rotation_lookback_sessions: int = 20
 
     # --- Learning loop (doc 10; journal retrieval feeds dossier contexts) ---
     journal_retrieval_enabled: bool = True

@@ -924,6 +924,154 @@ def test_replay_run_parses_skip_preflight() -> None:
     assert args.skip_preflight is False
 
 
+def test_selection_flags_default_to_none_so_settings_apply() -> None:
+    """Unset flags stay None; ``_selection_kwargs`` then reads Settings —
+    closing the loop on ``Settings.replay_min_feature_coverage``, which had
+    NO reader before (the ReplayConfig literal default was what applied)."""
+    parser = replay_cli._build_parser()
+    args = parser.parse_args(
+        ["run", "--start", "2026-06-01", "--end", "2026-06-10", "--run-label", "x"]
+    )
+    for flag in (
+        "min_feature_coverage",
+        "candidate_percentile",
+        "crypto_slots",
+        "cooldown_sessions",
+        "rotation_slots",
+        "rotation_lookback_sessions",
+        "require_shipping_bundle",
+    ):
+        assert getattr(args, flag) is None, flag
+
+    class FakeSelectionSettings:
+        replay_min_feature_coverage = 0.42
+        replay_shortlist_candidate_percentile = 0.55
+        replay_shortlist_crypto_slots = 2
+        replay_shortlist_cooldown_sessions = 7
+        replay_shortlist_rotation_slots = 3
+        replay_shortlist_rotation_lookback_sessions = 30
+
+    assert replay_cli._selection_kwargs(args, FakeSelectionSettings()) == {
+        "min_feature_coverage": 0.42,
+        "shortlist_candidate_percentile": 0.55,
+        "shortlist_crypto_slots": 2,
+        "shortlist_cooldown_sessions": 7,
+        "shortlist_rotation_slots": 3,
+        "shortlist_rotation_lookback_sessions": 30,
+    }
+    # …and an explicit flag beats the Settings default.
+    args.crypto_slots = 0
+    assert replay_cli._selection_kwargs(args, FakeSelectionSettings())[
+        "shortlist_crypto_slots"
+    ] == 0
+
+
+def test_selection_flags_reach_the_replay_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every new flag lands on ReplayConfig — and therefore in config_hash,
+    so a diversity setting can never share a run id with another."""
+    import dynamo.replay.preflight as preflight_mod
+    import dynamo.replay.runner as runner_mod
+
+    monkeypatch.setattr(replay_cli, "_engine", lambda url: object())
+    monkeypatch.setattr(
+        preflight_mod,
+        "run_preflight",
+        lambda engine, config, **kw: pytest.fail("skipped"),
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        def run(self, progress: Any = None) -> Any:
+            @dataclass
+            class R:
+                run_id: str = "replay-fake"
+                status: str = "completed"
+                sessions: tuple = ()
+                decisions: tuple = ()
+                fills: tuple = ()
+                experiences: tuple = ()
+                equity_curve: tuple = ()
+
+            return R()
+
+    monkeypatch.setattr(runner_mod, "ReplayRunner", FakeRunner)
+    rc = replay_cli.main(
+        [
+            "run", "--start", "2026-06-01", "--end", "2026-06-10",
+            "--run-label", "x", "--skip-preflight",
+            "--min-feature-coverage", "0.5",
+            "--candidate-percentile", "0.45",
+            "--crypto-slots", "0",
+            "--cooldown-sessions", "9",
+            "--rotation-slots", "2",
+            "--rotation-lookback-sessions", "25",
+        ]
+    )
+    assert rc == 0
+    config = captured["config"]
+    assert config.min_feature_coverage == 0.5
+    assert config.shortlist_candidate_percentile == 0.45
+    assert config.shortlist_crypto_slots == 0
+    assert config.shortlist_cooldown_sessions == 9
+    assert config.shortlist_rotation_slots == 2
+    assert config.shortlist_rotation_lookback_sessions == 25
+    default = config.model_copy(update={"shortlist_crypto_slots": 1})
+    assert default.run_id != config.run_id  # in config_hash
+
+
+def test_require_shipping_bundle_flag_reaches_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Settings.replay_require_shipping_bundle`` is overridable per run:
+    the flag threads into run_preflight (run metadata, never config_hash)."""
+    import dynamo.replay.preflight as preflight_mod
+    import dynamo.replay.runner as runner_mod
+
+    monkeypatch.setattr(replay_cli, "_engine", lambda url: object())
+    seen: dict[str, Any] = {}
+
+    def spy_preflight(engine: Any, config: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        from dynamo.replay.preflight import PreflightReport
+
+        return PreflightReport(checks=())
+
+    monkeypatch.setattr(preflight_mod, "run_preflight", spy_preflight)
+
+    class FakeRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def run(self, progress: Any = None) -> Any:
+            @dataclass
+            class R:
+                run_id: str = "replay-fake"
+                status: str = "completed"
+                sessions: tuple = ()
+                decisions: tuple = ()
+                fills: tuple = ()
+                experiences: tuple = ()
+                equity_curve: tuple = ()
+
+            return R()
+
+    monkeypatch.setattr(runner_mod, "ReplayRunner", FakeRunner)
+    base = [
+        "run", "--start", "2026-06-01", "--end", "2026-06-10", "--run-label", "x",
+    ]
+    assert replay_cli.main([*base, "--no-require-shipping-bundle"]) == 0
+    assert seen["require_shipping_bundle"] is False
+    assert replay_cli.main([*base, "--require-shipping-bundle"]) == 0
+    assert seen["require_shipping_bundle"] is True
+    assert replay_cli.main(base) == 0
+    assert seen["require_shipping_bundle"] is None  # Settings decides
+
+
 def test_replay_quant_run_refuses_on_preflight_failure(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -931,7 +1079,7 @@ def test_replay_quant_run_refuses_on_preflight_failure(
 
     monkeypatch.setattr(replay_cli, "_engine", lambda url: object())
 
-    def failing_preflight(engine: Any, config: Any) -> Any:
+    def failing_preflight(engine: Any, config: Any, **kwargs: Any) -> Any:
         raise _preflight_error()
 
     monkeypatch.setattr(preflight_mod, "run_preflight", failing_preflight)
@@ -1004,11 +1152,18 @@ def test_replay_committee_preflight_runs_before_any_client(
         model_screen = "claude-haiku-4-5"
         model_analyst = "claude-sonnet-5"
         model_arbiter = "claude-opus-5"
+        # Selection defaults the CLI threads into ReplayConfig.
+        replay_min_feature_coverage = 0.35
+        replay_shortlist_candidate_percentile = 0.6
+        replay_shortlist_crypto_slots = 1
+        replay_shortlist_cooldown_sessions = 5
+        replay_shortlist_rotation_slots = 1
+        replay_shortlist_rotation_lookback_sessions = 20
 
     monkeypatch.setattr("dynamo.config.settings.Settings", lambda: KeyedSettings())
     monkeypatch.setattr(replay_cli, "_engine", lambda url: object())
 
-    def failing_preflight(engine: Any, config: Any) -> Any:
+    def failing_preflight(engine: Any, config: Any, **kwargs: Any) -> Any:
         raise _preflight_error()
 
     monkeypatch.setattr(preflight_mod, "run_preflight", failing_preflight)
