@@ -2,10 +2,11 @@
 
 Per session day D in [start, end]:
 
-1. shortlist: reuse the quant runner's selection logic — point-in-time quant
-   scores through the day's gateway -> ``synthesize_verdicts`` ->
-   ``synthesize_watchlist`` (BUY candidates ranked by conviction) -> top
-   ``committee_deep_dives_per_day`` symbols. Days without BUY candidates run
+1. shortlist: point-in-time quant scores through the day's gateway ->
+   ``shortlist_candidates`` (the ranked candidate band) ->
+   ``select_shortlist`` (sector-bucketed round-robin, crypto slot cap,
+   cooldown on recently debated names, one rotation slot) ->
+   ``committee_deep_dives_per_day`` symbols. Days without candidates run
    zero deep dives (honest abstention, $0);
 2. historical dossier context assembled STRICTLY via the gateway: instrument
    profile, quant score, price stats, as-of news (if present), as-of macro
@@ -71,9 +72,9 @@ from dynamo.replay.runner import (
     _path_inputs,
     _sessions_between,
     quant_scores_for,
-    synthesize_verdicts,
-    synthesize_watchlist,
+    shortlist_candidates,
 )
+from dynamo.replay.shortlist import SessionHistory, select_shortlist
 from dynamo.research.committee import (
     TEMPORAL_DISCIPLINE,
     CommitteeEngine,
@@ -255,22 +256,52 @@ def committee_shortlist(
     config: ReplayConfig,
     day: date,
     bundle: ModelBundle | None = None,
+    history: SessionHistory = (),
 ) -> tuple[dict[str, QuantScore], list[str]]:
-    """(all quant scores, deep-dive shortlist) for day D — the quant runner's
-    own selection logic, capped at ``committee_deep_dives_per_day``.
-    ``bundle`` is the trained quant bundle when the run pins a
-    ``quant_model_version`` (Phase 2); None keeps baseline-v0 abstention.
-    Names below ``config.min_feature_coverage`` abstain rather than compete
-    for a deep-dive slot (campaign findings Phase 1)."""
+    """(all quant scores, deep-dive shortlist) for day D.
+
+    Scoring is the quant runner's own: ``bundle`` is the trained quant bundle
+    when the run pins a ``quant_model_version`` (Phase 2), None keeps
+    baseline-v0 abstention, and names below ``config.min_feature_coverage``
+    abstain rather than compete for a deep-dive slot (campaign findings
+    Phase 1).
+
+    SELECTION is no longer ``argmax_k(expected_excess_return)`` (campaign
+    findings item 19: that debated WMT on 52 of 74 days and never once
+    debated AAPL/GOOGL/AMZN/MSFT). The ranked candidate BAND
+    (``shortlist_candidate_percentile`` — wider than the BUY threshold,
+    which is unchanged) goes through
+    :func:`dynamo.replay.shortlist.select_shortlist`: sector-bucketed
+    round-robin, a hard crypto slot cap, a cooldown on recently debated
+    names, and a slot reserved for the longest-unseen candidate.
+
+    ``history`` is this run's prior sessions in ascending order, each with
+    the symbols debated that day — the driver carries it across the run AND
+    seeds it from persisted ``replay_verdicts``, so a resumed run's cooldown
+    is continuous. Deterministic throughout: same config + same data => same
+    slate.
+    """
     universe = gw.universe(config.universe_tiers)
     scores = quant_scores_for(
         gw, universe, day, config.quant_score_max_age_days, bundle=bundle
     )
-    synth = synthesize_verdicts(
-        scores, day, config.horizon_sessions, config.min_feature_coverage
+    candidates = shortlist_candidates(
+        scores,
+        min_feature_coverage=config.min_feature_coverage,
+        candidate_percentile=config.shortlist_candidate_percentile,
     )
-    watchlist = synthesize_watchlist(synth, day)
-    shortlist = [w.symbol for w in watchlist[: config.committee_deep_dives_per_day]]
+    if not candidates:
+        return scores, []
+    shortlist = select_shortlist(
+        candidates,
+        config.committee_deep_dives_per_day,
+        sectors=gw.sectors(candidates),
+        history=history,
+        crypto_slots=config.shortlist_crypto_slots,
+        cooldown_sessions=config.shortlist_cooldown_sessions,
+        rotation_slots=config.shortlist_rotation_slots,
+        rotation_lookback_sessions=config.shortlist_rotation_lookback_sessions,
+    )
     return scores, shortlist
 
 
@@ -559,6 +590,7 @@ class CommitteeReplay:
         acknowledge_model_knowledge: bool = False,
         cutoff_margin_days: int = DEFAULT_CUTOFF_MARGIN_DAYS,
         resume_skip_days: Collection[date] = (),
+        prior_dives: Mapping[date, Sequence[str]] | None = None,
     ) -> None:
         if config.mode != "committee":
             raise ValueError(f"CommitteeReplay requires mode='committee', got {config.mode!r}")
@@ -620,6 +652,14 @@ class CommitteeReplay:
         # and today's within-run-learning retrieval still sees them through
         # the gateway's DB-backed reads.
         self._resume_skip_days = frozenset(resume_skip_days)
+        # Shortlist diversity history (campaign findings item 19): which
+        # symbols were debated on which session of THIS run. Seeded from the
+        # persisted replay_verdicts the composition layer passes in, so a
+        # resumed run's cooldown/rotation windows are continuous rather than
+        # restarting empty (which would re-debate the names just covered).
+        self._debated: dict[date, tuple[str, ...]] = {
+            day: tuple(sorted(symbols)) for day, symbols in (prior_dives or {}).items()
+        }
 
     def _resolve_bundle(self) -> ModelBundle | None:
         version = self.config.quant_model_version
@@ -673,11 +713,21 @@ class CommitteeReplay:
                     experiences.extend(
                         self._resolve_pending(gw, sessions, day_index, dives, resolved, run_id)
                     )
-                scores, shortlist = committee_shortlist(gw, cfg, day, bundle=self._bundle)
+                history = tuple(
+                    (session, self._debated.get(session, ()))
+                    for session in sessions[:day_index]
+                )
+                scores, shortlist = committee_shortlist(
+                    gw, cfg, day, bundle=self._bundle, history=history
+                )
                 if not shortlist:
                     if progress is not None:
                         progress(f"{day.isoformat()} shortlist empty — no deep dives ($0)")
                     continue
+                # Selection, not completion, drives the cooldown: a name that
+                # consumed a slot today must not consume tomorrow's too, even
+                # if its dive came back unusable.
+                self._debated[day] = tuple(shortlist)
                 day_dives = self._run_day(gw, day, shortlist, scores)
                 if day_dives:
                     self._runs.insert_verdicts(_verdict_rows(run_id, day_dives))

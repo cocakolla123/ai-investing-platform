@@ -290,18 +290,50 @@ def test_requires_committee_mode(frames: Any) -> None:
         )
 
 
-def test_shortlist_reuses_runner_selection_capped(frames: Any) -> None:
+def test_shortlist_reuses_runner_scoring_capped(frames: Any) -> None:
     sessions, bars, scores = frames
     day = sessions[-1]
     gw = CommitteeGateway(day, bars, scores)
     all_scores, shortlist = committee_shortlist(gw, _config(frames), day)
-    # Runner parity: only the BUY-synthesized names, ranked by conviction,
-    # capped at committee_deep_dives_per_day (=2). EER ranks make ILLQ + LIQ
-    # the two BUYs (see test_runner fixtures).
+    # Runner parity on the SCORING side; selection is the diversity selector
+    # (campaign findings item 19) with an empty history: rank order, capped
+    # at committee_deep_dives_per_day (=2). EER ranks make ILLQ + LIQ the two
+    # best candidates (see test_runner fixtures).
     assert shortlist == ["ILLQ", "LIQ"]
     assert set(all_scores) == set(UNIVERSE)
     one = committee_shortlist(gw, _config(frames, committee_deep_dives_per_day=1), day)[1]
     assert one == ["ILLQ"]
+
+
+def test_shortlist_cooldown_forces_a_new_name_the_next_session(frames: Any) -> None:
+    """The fixation fix at driver level: yesterday's slate is on cooldown, so
+    today's pulls the next candidate in (AAA, which the old top-k slice would
+    never have reached on a frozen ranking)."""
+    sessions, bars, scores = frames
+    day = sessions[-1]
+    gw = CommitteeGateway(day, bars, scores)
+    history = ((sessions[-2], ("ILLQ", "LIQ")),)
+    _, shortlist = committee_shortlist(gw, _config(frames), day, history=history)
+    assert "AAA" in shortlist
+    # …and the wider candidate band is what made AAA reachable at all: at the
+    # old top-20% band it is not even a candidate.
+    narrow = _config(frames, shortlist_candidate_percentile=0.8)
+    assert "AAA" not in committee_shortlist(gw, narrow, day, history=history)[1]
+
+
+def test_shortlist_is_deterministic_for_the_same_config_and_history(frames: Any) -> None:
+    sessions, bars, scores = frames
+    day = sessions[-1]
+    history = ((sessions[-2], ("ILLQ",)),)
+    slates = {
+        tuple(
+            committee_shortlist(
+                CommitteeGateway(day, bars, scores), _config(frames), day, history=history
+            )[1]
+        )
+        for _ in range(5)
+    }
+    assert len(slates) == 1
 
 
 def test_dossier_context_from_gateway_only_future_news_invisible(frames: Any) -> None:
@@ -605,6 +637,40 @@ def test_resume_skip_days_are_never_resubmitted(frames: Any) -> None:
     assert submitted == set(window[2:]) & submitted  # only non-skipped days
     assert {r["as_of"] for r in run_repo.verdicts}.isdisjoint(done)
     assert sum("skipped (resume)" in line for line in progress) == 2
+
+
+def test_run_rotates_names_across_sessions_via_the_cooldown(frames: Any) -> None:
+    """Across a whole run the driver carries its own debate history, so the
+    slate rotates instead of repeating the top of a frozen ranking — the
+    control run debated WMT on 52 of 74 days."""
+    replay, _model, run_repo, _exp_repo, _cfg = _replay(frames)
+    replay.run()
+    debated = {r["symbol"] for r in run_repo.verdicts}
+    assert "AAA" in debated, "the cooldown must force a third name into the run"
+    per_day = {}
+    for row in run_repo.verdicts:
+        per_day.setdefault(row["as_of"], set()).add(row["symbol"])
+    assert len({frozenset(v) for v in per_day.values()}) > 1  # not one frozen slate
+
+
+def test_resume_seeds_the_cooldown_from_persisted_verdicts(frames: Any) -> None:
+    """A resumed run must not restart its diversity windows empty: the days
+    already persisted seed the cooldown, so the first resumed session does
+    not simply re-debate what the previous attempt just covered."""
+    sessions, _bars, _scores = frames
+    window = sessions[-RUN_SESSIONS:]
+    done = window[:1]
+    replay, _model, run_repo, _exp_repo, _cfg = _replay(
+        frames,
+        resume_skip_days=frozenset(done),
+        prior_dives={done[0]: ["ILLQ", "LIQ"]},
+    )
+    replay.run()
+    first_resumed = min(r["as_of"] for r in run_repo.verdicts)
+    assert first_resumed == window[1]
+    assert "AAA" in {
+        r["symbol"] for r in run_repo.verdicts if r["as_of"] == first_resumed
+    }
 
 
 def test_no_resume_skip_by_default(frames: Any) -> None:

@@ -108,6 +108,13 @@ SIGMA_SESSIONS = 120
 _ANNUALIZE = math.sqrt(252.0)
 
 # --- verdict synthesis thresholds (documented mapping, see synthesize_verdicts)
+# BUY_PERCENTILE governs the verdict ACTION only ("what counts as a BUY").
+# The deep-dive CANDIDATE band is a SEPARATE knob
+# (``ReplayConfig.shortlist_candidate_percentile``, default
+# DEFAULT_CANDIDATE_PERCENTILE): widening the pool the diversity selector
+# draws from must never silently relax what the synthesizer calls a BUY —
+# the two were one constant before the campaign findings, which is why
+# widening the pool was impossible without changing verdicts.
 BUY_PERCENTILE = 0.8
 AVOID_PERCENTILE = 0.2
 DOWNSIDE_AVOID_PROB = 0.5
@@ -115,6 +122,13 @@ HOLD_CONVICTION = 0.5
 # doc 04's downside label threshold: the quant model has no per-name downside
 # magnitude, so the synthesized expectation uses the -10% label boundary.
 DEFAULT_EXPECTED_DOWNSIDE_PCT = 10.0
+
+# Deep-dive candidate band (campaign findings item 19). The control run cut
+# candidates to the top 20% (11 of 55 names) BEFORE taking the top 4, which
+# bought nothing but repetition — with only 4 slots the extra narrowing left
+# the bucketing/cooldown/rotation controls no room to operate. 0.6 = top 40%
+# (~22 of 55).
+DEFAULT_CANDIDATE_PERCENTILE = 0.6
 
 PROMPT_VERSION = "replay-quant-synth-v1"
 
@@ -173,6 +187,27 @@ class ReplayConfig(BaseModel):
     # in config_hash like every field, so raising or lowering the gate yields
     # a distinct run id. 0.0 restores the pre-gate behavior bit-for-bit.
     min_feature_coverage: float = Field(default=0.35, ge=0.0, le=1.0)
+    # --- Deep-dive shortlist diversity (campaign findings item 19). The
+    # control run's plain argmax_4(expected_excess_return) debated WMT on 52
+    # of 74 days and never once debated AAPL/GOOGL/AMZN/MSFT (20 distinct
+    # symbols total; crypto took 29% of slots while being 9% of the
+    # universe). These four knobs are the selection-layer answer; all are in
+    # config_hash like every field, so a diversity setting can never share a
+    # run id with another. See ``dynamo.replay.shortlist.select_shortlist``.
+    # Candidate band: minimum cross-sectional percentile a name needs to be
+    # ELIGIBLE for a deep dive (distinct from BUY_PERCENTILE, which still
+    # governs the verdict action).
+    shortlist_candidate_percentile: float = Field(
+        default=DEFAULT_CANDIDATE_PERCENTILE, ge=0.0, le=1.0
+    )
+    # Hard cap on crypto pairs per day's slate (0 = no crypto deep dives).
+    shortlist_crypto_slots: int = Field(default=1, ge=0)
+    # Exclude any symbol debated in the last K sessions of THIS run.
+    shortlist_cooldown_sessions: int = Field(default=5, ge=0)
+    # Slots reserved for the highest-ranked candidate NOT debated in the last
+    # ``shortlist_rotation_lookback_sessions`` sessions (universe sweep).
+    shortlist_rotation_slots: int = Field(default=1, ge=0)
+    shortlist_rotation_lookback_sessions: int = Field(default=20, ge=0)
     code_version: str = ""
 
     @property
@@ -235,6 +270,60 @@ class RunSink(Protocol):
 # --------------------------------------------------------------------------
 
 
+def ranked_scores(
+    scores: Mapping[str, QuantScore],
+    min_feature_coverage: float = 0.0,
+) -> list[tuple[str, QuantScore, float]]:
+    """``(symbol, score, percentile)`` best-first — the one ranking both
+    verdict synthesis and deep-dive candidate selection read, so the two can
+    never drift apart.
+
+    Only symbols with a non-None ``expected_excess_return`` and
+    ``feature_coverage >= min_feature_coverage`` participate; percentile is
+    the cross-sectional rank in (0, 1] (1 = best) among exactly those.
+    Deterministic: ties break by symbol.
+    """
+    scored = [
+        (sym, s)
+        for sym, s in sorted(scores.items())
+        if s.expected_excess_return is not None
+        and float(s.feature_coverage) >= min_feature_coverage
+    ]
+    order = sorted(scored, key=lambda t: (-(t[1].expected_excess_return or 0.0), t[0]))
+    n = len(order)
+    return [(sym, s, (n - idx) / n) for idx, (sym, s) in enumerate(order)]
+
+
+def shortlist_candidates(
+    scores: Mapping[str, QuantScore],
+    *,
+    min_feature_coverage: float = 0.0,
+    candidate_percentile: float = DEFAULT_CANDIDATE_PERCENTILE,
+) -> list[str]:
+    """The ranked deep-dive CANDIDATE band, best-first (campaign findings 19).
+
+    A candidate is a scored name that (a) clears the coverage gate, (b) sits
+    at or above ``candidate_percentile`` in today's cross-section, (c) has a
+    positive expected excess return, and (d) is not a quant AVOID
+    (``downside_prob >= 0.5``) — the same three substantive filters
+    :func:`synthesize_verdicts` applies when it assigns BUY, but on a
+    SEPARATE, wider percentile knob. At ``candidate_percentile ==
+    BUY_PERCENTILE`` this returns exactly the BUY set in watchlist order,
+    which is the pre-diversity behavior.
+
+    Selection (bucketing, crypto cap, cooldown, rotation) then happens in
+    :func:`dynamo.replay.shortlist.select_shortlist` over this list.
+    """
+    out: list[str] = []
+    for sym, s, percentile in ranked_scores(scores, min_feature_coverage):
+        downside = s.downside_prob
+        if downside is not None and downside >= DOWNSIDE_AVOID_PROB:
+            continue
+        if percentile >= candidate_percentile and float(s.expected_excess_return or 0.0) > 0.0:
+            out.append(sym)
+    return out
+
+
 def synthesize_verdicts(
     scores: Mapping[str, QuantScore],
     as_of: date,
@@ -265,20 +354,9 @@ def synthesize_verdicts(
     - expectations: upside = expected excess return x 100 (pct), downside =
       the doc-04 label boundary (10%), horizon = the run's horizon.
     """
-    scored = [
-        (sym, s)
-        for sym, s in sorted(scores.items())
-        if s.expected_excess_return is not None
-        and float(s.feature_coverage) >= min_feature_coverage
-    ]
-    if not scored:
-        return {}
-    order = sorted(scored, key=lambda t: (-(t[1].expected_excess_return or 0.0), t[0]))
-    n = len(order)
     out: dict[str, CommitteeVerdict] = {}
-    for idx, (sym, s) in enumerate(order):
+    for sym, s, percentile in ranked_scores(scores, min_feature_coverage):
         eer = float(s.expected_excess_return or 0.0)
-        percentile = (n - idx) / n
         downside = s.downside_prob
         if downside is not None and downside >= DOWNSIDE_AVOID_PROB:
             action = Action.AVOID
