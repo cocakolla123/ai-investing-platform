@@ -20,14 +20,14 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0017() -> None:
+def test_revision_chain_is_linear_through_0018() -> None:
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0017" in modules, "0017_replay_equity migration missing"
+    assert "0018" in modules, "0018_alpha_hypotheses migration missing"
     # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0017"}, f"expected 0017 as the single head, got {heads}"
+    assert heads == {"0018"}, f"expected 0018 as the single head, got {heads}"
     assert down["0005"] == "0004"
     assert down["0006"] == "0005"
     assert down["0007"] == "0006"
@@ -41,6 +41,7 @@ def test_revision_chain_is_linear_through_0017() -> None:
     assert down["0015"] == "0014"
     assert down["0016"] == "0015"
     assert down["0017"] == "0016"
+    assert down["0018"] == "0017"
 
 
 def test_0017_targets_replay_equity_and_fills_tables() -> None:
