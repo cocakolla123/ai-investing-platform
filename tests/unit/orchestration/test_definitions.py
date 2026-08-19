@@ -57,6 +57,7 @@ def test_expected_assets_present() -> None:
         "parquet_export",
         "chain_verify_check",
         "experience_completeness_check",
+        "quant_retrain_check",
     }
     assert expected <= names
 

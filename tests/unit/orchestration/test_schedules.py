@@ -41,6 +41,9 @@ EXPECTED_CRONS = {
     "safety_checks_schedule": "20 2 * * *",
     "healthcheck_schedule": "30 2 * * *",
     "weekly_learning_schedule": "0 8 * * 0",
+    # Monthly quant retrain-cadence check (proposal-gated; registered like
+    # every schedule, STOPPED until a human enables it).
+    "quant_retrain_check_schedule": "0 9 1 * *",
 }
 
 BY_NAME = {s.name: s for s in ALL_SCHEDULES}
@@ -88,3 +91,11 @@ def test_crypto_stops_schedule_runs_the_full_stops_job() -> None:
     off-hours; crypto stops get real weekend maintenance)."""
     assert BY_NAME["crypto_stops_schedule"].job.name == "stops_job"
     assert BY_NAME["stops_schedule"].job.name == "stops_job"
+
+
+def test_quant_retrain_check_job_registered() -> None:
+    """The monthly cadence check is a registered job + schedule; enabling it
+    stays a human action (Dagster schedules default to STOPPED)."""
+    from orchestration.schedules import ALL_JOBS
+
+    assert "quant_retrain_check_job" in {j.name for j in ALL_JOBS}

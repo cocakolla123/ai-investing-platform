@@ -381,3 +381,80 @@ def test_run_failure_clustering_below_min_size_opens_nothing() -> None:
     assert counts["clusters"] == 1 and counts["proposals"] == 0
     assert inserted == []
     assert metrics == [3.0]  # the watermark still advances — no re-trigger loop
+
+
+# --- monthly quant retrain-cadence check (proposal-gated) -------------------
+
+
+def _bundle_row(train_end: date | None = date(2026, 6, 30)) -> dict[str, Any]:
+    return {
+        "id": "campaign-v3",
+        "train_end": train_end,
+        "metrics": {"rank_ic_pooled": 0.0486, "rank_ic_t_stat": 3.26, "n_sessions": 500},
+    }
+
+
+def test_quant_retrain_proposal_emitted_at_threshold() -> None:
+    from orchestration.assets.learning_ops import quant_retrain_proposal
+
+    from dynamo.domain.models.learning import ProposalKind, ProposalStatus
+
+    proposal = quant_retrain_proposal(
+        bundle=_bundle_row(), new_sessions=21, as_of=date(2026, 8, 1), now=NOW
+    )
+    assert proposal is not None
+    assert proposal.kind is ProposalKind.RETRAIN
+    assert proposal.target == "quant_bundle"
+    assert proposal.status is ProposalStatus.OPEN
+    assert proposal.id == "retrain:quant_bundle:2026-08-01"  # deterministic/idempotent
+    claims = " | ".join(e.claim for e in proposal.evidence)
+    assert "21 new bar sessions" in claims
+    assert "campaign-v3" in claims and "rank_ic_pooled=0.0486" in claims
+    # The iron law: the proposal PROPOSES a manual train, never performs one.
+    assert "quant_train" in str(proposal.proposed_change["action"])
+
+
+def test_quant_retrain_proposal_skipped_below_threshold() -> None:
+    from orchestration.assets.learning_ops import quant_retrain_proposal
+
+    assert (
+        quant_retrain_proposal(
+            bundle=_bundle_row(), new_sessions=20, as_of=date(2026, 8, 1), now=NOW
+        )
+        is None
+    )
+
+
+def test_quant_retrain_proposal_skipped_without_bundle_or_train_end() -> None:
+    from orchestration.assets.learning_ops import quant_retrain_proposal
+
+    assert (
+        quant_retrain_proposal(
+            bundle=None, new_sessions=99, as_of=date(2026, 8, 1), now=NOW
+        )
+        is None
+    )
+    assert (
+        quant_retrain_proposal(
+            bundle=_bundle_row(train_end=None),
+            new_sessions=99,
+            as_of=date(2026, 8, 1),
+            now=NOW,
+        )
+        is None
+    )
+
+
+def test_quant_retrain_proposal_custom_threshold() -> None:
+    from orchestration.assets.learning_ops import quant_retrain_proposal
+
+    assert (
+        quant_retrain_proposal(
+            bundle=_bundle_row(),
+            new_sessions=5,
+            as_of=date(2026, 8, 1),
+            now=NOW,
+            min_sessions=5,
+        )
+        is not None
+    )

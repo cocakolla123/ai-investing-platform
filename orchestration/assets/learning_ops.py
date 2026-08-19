@@ -1422,6 +1422,142 @@ def experience_completeness_check(
     )
 
 
+# --- monthly quant retrain cadence check (proposal-gated, per the iron law) --
+
+QUANT_RETRAIN_MIN_SESSIONS = 21  # ~one month of trading sessions
+QUANT_SESSION_CLOCK_SYMBOL = "SPY"  # equity session clock (crypto trades 24/7)
+
+
+def quant_retrain_proposal(
+    *,
+    bundle: Any | None,
+    new_sessions: int,
+    as_of: date,
+    now: datetime,
+    min_sessions: int = QUANT_RETRAIN_MIN_SESSIONS,
+) -> Any | None:
+    """RETRAIN proposal when >= ``min_sessions`` new bar sessions exist since
+    the newest registered quant_bundle's train_end — pure core.
+
+    ``bundle`` is a mapping-like row with ``id``/``train_end``/``metrics``
+    (or ``None`` when no quant_bundle was ever registered — silent skip: a
+    retrain cadence for a model that does not exist is meaningless). NEVER
+    trains anything: the output is an OPEN ``improvement_proposals`` row for
+    a human; accepted proposals run ``dynamo.cli.quant_train`` manually.
+    """
+    from dynamo.domain.models.learning import ImprovementProposal, ProposalKind
+    from dynamo.domain.models.research import Evidence, SourceType
+
+    if bundle is None or bundle.get("train_end") is None:
+        return None
+    if new_sessions < min_sessions:
+        return None
+    train_end = bundle["train_end"]
+    metrics = dict(bundle.get("metrics") or {})
+    summary = ", ".join(
+        f"{key}={metrics[key]}"
+        for key in ("rank_ic_pooled", "rank_ic_t_stat", "n_sessions", "n_symbols")
+        if metrics.get(key) is not None
+    )
+    evidence = (
+        Evidence(
+            claim=(
+                f"{new_sessions} new bar sessions accumulated since quant bundle "
+                f"{bundle['id']!r} train_end {train_end} (threshold {min_sessions})"
+            ),
+            source_type=SourceType.PRICE,
+            source_ref=f"bars_1d:{QUANT_SESSION_CLOCK_SYMBOL}:sessions_after:{train_end}",
+            as_of=as_of,
+        ),
+        Evidence(
+            claim=f"current bundle {bundle['id']!r} metrics: {summary or 'none recorded'}",
+            source_type=SourceType.FUNDAMENTAL,
+            source_ref=f"model_versions:{bundle['id']}",
+            as_of=as_of,
+        ),
+    )
+    return ImprovementProposal(
+        id=f"retrain:quant_bundle:{as_of.isoformat()}",
+        created_at=now,
+        kind=ProposalKind.RETRAIN,
+        target="quant_bundle",
+        evidence=evidence,
+        expected_effect=(
+            "refresh the quant bundle on the accumulated sessions; walk-forward "
+            "report card decides GO/NO-GO before any promotion"
+        ),
+        proposed_change={
+            "action": "run dynamo.cli.quant_train with a fresh --label",
+            "train_end_current": str(train_end),
+            "new_sessions": int(new_sessions),
+        },
+    )
+
+
+@dagster_asset(name="quant_retrain_check", group_name=LEARNING_GROUP)
+def quant_retrain_check(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """Monthly retrain-cadence check → at most one OPEN RETRAIN proposal
+    (kind=retrain, target='quant_bundle').
+
+    PROPOSAL-GATED per the iron law: this NEVER trains or promotes anything
+    — training stays a manual ``dynamo.cli.quant_train`` run and promotion
+    stays the promotion pipeline. LLM-free. New-session count uses the SPY
+    equity session clock (crypto's 7-day calendar would overcount). The
+    deterministic per-day proposal id makes re-runs idempotent.
+    """
+    from sqlalchemy import Date as SaDate
+    from sqlalchemy import cast as sa_cast
+    from sqlalchemy.exc import IntegrityError
+
+    from dynamo.persistence.repositories.learning import ProposalRepository
+
+    as_of = utcnow().date()
+    mv = schema.model_versions
+    bundles = _read_df(
+        dynamo,
+        select(mv.c.id, mv.c.train_end, mv.c.metrics, mv.c.created_at)
+        .where(mv.c.model_type == "quant_bundle")
+        .order_by(mv.c.created_at.desc())
+        .limit(1),
+    )
+    if bundles.empty:
+        context.log.info("quant_retrain_check: no registered quant_bundle — skipping")
+        return MaterializeResult(metadata={"skipped": "no quant_bundle registered"})
+    bundle = bundles.to_dict(orient="records")[0]
+    train_end = bundle.get("train_end")
+    new_sessions = 0
+    if train_end is not None:
+        b = schema.bars_1d
+        stmt = select(func.count(func.distinct(sa_cast(b.c.ts, SaDate)))).where(
+            b.c.symbol == QUANT_SESSION_CLOCK_SYMBOL,
+            sa_cast(b.c.ts, SaDate) > train_end,
+        )
+        with dynamo.engine().connect() as cx:
+            new_sessions = int(cx.execute(stmt).scalar() or 0)
+    proposal = quant_retrain_proposal(
+        bundle=bundle, new_sessions=new_sessions, as_of=as_of, now=utcnow()
+    )
+    inserted = False
+    if proposal is not None:
+        try:
+            ProposalRepository(dynamo.engine()).insert(proposal)
+            inserted = True
+        except IntegrityError:
+            context.log.info("quant_retrain_check: proposal %s already open", proposal.id)
+    return MaterializeResult(
+        metadata={
+            "bundle": str(bundle["id"]),
+            "train_end": str(train_end),
+            "new_sessions": new_sessions,
+            "threshold": QUANT_RETRAIN_MIN_SESSIONS,
+            "proposal": proposal.id if proposal is not None else "",
+            "proposal_inserted": inserted,
+        }
+    )
+
+
 # --- dead-man switch: final step of the nightly chain (doc 12 §6) ---
 
 
@@ -1456,4 +1592,5 @@ LEARNING_ASSETS = [
     parquet_export_asset,
     chain_verify_check,
     experience_completeness_check,
+    quant_retrain_check,
 ]

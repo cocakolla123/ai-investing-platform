@@ -31,6 +31,7 @@
 | Chain verify + experience completeness | 02:20 daily |
 | Healthcheck dead-man ping | 02:30 daily |
 | Post-trade reviews + experiences + calibration + drift + learning metrics | Sunday 08:00 |
+| Quant retrain-cadence check (proposal-gated, never trains) | 09:00, 1st of month |
 | Failure clustering | sensor-triggered (~150 new resolved failures), never scheduled |
 """
 
@@ -147,6 +148,14 @@ weekly_learning_job = define_asset_job(
         "drift_monitors",
         "learning_metrics",
     ),
+)
+quant_retrain_check_job = define_asset_job(
+    "quant_retrain_check_job",
+    # Monthly retrain-cadence check (proposal-gated per the iron law: emits
+    # an OPEN RETRAIN proposal, NEVER trains). Registered like every other
+    # schedule but NOT enabled — Dagster schedules start STOPPED until a
+    # human turns them on in the daemon/UI.
+    selection=AssetSelection.assets("quant_retrain_check"),
 )
 safety_checks_job = define_asset_job(
     "safety_checks_job",
@@ -343,6 +352,13 @@ weekly_learning_schedule = ScheduleDefinition(
     job=weekly_learning_job,
     execution_timezone=TZ,
 )
+# Monthly (1st, 09:00 ET) quant retrain-cadence check — proposal-gated.
+quant_retrain_check_schedule = ScheduleDefinition(
+    name="quant_retrain_check_schedule",
+    cron_schedule="0 9 1 * *",
+    job=quant_retrain_check_job,
+    execution_timezone=TZ,
+)
 
 ALL_JOBS = [
     eod_ingest_job,
@@ -364,6 +380,7 @@ ALL_JOBS = [
     daily_report_job,
     weekly_learning_job,
     safety_checks_job,
+    quant_retrain_check_job,
     # Sensor target only (failure_clustering_sensor) — deliberately unscheduled.
     failure_clustering_job,
 ]
@@ -400,4 +417,5 @@ ALL_SCHEDULES = [
     safety_checks_schedule,
     healthcheck_schedule,
     weekly_learning_schedule,
+    quant_retrain_check_schedule,
 ]
