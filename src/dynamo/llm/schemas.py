@@ -64,6 +64,27 @@ def strict_schema(model_cls: type[BaseModel]) -> dict[str, Any]:
     return _strictify(schema)
 
 
+# --- Shared field descriptions ---
+
+# `conviction` shipped as a bare bounded float with no anchors. Measured over
+# 295 verdicts of run replay-e5a49317bbee: 8 distinct values, 98.3% inside
+# {0.55, 0.58, 0.60, 0.62}, |r| < 0.15 against every available feature — i.e.
+# anchoring noise, not calibration. These anchors are the fix.
+_CONVICTION_SCALE = (
+    "Calibrated probability, not a rhetorical device. Anchors: 0.50 = coin flip, no edge; "
+    "0.60 = modest edge; 0.75 = strong edge with multi-source confirmation; "
+    "0.90 = near-certain. Use the full range — if every verdict you produce lands in "
+    "0.55-0.62 you are anchoring, not calibrating."
+)
+
+_ARBITER_CONVICTION_DESC = (
+    "Your probability that this verdict is the correct call. " + _CONVICTION_SCALE
+)
+_ADVOCATE_CONVICTION_DESC = (
+    "Your probability that your side's thesis is materially correct. " + _CONVICTION_SCALE
+)
+
+
 # --- Generation models (what the model writes; code fills the rest) ---
 
 
@@ -94,14 +115,14 @@ class AdvocateBriefOut(_Gen):
     kill_cases: tuple[KillCase, ...]
     expected_move_pct: float
     horizon_days: int
-    conviction: float = Field(ge=0.0, le=1.0)
+    conviction: float = Field(ge=0.0, le=1.0, description=_ADVOCATE_CONVICTION_DESC)
 
 
 class ArbiterVerdictOut(_Gen):
     """Call 4 — the fields the arbiter generates; guardrails/ids added in code."""
 
     action: Action
-    conviction: float = Field(ge=0.0, le=1.0)
+    conviction: float = Field(ge=0.0, le=1.0, description=_ARBITER_CONVICTION_DESC)
     thesis: str
     bull_case: str
     bear_case: str
