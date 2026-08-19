@@ -14,6 +14,8 @@ from datetime import date
 from hashlib import sha256
 from typing import Any
 
+import structlog
+
 from dynamo.domain.models.research import (
     ACTION_SCORE,
     Action,
@@ -35,6 +37,32 @@ from dynamo.research.prompt_loader import LoadedPrompt
 
 DISAGREEMENT_VETO_THRESHOLD = 0.6
 GUARDRAIL_AGENT = "guardrail"
+
+
+
+log = structlog.get_logger(__name__)
+
+
+def _validated(model_cls: type, payload: Any) -> Any:
+    """Validate an LLM-output payload, tolerating (and logging) unknown keys.
+
+    Domain models are ``extra="forbid"`` — right for our own code, wrong at the
+    model-output boundary: backends without server-side schema enforcement
+    (the Claude Code CLI path) may add harmless extra keys, which must not
+    void a whole verdict. Required fields and types stay strictly enforced.
+    """
+    if isinstance(payload, Mapping):
+        known = set(model_cls.model_fields)
+        extra = [k for k in payload if k not in known]
+        if extra:
+            log.warning(
+                "committee_payload_extra_keys_dropped",
+                model=model_cls.__name__,
+                keys=sorted(str(k) for k in extra)[:8],
+            )
+            payload = {k: v for k, v in payload.items() if k in known}
+    return model_cls.model_validate(payload)
+
 
 # stage -> (prompt name, schema key, model tier)
 STAGES: dict[str, tuple[str, str, str]] = {
@@ -196,7 +224,7 @@ class CommitteeEngine:
         journal_context_used: Sequence[str] = (),
     ) -> tuple[DossierAnalysis, AdvocateBrief, AdvocateBrief, CommitteeVerdict]:
         dossier_raw = self._call_stage("dossier", symbol, as_of, context)
-        dossier = DossierAnalysis.model_validate(
+        dossier = _validated(DossierAnalysis,
             _filtered_payload(
                 DossierAnalysis,
                 dossier_raw,
@@ -210,11 +238,11 @@ class CommitteeEngine:
 
         advocate_context = advocate_context_for(context, dossier_raw)
         bull_raw = self._call_stage("bull", symbol, as_of, advocate_context)
-        bull = AdvocateBrief.model_validate(
+        bull = _validated(AdvocateBrief,
             _filtered_payload(AdvocateBrief, bull_raw, {"symbol": symbol, "side": Side.BULL})
         )
         bear_raw = self._call_stage("bear", symbol, as_of, advocate_context)
-        bear = AdvocateBrief.model_validate(
+        bear = _validated(AdvocateBrief,
             _filtered_payload(AdvocateBrief, bear_raw, {"symbol": symbol, "side": Side.BEAR})
         )
 
@@ -250,12 +278,12 @@ class CommitteeEngine:
         action = Action(str(arbiter_payload["action"]))
         conviction = max(0.0, min(1.0, float(arbiter_payload["conviction"])))
         rebuttals = tuple(
-            Rebuttal.model_validate(r) for r in arbiter_payload.get("bear_rebuttals", [])
+            _validated(Rebuttal, r) for r in arbiter_payload.get("bear_rebuttals", [])
         )
         exit_conditions = tuple(
-            ExitCondition.model_validate(e) for e in arbiter_payload.get("exit_conditions", [])
+            _validated(ExitCondition, e) for e in arbiter_payload.get("exit_conditions", [])
         )
-        dissents = tuple(Dissent.model_validate(d) for d in arbiter_payload.get("dissents", []))
+        dissents = tuple(_validated(Dissent, d) for d in arbiter_payload.get("dissents", []))
         self_critique = str(arbiter_payload.get("self_critique", ""))
 
         disagreement = compute_disagreement(

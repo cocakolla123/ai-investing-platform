@@ -250,3 +250,22 @@ class TestVerdictId:
         assert v1.id == v2.id
         assert v1.id.startswith("ACME-2026-08-03-")
         assert v1.id != v3.id
+
+
+def test_llm_boundary_tolerates_extra_keys_in_nested_payloads() -> None:
+    """Real-run lesson: an arbiter dissent carrying an unknown key must be
+    dropped-and-logged, never crash the verdict (CLI backend has no
+    server-side schema enforcement)."""
+    from dynamo.domain.models.research import Dissent, Stance
+    from dynamo.research.committee import _validated
+
+    d = _validated(
+        Dissent,
+        {
+            "agent": "bear",
+            "stance": "hold",
+            "reason": "valuation stretched",
+            "conviction-note-omitted": None,
+        },
+    )
+    assert d.agent == "bear" and d.stance == Stance.HOLD
