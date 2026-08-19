@@ -216,6 +216,12 @@ class Settings(BaseSettings):
     # ``ReplayConfig.min_feature_coverage`` (which is what actually
     # participates in the run's config_hash).
     replay_min_feature_coverage: float = 0.35
+    # Preflight ship gate: refuse to start a replay that pins a quant bundle
+    # whose training report says ships_ok=False on any task (campaign-v3 lost
+    # to its own historic-average baseline on all three and still ran). Set
+    # REPLAY_REQUIRE_SHIPPING_BUNDLE=false to downgrade the refusal to a loud
+    # warning — e.g. to deliberately re-run a control experiment.
+    replay_require_shipping_bundle: bool = True
 
     # --- Learning loop (doc 10; journal retrieval feeds dossier contexts) ---
     journal_retrieval_enabled: bool = True

@@ -216,17 +216,95 @@ def test_quant_model_real_loader_unknown_version_is_an_error(
     assert "unknown quant model version" in detail
 
 
-def test_quant_model_loadable_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+def _loadable(monkeypatch: pytest.MonkeyPatch, metrics: dict[str, Any] | Exception) -> None:
+    """The bundle loads; its manifest metrics are whatever the test says."""
     import dynamo.research.quant.training as training
 
     monkeypatch.setattr(
         training, "bundle_from_version", lambda version: object(), raising=False
     )
-    cfg = config()
-    object.__setattr__(cfg, "quant_model_version", "campaign-v1")
+
+    def read(version: str) -> Any:
+        if isinstance(metrics, Exception):
+            raise metrics
+        return metrics
+
+    monkeypatch.setattr(pf, "_read_bundle_metrics", read)
+
+
+def _task_report(ships: bool, metric: float = 0.05, baseline: float = 0.09) -> dict[str, Any]:
+    return {
+        "ships_ok": {"lgbm": ships},
+        "best_baseline_pooled": baseline,
+        "pooled": {
+            "baseline-historic-average": {"fold_metric_mean": baseline, "win_share": 1.0},
+            "lgbm": {"fold_metric_mean": metric, "win_share": 0.2},
+        },
+    }
+
+
+def test_quant_model_loadable_and_shipping_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    _loadable(monkeypatch, {"tasks": {"rank": _task_report(True, 0.12)}})
+    cfg = config(quant_model_version="campaign-v9")
     report = pf.run_preflight(FakeReads(), cfg)
     check = next(c for c in report.checks if c.name == "quant_model")
     assert check.status == pf.OK
+    assert "ships" in check.detail
+
+
+def test_quant_model_that_failed_its_ship_gate_is_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The campaign-v3 shape: the bundle LOADS but lost to its own baseline
+    on every task. Loading was the only thing preflight used to assert."""
+    _loadable(
+        monkeypatch,
+        {
+            "tasks": {
+                "rank": _task_report(False, 0.0486, 0.0929),
+                "downside": _task_report(False, 0.1179, 0.0961),
+                "vol": _task_report(False, 0.4248, 0.3861),
+            }
+        },
+    )
+    cfg = config(quant_model_version="campaign-v3")
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(FakeReads(), cfg)
+    detail = errors_of(exc.value)["quant_model"]
+    assert "FAILED its own ship gate" in detail
+    for task in ("rank", "downside", "vol"):
+        assert f"{task}: ships_ok=False" in detail
+
+
+def test_ship_gate_refusal_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``require_shipping_bundle=False`` (Settings.replay_require_shipping_bundle)
+    downgrades the refusal to a loud warning — the run proceeds knowingly."""
+    _loadable(monkeypatch, {"tasks": {"rank": _task_report(False)}})
+    cfg = config(quant_model_version="campaign-v3")
+    report = pf.run_preflight(FakeReads(), cfg, require_shipping_bundle=False)
+    check = next(c for c in report.checks if c.name == "quant_model")
+    assert check.status == pf.WARNING
+    assert "FAILED its own ship gate" in check.detail
+    assert report.passed
+
+
+def test_ship_gate_unreadable_metrics_warns_but_does_not_pass_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _loadable(monkeypatch, RuntimeError("no manifest on disk"))
+    report = pf.run_preflight(FakeReads(), config(quant_model_version="campaign-v3"))
+    check = next(c for c in report.checks if c.name == "quant_model")
+    assert check.status == pf.WARNING
+    assert "gate was NOT consulted" in check.detail
+
+
+def test_ship_gate_pre_gate_manifest_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bundle trained before ships_ok was recorded: no silent OK."""
+    _loadable(monkeypatch, {"registry": {"n_folds": 5}})
+    report = pf.run_preflight(FakeReads(), config(quant_model_version="ancient-v0"))
+    check = next(c for c in report.checks if c.name == "quant_model")
+    assert check.status == pf.WARNING
+    assert "no per-task ships_ok" in check.detail
 
 
 # -- source-run hook (backtest-campaign Phase 3) ----------------------------

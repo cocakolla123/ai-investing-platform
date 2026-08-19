@@ -18,6 +18,12 @@ Checks:
   by ``cfg.start``;
 - quant-model resolvability (Phase-2 hook): ``quant_model_version`` set but
   not loadable -> error; unset -> warning recorded (baseline-v0 abstention);
+  loadable but ``ships_ok=False`` on any task in its own training report ->
+  error (downgradable to a warning via
+  ``Settings.replay_require_shipping_bundle``). "The bundle loads" was the
+  only thing this check ever asserted, which is how ``campaign-v3`` — losing
+  to its own historic-average baseline on rank IC (0.049 vs 0.093) and
+  downside AUC (0.519 vs 0.721) — powered a full 74-day campaign;
 - portfolio-mode source run (backtest-campaign Phase 3): ``source_run_id``
   set -> the run must exist, be committee-mode, cover the window, and carry
   compatible ``universe_tiers`` (compared via its stored ``config_json``).
@@ -268,8 +274,66 @@ def _check_macro(reads: PreflightReads, cfg: ReplayConfig) -> PreflightCheck:
     )
 
 
-def _check_quant_model(cfg: ReplayConfig) -> PreflightCheck:
-    """Phase-2 hook: works before AND after the trained-model loader lands."""
+def _read_bundle_metrics(version: str) -> Mapping[str, Any]:
+    """The bundle manifest's ``metrics`` block (the trainer's report card)."""
+    from dynamo.research.quant.bundle import default_bundle_dir, read_bundle_manifest
+
+    manifest = read_bundle_manifest(default_bundle_dir(), version)
+    metrics = manifest.get("metrics") or {}
+    return cast(Mapping[str, Any], metrics)
+
+
+def _model_names(pooled: Mapping[str, Any]) -> list[str]:
+    """Trained model names in a task report (baselines are the comparison)."""
+    return [str(n) for n in pooled if not str(n).startswith("baseline")]
+
+
+def ship_gate_lines(metrics: Mapping[str, Any]) -> tuple[list[str], list[str]]:
+    """``(failing task lines, all task lines)`` from a bundle's metrics.
+
+    Reads the per-task ``ships_ok`` the trainer wrote alongside the pooled
+    out-of-fold metric and its best baseline, so preflight reports the same
+    go/no-go evidence the training run printed. An empty result means the
+    manifest predates the ship gate (nothing to assert)."""
+    tasks = metrics.get("tasks")
+    if not isinstance(tasks, Mapping):
+        return [], []
+    failing: list[str] = []
+    lines: list[str] = []
+    for task in sorted(tasks):
+        report = tasks[task]
+        if not isinstance(report, Mapping):
+            continue
+        ships = report.get("ships_ok")
+        if not isinstance(ships, Mapping) or not ships:
+            continue
+        pooled = report.get("pooled")
+        pooled_map = pooled if isinstance(pooled, Mapping) else {}
+        baseline = report.get("best_baseline_pooled")
+        ok = any(bool(v) for v in ships.values())
+        detail = f"{task}: ships_ok={ok}"
+        for name in _model_names(pooled_map) or [str(n) for n in ships]:
+            entry = pooled_map.get(name)
+            if isinstance(entry, Mapping) and "fold_metric_mean" in entry:
+                detail += (
+                    f" ({name} pooled fold metric {float(entry['fold_metric_mean']):.4f}"
+                    f", win share {float(entry.get('win_share', float('nan'))):.2f}"
+                )
+                if baseline is not None:
+                    detail += f", best baseline {float(baseline):.4f}"
+                detail += ")"
+        lines.append(detail)
+        if not ok:
+            failing.append(detail)
+    return failing, lines
+
+
+def _check_quant_model(cfg: ReplayConfig, require_shipping: bool) -> PreflightCheck:
+    """Phase-2 hook: works before AND after the trained-model loader lands.
+
+    Beyond "does it load", the bundle must have PASSED its own ship gate:
+    a model that loses to the historic-average baseline is worse than no
+    model, because its rankings still get traded."""
     version = getattr(cfg, "quant_model_version", None)
     if not version:
         return PreflightCheck(
@@ -298,7 +362,36 @@ def _check_quant_model(cfg: ReplayConfig) -> PreflightCheck:
             ERROR,
             f"quant_model_version={version!r} is not loadable: {exc}",
         )
-    return PreflightCheck("quant_model", OK, f"model version {version!r} loads")
+    try:
+        failing, lines = ship_gate_lines(_read_bundle_metrics(str(version)))
+    except Exception as exc:  # unreadable manifest: loud, never fatal here
+        return PreflightCheck(
+            "quant_model",
+            WARNING,
+            f"model version {version!r} loads, but its ship-gate metrics could "
+            f"not be read ({exc}) — the gate was NOT consulted",
+        )
+    if not lines:
+        return PreflightCheck(
+            "quant_model",
+            WARNING,
+            f"model version {version!r} loads, but its manifest carries no "
+            "per-task ships_ok — the gate was NOT consulted (retrain to record it)",
+        )
+    if failing:
+        return PreflightCheck(
+            "quant_model",
+            ERROR if require_shipping else WARNING,
+            f"model version {version!r} loads but FAILED its own ship gate — "
+            + "; ".join(failing)
+            + ". A bundle that loses to its baseline still gets traded: retrain, "
+            "or set REPLAY_REQUIRE_SHIPPING_BUNDLE=false to run it deliberately",
+        )
+    return PreflightCheck(
+        "quant_model",
+        OK,
+        f"model version {version!r} loads and ships — " + "; ".join(lines),
+    )
 
 
 def _check_source_run(reads: PreflightReads, cfg: ReplayConfig) -> PreflightCheck:
@@ -351,12 +444,24 @@ def _check_source_run(reads: PreflightReads, cfg: ReplayConfig) -> PreflightChec
 # -- entry point ------------------------------------------------------------
 
 
-def run_preflight(engine_or_reads: Any, config: ReplayConfig) -> PreflightReport:
+def run_preflight(
+    engine_or_reads: Any,
+    config: ReplayConfig,
+    *,
+    require_shipping_bundle: bool | None = None,
+) -> PreflightReport:
     """All checks, always; raises :class:`PreflightError` when any errored.
 
     ``engine_or_reads``: a SQLAlchemy ``Engine`` (wrapped in
     :class:`EngineReads`) or any :class:`PreflightReads` implementation.
+    ``require_shipping_bundle`` decides whether a pinned bundle that failed
+    its own ship gate is an ERROR (default) or a loud WARNING; ``None``
+    reads ``Settings.replay_require_shipping_bundle``.
     """
+    if require_shipping_bundle is None:
+        from dynamo.config.settings import Settings
+
+        require_shipping_bundle = bool(Settings().replay_require_shipping_bundle)
     reads: PreflightReads = (
         EngineReads(engine_or_reads)
         if isinstance(engine_or_reads, Engine)
@@ -377,7 +482,7 @@ def run_preflight(engine_or_reads: Any, config: ReplayConfig) -> PreflightReport
             )
         )
     checks.append(_check_macro(reads, config))
-    checks.append(_check_quant_model(config))
+    checks.append(_check_quant_model(config, require_shipping_bundle))
     checks.append(_check_source_run(reads, config))
 
     report = PreflightReport(checks=tuple(checks))
