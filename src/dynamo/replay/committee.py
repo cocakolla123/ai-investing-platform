@@ -310,7 +310,13 @@ def replay_journal_hits(
         ]
         vectors = embedder.embed(queries)
         for sym, vector in zip(symbols, vectors, strict=True):
-            candidates = gw.journal_search(embedding=vector, top_k=max(top_k * 4, top_k))
+            # Filter to the symbol in SQL, not just via rank_similar's boost:
+            # the journal is symbol-scoped evidence, and without the filter a
+            # weak embedding backend returns other tickers' entries as this
+            # ticker's "similar situations".
+            candidates = gw.journal_search(
+                embedding=vector, symbols=[sym], top_k=max(top_k * 4, top_k)
+            )
             ranked = rank_similar(
                 candidates, JournalFilters(symbols=frozenset({sym})), top_k=top_k
             )

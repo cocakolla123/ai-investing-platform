@@ -284,6 +284,42 @@ class JournalRepository:
             out.append((entry, similarity))
         return out
 
+    def entries_with_embedding_version(self, version: str) -> list[JournalEntry]:
+        """Entries whose vectors came from a given embedding backend — the
+        input to a re-embed once a better backend is installed (entries
+        written under the hash fallback are retrievable but not semantic)."""
+        stmt = select(journal_entries).where(
+            journal_entries.c.embedding_version == version
+        )
+        with self._engine.connect() as cx:
+            rows = cx.execute(stmt).all()
+        return [
+            JournalEntry(
+                id=r.id,
+                kind=JournalKind(r.kind),
+                symbols=tuple(r.symbols or ()),
+                strategy=r.strategy,
+                regime_at_write=r.regime_at_write,
+                sectors=tuple(r.sectors or ()),
+                text=r.text,
+                refs=r.refs or {},
+                created_at=r.created_at,
+            )
+            for r in rows
+        ]
+
+    def update_embedding(
+        self, entry_id: str, embedding: Sequence[float], embedding_version: str
+    ) -> None:
+        """Replace one entry's vector in place (the re-embed path). Text and
+        write time are never touched — only the representation."""
+        with self._engine.begin() as cx:
+            cx.execute(
+                update(journal_entries)
+                .where(journal_entries.c.id == entry_id)
+                .values(embedding=list(embedding), embedding_version=embedding_version)
+            )
+
 
 class ProposalRepository:
     def __init__(self, engine: Engine) -> None:

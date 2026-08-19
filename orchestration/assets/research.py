@@ -921,7 +921,13 @@ def _journal_hits_for(
     vectors = _journal_embedder().embed(queries)
     hits: dict[str, list[tuple[str, str]]] = {}
     for sym, vector in zip(symbols, vectors, strict=True):
-        candidates = repo.search(embedding=vector, top_k=max(top_k * 4, top_k), as_of=cutoff)
+        # Symbol filtered in SQL (not only boosted in rank_similar): journal
+        # entries are symbol-scoped evidence, and a weak embedding backend
+        # would otherwise return other tickers' entries as this one's
+        # "similar situations".
+        candidates = repo.search(
+            embedding=vector, symbols=[sym], top_k=max(top_k * 4, top_k), as_of=cutoff
+        )
         ranked = rank_similar(
             candidates, JournalFilters(symbols=frozenset({sym})), top_k=top_k
         )

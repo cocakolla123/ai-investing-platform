@@ -9,6 +9,7 @@ is where the difficulty lives — see the module docstring of
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -27,7 +28,7 @@ from dynamo.research.fundamentals import (
 from dynamo.research.quant.catalog import latest_value, pit_facts
 
 AS_OF = date(2026, 6, 16)
-STAMP = pd.Timestamp(AS_OF)
+STAMP = cast(pd.Timestamp, pd.Timestamp(AS_OF))
 # Q2 + Q3 + derived Q4 + Q1 of the fixture below.
 TTM_REVENUE = 121.0 + 132.0 + 143.0 + 121.0
 

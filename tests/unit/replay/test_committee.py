@@ -405,6 +405,29 @@ def test_dossier_carries_fundamentals_peers_and_filtered_news(frames: Any) -> No
     assert "[n-other]" in ctx.split("## Market news", 1)[1]
 
 
+def test_journal_retrieval_is_symbol_scoped_in_the_query(frames: Any) -> None:
+    """The journal is symbol-scoped evidence: the symbol must reach the query,
+    not just ``rank_similar``'s boost, or a weak embedding backend serves
+    other tickers' entries as this ticker's 'similar situations'."""
+    from dynamo.replay.committee import replay_journal_hits
+
+    sessions, bars, scores = frames
+    seen: list[dict[str, Any]] = []
+
+    class RecordingGateway(CommitteeGateway):
+        def journal_search(self, **kwargs: Any) -> list[tuple[Any, float]]:
+            seen.append(kwargs)
+            return []
+
+    class Embedder:
+        def embed(self, texts: Any) -> list[list[float]]:
+            return [[0.0] * 384 for _ in list(texts)]
+
+    gw = RecordingGateway(sessions[-1], bars, scores)
+    replay_journal_hits(gw, ["LIQ"], embedder=Embedder())
+    assert seen and seen[0]["symbols"] == ["LIQ"]
+
+
 def test_replay_section_signature_matches_the_live_builder(frames: Any) -> None:
     """Both call sites must render the same sections in the same order —
     ``tests/unit/orchestration/test_dossier_contexts.py`` asserts this list."""
