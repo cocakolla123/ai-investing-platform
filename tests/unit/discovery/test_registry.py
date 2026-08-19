@@ -103,12 +103,13 @@ def _revisions() -> dict[str, str | None]:
     return out
 
 
-def test_migration_0018_chains_onto_0017_with_a_single_head() -> None:
+def test_migration_0019_chains_onto_0018_with_a_single_head() -> None:
     revs = _revisions()
     assert revs["0018"] == "0017"
+    assert revs["0019"] == "0018"
     downs = {d for d in revs.values() if d is not None}
     heads = set(revs) - downs
-    assert heads == {"0018"}
+    assert heads == {"0019"}
 
 
 def test_schema_has_hypotheses_table_with_required_columns() -> None:

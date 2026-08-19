@@ -210,7 +210,7 @@ def test_residual_label_crypto_uses_market_only_factor() -> None:
     for t, p in zip(bts, spy, strict=True):
         rows.append({"symbol": "SPY", "ts": t, "close": p, "adj_close": p, "volume": 10})
     bars = pd.DataFrame(rows)
-    as_of = pd.Timestamp(ts[300])
+    as_of = cast(pd.Timestamp, pd.Timestamp(cast(object, ts[300])))  # type: ignore[arg-type]
     labels = build_labels(bars, {"BTC/USD": "SPY"}, as_of)
     assert not np.isnan(labels.loc["BTC/USD", "residual_return_20d"])
     assert not np.isnan(labels.loc["BTC/USD", "excess_return_20d"])

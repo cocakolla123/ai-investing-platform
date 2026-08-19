@@ -624,7 +624,9 @@ def test_build_panel_multi_horizon_label_columns_and_exclusion() -> None:
         for stem in ("excess_return", "downside", "realized_vol", "residual_return"):
             assert f"{stem}_{h}d" in panel.labels.columns
     day = panel.sessions[10]
-    direct = build_labels(bars, sector_map, pd.Timestamp(day), horizon_sessions=5)
+    direct = build_labels(
+        bars, sector_map, cast(pd.Timestamp, pd.Timestamp(day)), horizon_sessions=5
+    )
     multi = panel.labels.xs(pd.Timestamp(day), level="ts")
     for col in ("excess_return_5d", "downside_5d", "realized_vol_5d"):
         pd.testing.assert_series_equal(
