@@ -269,3 +269,34 @@ def test_llm_boundary_tolerates_extra_keys_in_nested_payloads() -> None:
         },
     )
     assert d.agent == "bear" and d.stance == Stance.HOLD
+
+
+def test_llm_boundary_normalizes_padded_keys_in_nested_payloads() -> None:
+    """Real-run lesson two: a NESTED evidence item with a whitespace-padded
+    key ("as_of ") must normalize to the intended field, not crash or drop."""
+    from dynamo.domain.models.research import AdvocateBrief, Side
+    from dynamo.research.committee import _validated
+
+    brief = _validated(
+        AdvocateBrief,
+        {
+            "symbol": "TEST",
+            "side": "bull",
+            "thesis": "vol shock creates entry",
+            "conviction": 0.7,
+            "expected_move_pct": 5.0,
+            "horizon_days": 20,
+            "key_points": [
+                {
+                    "claim": "VIX rose 42%",
+                    "source_type": "macro",
+                    "source_ref": "macro:VIXCLS",
+                    "as_of ": "2026-03-10",
+                    "bonus-note": "extra",
+                }
+            ],
+            "kill_cases": [],
+        },
+    )
+    assert brief.side == Side.BULL
+    assert str(brief.key_points[0].as_of) == "2026-03-10"

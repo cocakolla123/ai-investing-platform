@@ -43,24 +43,62 @@ GUARDRAIL_AGENT = "guardrail"
 log = structlog.get_logger(__name__)
 
 
+def _normalized_keys(value: Any) -> Any:
+    """Recursively strip whitespace from dict keys (LLMs emit ``"as_of "``).
+
+    First-seen key wins on a post-strip collision. Lists/tuples recurse;
+    scalars pass through.
+    """
+    if isinstance(value, Mapping):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            key = k.strip() if isinstance(k, str) else k
+            if key not in out:
+                out[key] = _normalized_keys(v)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [_normalized_keys(v) for v in value]
+    return value
+
+
 def _validated(model_cls: type, payload: Any) -> Any:
-    """Validate an LLM-output payload, tolerating (and logging) unknown keys.
+    """Validate an LLM-output payload, tolerating (and logging) sloppy keys.
 
     Domain models are ``extra="forbid"`` — right for our own code, wrong at the
     model-output boundary: backends without server-side schema enforcement
-    (the Claude Code CLI path) may add harmless extra keys, which must not
-    void a whole verdict. Required fields and types stay strictly enforced.
+    (the Claude Code CLI path) may emit extra keys or whitespace-padded key
+    names at ANY nesting depth, and that must not void a whole verdict.
+    Strategy: normalize keys recursively, validate, and on extra-key errors
+    delete exactly the offending paths (reported by the validator) and retry.
+    Required fields and value types stay strictly enforced.
     """
-    if isinstance(payload, Mapping):
-        known = set(model_cls.model_fields)
-        extra = [k for k in payload if k not in known]
-        if extra:
+    from pydantic import ValidationError
+
+    payload = _normalized_keys(payload)
+    for _attempt in range(3):
+        try:
+            return model_cls.model_validate(payload)
+        except ValidationError as exc:
+            extras = [e["loc"] for e in exc.errors() if e["type"] == "extra_forbidden"]
+            if not extras or not isinstance(payload, dict):
+                raise
             log.warning(
                 "committee_payload_extra_keys_dropped",
                 model=model_cls.__name__,
-                keys=sorted(str(k) for k in extra)[:8],
+                paths=[".".join(str(p) for p in loc) for loc in extras[:8]],
             )
-            payload = {k: v for k, v in payload.items() if k in known}
+            for loc in extras:
+                parent: Any = payload
+                for part in loc[:-1]:
+                    if isinstance(parent, dict):
+                        parent = parent.get(part)
+                    elif isinstance(parent, list) and isinstance(part, int) and part < len(parent):
+                        parent = parent[part]
+                    else:
+                        parent = None
+                        break
+                if isinstance(parent, dict):
+                    parent.pop(loc[-1], None)
     return model_cls.model_validate(payload)
 
 
