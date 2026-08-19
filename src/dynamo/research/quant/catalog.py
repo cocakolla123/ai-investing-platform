@@ -17,13 +17,15 @@ calendar) stay raw.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, cast
 
 import numpy as np
 import pandas as pd
+
+from dynamo.domain.symbols import is_crypto_symbol
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -47,6 +49,13 @@ SHARES_TAGS = (
 
 # Groups whose features stay raw (context shared across names) — doc 04 section 3.
 RAW_GROUPS = frozenset({"macro", "calendar"})
+
+# breadth_above_200dma is a market-state reading, not a per-name feature: it
+# must be computed from a FIXED equity reference set (see
+# :func:`_equity_reference_set`), never from "whichever names happen to have a
+# valid 200-day MA today". Below this many usable reference names the reading
+# is not a market breadth number and the feature stays NaN.
+BREADTH_MIN_NAMES = 10
 
 GROUP_TARGETS: dict[str, int] = {
     "momentum": 8,
@@ -135,12 +144,66 @@ def _rows(df: pd.DataFrame, mask: object) -> pd.DataFrame:
     return df.loc[cast(pd.Series, mask)]
 
 
-def _roll(
+def _apply_per_symbol(
+    df: pd.DataFrame, fn: Callable[[pd.Series], pd.Series]
+) -> pd.DataFrame:
+    """Apply ``fn`` to each column's OWN non-NaN observation sequence.
+
+    :func:`_pivot` indexes the panel by the UNION of every symbol's bar
+    timestamps. Crypto trades 7 days a week and equities 5, so in a mixed
+    universe roughly 2 of every 7 panel rows are empty for an equity — at
+    2026-03-03 the panel had 421 calendar rows where equities had 288 real
+    ones. Anything positional on that shared index (``rolling``, ``shift``,
+    ``diff``, ``iloc[-k]``) therefore measures CALENDAR days, not sessions:
+    a 50-row rolling mean requiring 50 observations never filled for a 5-day
+    name in a 7-day panel, which is exactly how 16 features became NaN for
+    every equity while the 5 crypto pairs kept working.
+
+    Rolling/shifting per symbol makes "N periods" mean "N sessions of THIS
+    symbol's own history", which additionally makes every derived feature
+    invariant to which other symbols happen to share the universe — the
+    property :mod:`tests.unit.quant.test_calendar_invariance` pins down.
+    Results are reindexed back onto the panel index, so a symbol has no
+    value on a date it did not trade (NaN), never a stale carry-forward.
+    """
+    if df.empty or len(df.columns) == 0:
+        return df.copy()
+    out: dict[Hashable, pd.Series] = {}
+    for col in df.columns:
+        own = cast(pd.Series, df[col]).dropna()
+        out[col] = (
+            pd.Series(np.nan, index=df.index, dtype=float)
+            if own.empty
+            else cast(pd.Series, fn(own)).reindex(df.index)
+        )
+    return pd.DataFrame(out, index=df.index, columns=df.columns)
+
+
+def _roll_per_symbol(
     df: pd.DataFrame, window: int, agg: str, min_periods: int | None = None
 ) -> pd.DataFrame:
-    """rolling(...).<agg>() with a stable DataFrame static type."""
-    r = df.rolling(window, min_periods=window if min_periods is None else min_periods)
-    return cast(pd.DataFrame, getattr(r, agg)())
+    """``rolling(window).<agg>()`` over each symbol's own session sequence."""
+    mp = window if min_periods is None else min_periods
+
+    def rolled(s: pd.Series) -> pd.Series:
+        return cast(pd.Series, getattr(s.rolling(window, min_periods=mp), agg)())
+
+    return _apply_per_symbol(df, rolled)
+
+
+def _shift_per_symbol(df: pd.DataFrame, periods: int) -> pd.DataFrame:
+    """``shift(periods)`` over each symbol's own session sequence.
+
+    The positional replacement for ``panel.iloc[-1 - k]``: "k sessions ago"
+    for THIS symbol, not "k calendar rows ago in a union-calendar panel"
+    (where an equity's 20-day return was really 21 calendar days and NaN'd
+    outright whenever the offset landed on a weekend)."""
+    return _apply_per_symbol(df, lambda s: cast(pd.Series, s.shift(periods)))
+
+
+def _diff_per_symbol(df: pd.DataFrame, periods: int = 1) -> pd.DataFrame:
+    """``diff(periods)`` over each symbol's own session sequence."""
+    return _apply_per_symbol(df, lambda s: s.diff(periods))
 
 
 def _empty_panel() -> pd.DataFrame:
@@ -201,9 +264,14 @@ def _last_row(panel: pd.DataFrame, ctx: FeatureContext) -> pd.Series:
 
 
 def _log_returns(price: pd.DataFrame) -> pd.DataFrame:
+    """Daily log returns on each symbol's OWN session sequence.
+
+    A calendar-panel ``diff()`` differences Monday against Sunday for an
+    equity (an empty row), so ~1 in 5 equity returns came back NaN before
+    any rolling window even ran."""
     with np.errstate(divide="ignore", invalid="ignore"):
         logged = cast(pd.DataFrame, np.log(price))
-    return logged.diff()
+    return _diff_per_symbol(logged)
 
 
 # ---------------------------------------------------------------------------
@@ -211,12 +279,17 @@ def _log_returns(price: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
+def _finite(s: pd.Series) -> pd.Series:
+    return cast(pd.Series, s.replace([np.inf, -np.inf], np.nan))
+
+
 def _ret(days: int) -> FeatureFn:
     def fn(ctx: FeatureContext) -> pd.Series:
         p = ctx.price
         if len(p) <= days:
             return _nan_series(ctx)
-        return (p.iloc[-1] / p.iloc[-1 - days] - 1.0).reindex(ctx.universe)
+        past = _shift_per_symbol(p, days).iloc[-1]
+        return _finite(p.iloc[-1] / past - 1.0).reindex(ctx.universe)
 
     return fn
 
@@ -225,7 +298,11 @@ def _mom_12_1(ctx: FeatureContext) -> pd.Series:
     p = ctx.price
     if len(p) <= TRADING_DAYS_PER_YEAR:
         return _nan_series(ctx)
-    return (p.iloc[-22] / p.iloc[-1 - TRADING_DAYS_PER_YEAR] - 1.0).reindex(ctx.universe)
+    # 12-1: price 21 sessions ago over price 252 sessions ago — both counted
+    # in the symbol's OWN sessions.
+    recent = _shift_per_symbol(p, 21).iloc[-1]
+    old = _shift_per_symbol(p, TRADING_DAYS_PER_YEAR).iloc[-1]
+    return _finite(recent / old - 1.0).reindex(ctx.universe)
 
 
 def _dist_ma(window: int) -> FeatureFn:
@@ -233,8 +310,8 @@ def _dist_ma(window: int) -> FeatureFn:
         p = ctx.price
         if len(p) < window:
             return _nan_series(ctx)
-        ma = _roll(p, window, "mean")
-        return (p.iloc[-1] / ma.iloc[-1] - 1.0).reindex(ctx.universe)
+        ma = _roll_per_symbol(p, window, "mean")
+        return _finite(p.iloc[-1] / ma.iloc[-1] - 1.0).reindex(ctx.universe)
 
     return fn
 
@@ -243,15 +320,16 @@ def _ma50_slope(ctx: FeatureContext) -> pd.Series:
     p = ctx.price
     if len(p) < 70:
         return _nan_series(ctx)
-    ma = _roll(p, 50, "mean")
-    return ((ma.iloc[-1] - ma.iloc[-21]) / ma.iloc[-21]).reindex(ctx.universe)
+    ma = _roll_per_symbol(p, 50, "mean")
+    prev = _shift_per_symbol(ma, 21).iloc[-1]
+    return _finite((ma.iloc[-1] - prev) / prev).reindex(ctx.universe)
 
 
 def _rs_20d_sector(ctx: FeatureContext) -> pd.Series:
     p = ctx.price
     if len(p) <= 20:
         return _nan_series(ctx)
-    ret20 = p.iloc[-1] / p.iloc[-21] - 1.0
+    ret20 = _finite(p.iloc[-1] / _shift_per_symbol(p, 20).iloc[-1] - 1.0)
     out = {}
     for sym in ctx.universe:
         etf = ctx.inputs.sector_map.get(sym)
@@ -272,11 +350,11 @@ def _ret_z(days: int, window: int = 120) -> FeatureFn:
         p = ctx.price
         if len(p) <= days + 30:
             return _nan_series(ctx)
-        r = p / p.shift(days) - 1.0
-        mu = _roll(r, window, "mean", 30)
-        sd = _roll(r, window, "std", 30)
+        r = p / _shift_per_symbol(p, days) - 1.0
+        mu = _roll_per_symbol(r, window, "mean", 30)
+        sd = _roll_per_symbol(r, window, "std", 30)
         z = (r.iloc[-1] - mu.iloc[-1]) / sd.iloc[-1]
-        return z.replace([np.inf, -np.inf], np.nan).reindex(ctx.universe)
+        return _finite(z).reindex(ctx.universe)
 
     return fn
 
@@ -285,31 +363,34 @@ def _rsi_14(ctx: FeatureContext) -> pd.Series:
     p = ctx.price
     if len(p) < 15:
         return _nan_series(ctx)
-    diff = p.diff()
-    gain = _roll(diff.clip(lower=0.0), 14, "mean")
-    loss = _roll((-diff).clip(lower=0.0), 14, "mean")
-    denom = gain.iloc[-1] + loss.iloc[-1]
-    rsi = 100.0 * gain.iloc[-1] / denom.where(denom > 0)
-    rsi = rsi.where(denom > 0, 50.0)
-    return rsi.reindex(ctx.universe)
+    diff = _diff_per_symbol(p)
+    gain = _roll_per_symbol(diff.clip(lower=0.0), 14, "mean").iloc[-1]
+    loss = _roll_per_symbol((-diff).clip(lower=0.0), 14, "mean").iloc[-1]
+    denom = gain + loss
+    rsi = 100.0 * gain / denom.where(denom > 0)
+    # 50.0 ONLY where the window is genuinely flat (denominator exactly 0),
+    # never where the denominator is NaN. The old `where(denom > 0, 50.0)`
+    # also fired on NaN, so all 50 equities reported a fabricated RSI of
+    # exactly 50 that then counted as "covered" in feature_coverage.
+    return cast(pd.Series, rsi.mask(denom == 0.0, 50.0)).reindex(ctx.universe)
 
 
 def _dist_20d_mean_sigma(ctx: FeatureContext) -> pd.Series:
     p = ctx.price
     if len(p) < 20:
         return _nan_series(ctx)
-    mu = _roll(p, 20, "mean").iloc[-1]
-    sd = _roll(p, 20, "std").iloc[-1]
+    mu = _roll_per_symbol(p, 20, "mean").iloc[-1]
+    sd = _roll_per_symbol(p, 20, "std").iloc[-1]
     z = (p.iloc[-1] - mu) / sd
-    return z.replace([np.inf, -np.inf], np.nan).reindex(ctx.universe)
+    return _finite(z).reindex(ctx.universe)
 
 
 def _drawdown_20d_high(ctx: FeatureContext) -> pd.Series:
     p = ctx.price
     if len(p) < 20:
         return _nan_series(ctx)
-    hi = _roll(p, 20, "max").iloc[-1]
-    return (p.iloc[-1] / hi - 1.0).reindex(ctx.universe)
+    hi = _roll_per_symbol(p, 20, "max").iloc[-1]
+    return _finite(p.iloc[-1] / hi - 1.0).reindex(ctx.universe)
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +404,7 @@ def _vol_cc(window: int) -> FeatureFn:
         if len(p) <= window:
             return _nan_series(ctx)
         lr = _log_returns(p)
-        vol = _roll(lr, window, "std").iloc[-1] * math.sqrt(TRADING_DAYS_PER_YEAR)
+        vol = _roll_per_symbol(lr, window, "std").iloc[-1] * math.sqrt(TRADING_DAYS_PER_YEAR)
         return vol.reindex(ctx.universe)
 
     return fn
@@ -335,7 +416,7 @@ def _vol_parkinson_20d(ctx: FeatureContext) -> pd.Series:
         return _nan_series(ctx)
     with np.errstate(divide="ignore", invalid="ignore"):
         hl = cast(pd.DataFrame, np.log(h / lo)) ** 2 / (4.0 * math.log(2.0))
-    var = _roll(hl, 20, "mean").iloc[-1]
+    var = _roll_per_symbol(hl, 20, "mean").iloc[-1]
     return (var**0.5 * math.sqrt(TRADING_DAYS_PER_YEAR)).reindex(ctx.universe)
 
 
@@ -344,14 +425,18 @@ def _vol_ewma_60d(ctx: FeatureContext) -> pd.Series:
     if len(p) < 30:
         return _nan_series(ctx)
     lr = _log_returns(p)
-    ewm_std = cast(pd.DataFrame, lr.ewm(span=60, min_periods=20).std())
+    # span/min_periods count the SYMBOL'S own return observations (an EWMA
+    # over calendar rows decays ~7/5 too fast for a 5-day-a-week name).
+    ewm_std = _apply_per_symbol(
+        lr, lambda s: cast(pd.Series, s.ewm(span=60, min_periods=20).std())
+    )
     vol = ewm_std.iloc[-1] * math.sqrt(TRADING_DAYS_PER_YEAR)
     return vol.reindex(ctx.universe)
 
 
 def _vol20_series(p: pd.DataFrame) -> pd.DataFrame:
     lr = _log_returns(p)
-    return _roll(lr, 20, "std") * math.sqrt(TRADING_DAYS_PER_YEAR)
+    return _roll_per_symbol(lr, 20, "std") * math.sqrt(TRADING_DAYS_PER_YEAR)
 
 
 def _vol_of_vol_60d(ctx: FeatureContext) -> pd.Series:
@@ -359,20 +444,22 @@ def _vol_of_vol_60d(ctx: FeatureContext) -> pd.Series:
     if len(p) < 80:
         return _nan_series(ctx)
     v = _vol20_series(p)
-    return _roll(v, 60, "std", 40).iloc[-1].reindex(ctx.universe)
+    return _roll_per_symbol(v, 60, "std", 40).iloc[-1].reindex(ctx.universe)
 
 
 def _vol_pctile_2y(ctx: FeatureContext) -> pd.Series:
     p = ctx.price
     if len(p) < 120:
         return _nan_series(ctx)
-    v = _vol20_series(p).tail(2 * TRADING_DAYS_PER_YEAR)
+    v = _vol20_series(p)
     out = {}
     for sym in ctx.universe:
         if sym not in v.columns:
             out[sym] = np.nan
             continue
-        s = v[sym].dropna()
+        # The 2-year window is 2 x 252 of the SYMBOL'S OWN sessions, not the
+        # last 504 calendar rows of a union-calendar panel.
+        s = cast(pd.Series, v[sym]).dropna().iloc[-2 * TRADING_DAYS_PER_YEAR :]
         if len(s) < 60:
             out[sym] = np.nan
         else:
@@ -384,7 +471,7 @@ def _true_range(ctx: FeatureContext) -> pd.DataFrame:
     h, lo, c = ctx.high, ctx.low, ctx.close
     if h.empty or lo.empty or c.empty:
         return _empty_panel()
-    prev_c = c.shift(1)
+    prev_c = _shift_per_symbol(c, 1)
     stacked = pd.concat([h - lo, (h - prev_c).abs(), (lo - prev_c).abs()], keys=["hl", "hc", "lc"])
     return cast(pd.DataFrame, stacked.groupby(level=1).max())
 
@@ -393,7 +480,7 @@ def _atr14_over_price(ctx: FeatureContext) -> pd.Series:
     tr = _true_range(ctx)
     if tr.empty or len(tr) < 15:
         return _nan_series(ctx)
-    atr = _roll(tr, 14, "mean").iloc[-1]
+    atr = _roll_per_symbol(tr, 14, "mean").iloc[-1]
     last_close = _last_row(ctx.close, ctx)
     return (atr.reindex(ctx.universe) / last_close).replace([np.inf, -np.inf], np.nan)
 
@@ -413,26 +500,26 @@ def _dollar_vol_20d(ctx: FeatureContext) -> pd.Series:
     dv = _dollar_panel(ctx)
     if dv.empty or len(dv) < 20:
         return _nan_series(ctx)
-    return _roll(dv, 20, "mean").iloc[-1].reindex(ctx.universe)
+    return _roll_per_symbol(dv, 20, "mean").iloc[-1].reindex(ctx.universe)
 
 
 def _dollar_vol_z_60d(ctx: FeatureContext) -> pd.Series:
     dv = _dollar_panel(ctx)
     if dv.empty or len(dv) < 60:
         return _nan_series(ctx)
-    mu = _roll(dv, 60, "mean").iloc[-1]
-    sd = _roll(dv, 60, "std").iloc[-1]
+    mu = _roll_per_symbol(dv, 60, "mean").iloc[-1]
+    sd = _roll_per_symbol(dv, 60, "std").iloc[-1]
     z = (dv.iloc[-1] - mu) / sd
-    return z.replace([np.inf, -np.inf], np.nan).reindex(ctx.universe)
+    return _finite(z).reindex(ctx.universe)
 
 
 def _volume_trend_20_60(ctx: FeatureContext) -> pd.Series:
     dv = _dollar_panel(ctx)
     if dv.empty or len(dv) < 60:
         return _nan_series(ctx)
-    adv20 = _roll(dv, 20, "mean").iloc[-1]
-    adv60 = _roll(dv, 60, "mean").iloc[-1]
-    return (adv20 / adv60 - 1.0).replace([np.inf, -np.inf], np.nan).reindex(ctx.universe)
+    adv20 = _roll_per_symbol(dv, 20, "mean").iloc[-1]
+    adv60 = _roll_per_symbol(dv, 60, "mean").iloc[-1]
+    return _finite(adv20 / adv60 - 1.0).reindex(ctx.universe)
 
 
 def _amihud_20d(ctx: FeatureContext) -> pd.Series:
@@ -440,9 +527,9 @@ def _amihud_20d(ctx: FeatureContext) -> pd.Series:
     p = ctx.price
     if dv.empty or len(p) < 21:
         return _nan_series(ctx)
-    ret = (p / p.shift(1) - 1.0).abs()
+    ret = (p / _shift_per_symbol(p, 1) - 1.0).abs()
     illiq = (ret / dv.where(dv > 0)) * 1e6
-    return _roll(illiq, 20, "mean").iloc[-1].reindex(ctx.universe)
+    return _roll_per_symbol(illiq, 20, "mean").iloc[-1].reindex(ctx.universe)
 
 
 def _days_to_exit(ctx: FeatureContext) -> pd.Series:
@@ -938,15 +1025,35 @@ def _yield_curve_slope(ctx: FeatureContext) -> pd.Series:
     return _broadcast(ctx, long_ - short)
 
 
+def _equity_reference_set(ctx: FeatureContext) -> list[str]:
+    """The universe's operating companies — breadth's fixed denominator.
+
+    Market breadth means "what share of THE MARKET is above its 200-day
+    average". Measuring it over "whichever names have a valid 200-day MA
+    today" made it a reading of the 5 crypto pairs (the only names whose MA
+    survived the calendar bug) broadcast to all 55 rows; it read 0.0 on
+    every sampled day."""
+    return [
+        sym
+        for sym in ctx.universe
+        if asset_class_of(sym, ctx.inputs.sector_map) == ASSET_CLASS_EQUITY
+    ]
+
+
 def _breadth_above_200dma(ctx: FeatureContext) -> pd.Series:
     p = ctx.price
     if len(p) < 200:
         return _nan_series(ctx)
-    ma = _roll(p, 200, "mean").iloc[-1]
-    last = p.iloc[-1]
-    flags = (last > ma)[ma.notna() & last.notna()]
-    if flags.empty:
+    reference = [sym for sym in _equity_reference_set(ctx) if sym in p.columns]
+    if len(reference) < BREADTH_MIN_NAMES:
         return _nan_series(ctx)
+    sub = p.loc[:, reference]
+    ma = _roll_per_symbol(sub, 200, "mean").iloc[-1]
+    last = sub.iloc[-1]
+    usable = ma.notna() & last.notna()
+    if int(usable.sum()) < BREADTH_MIN_NAMES:
+        return _nan_series(ctx)
+    flags = (last > ma)[usable]
     return _broadcast(ctx, float(flags.mean()))
 
 
@@ -1068,3 +1175,101 @@ NORMALIZED_FEATURES: tuple[str, ...] = tuple(
 RAW_FEATURES: tuple[str, ...] = tuple(
     name for name, spec in FEATURE_CATALOG.items() if spec.group in RAW_GROUPS
 )
+
+
+# ---------------------------------------------------------------------------
+# Asset-class coverage buckets
+# ---------------------------------------------------------------------------
+#
+# ``feature_coverage`` used to be "fraction of all ~51 columns that are
+# non-NaN", which quietly measures the wrong thing: an index fund files no
+# XBRL, so its 13 value/quality columns can never be anything but NaN, and it
+# scored 0.219 coverage for being an ETF. Coverage is only meaningful against
+# an asset-class-appropriate denominator.
+#
+# The three buckets and what each is expected to produce:
+#
+# * ``equity``  — an operating company: ALL ten feature groups apply.
+# * ``etf``     — an index/sector fund: no XBRL filings (no ``value``, no
+#                 ``quality``), no Form 4s (``insider``), no sell-side EPS
+#                 estimates (``estimates``), no earnings date, and no sector
+#                 ETF of its own to be relatively strong against.
+# * ``crypto``  — a crypto pair: same exclusions as ``etf``; it is likewise
+#                 not an issuer and has no earnings calendar or sector peer.
+#
+# Everything else — momentum, mean-reversion, volatility, volume, macro, and
+# the month-of-year calendar column — applies to all three classes and is
+# counted for all three.
+
+ASSET_CLASS_EQUITY = "equity"
+ASSET_CLASS_ETF = "etf"
+ASSET_CLASS_CRYPTO = "crypto"
+ASSET_CLASSES: tuple[str, ...] = (ASSET_CLASS_EQUITY, ASSET_CLASS_ETF, ASSET_CLASS_CRYPTO)
+
+_NON_ISSUER_GROUPS = frozenset({"value", "quality", "estimates", "insider"})
+_NON_ISSUER_FEATURES = frozenset(
+    {"days_to_next_earnings", "days_since_last_earnings", "rs_20d_sector"}
+)
+
+INAPPLICABLE_GROUPS: Mapping[str, frozenset[str]] = {
+    ASSET_CLASS_EQUITY: frozenset(),
+    ASSET_CLASS_ETF: _NON_ISSUER_GROUPS,
+    ASSET_CLASS_CRYPTO: _NON_ISSUER_GROUPS,
+}
+INAPPLICABLE_FEATURES: Mapping[str, frozenset[str]] = {
+    ASSET_CLASS_EQUITY: frozenset(),
+    ASSET_CLASS_ETF: _NON_ISSUER_FEATURES,
+    ASSET_CLASS_CRYPTO: _NON_ISSUER_FEATURES,
+}
+
+
+def asset_class_of(
+    symbol: str,
+    sector_map: Mapping[str, str],
+    etf_symbols: Collection[str] = (),
+) -> str:
+    """``equity`` | ``etf`` | ``crypto`` for one symbol.
+
+    ``sector_map`` is the symbol -> sector-ETF map the feature path already
+    carries (:class:`FeatureInputs`): its KEYS are the operating companies
+    with a GICS sector, its VALUES are the sector SPDRs. A non-crypto symbol
+    that is a sector-ETF value, or that has no sector classification at all
+    (SPY, QQQ, DIA, IWM, TLT), is treated as a fund. ``etf_symbols`` lets a
+    caller with better information (``instruments.is_etf``) override the
+    inference; symbols listed there are always ``etf``.
+    """
+    if is_crypto_symbol(symbol):
+        return ASSET_CLASS_CRYPTO
+    if symbol in etf_symbols:
+        return ASSET_CLASS_ETF
+    if symbol in sector_map:
+        return ASSET_CLASS_EQUITY
+    return ASSET_CLASS_ETF if sector_map else ASSET_CLASS_EQUITY
+
+
+def asset_classes_for(
+    symbols: Iterable[str],
+    sector_map: Mapping[str, str],
+    etf_symbols: Collection[str] = (),
+) -> dict[str, str]:
+    """:func:`asset_class_of` for many symbols."""
+    return {sym: asset_class_of(sym, sector_map, etf_symbols) for sym in symbols}
+
+
+def applicable_features(asset_class: str, names: Iterable[str]) -> list[str]:
+    """The subset of ``names`` this asset class is EXPECTED to produce.
+
+    Columns unknown to the catalog (synthetic panels, ad-hoc frames) are
+    always applicable — this only ever removes structurally-impossible
+    columns, never invents new ones."""
+    groups = INAPPLICABLE_GROUPS.get(asset_class, frozenset())
+    features = INAPPLICABLE_FEATURES.get(asset_class, frozenset())
+    out: list[str] = []
+    for name in names:
+        if name in features:
+            continue
+        spec = FEATURE_CATALOG.get(name)
+        if spec is not None and spec.group in groups:
+            continue
+        out.append(name)
+    return out
