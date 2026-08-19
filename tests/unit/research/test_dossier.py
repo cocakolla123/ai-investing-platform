@@ -70,14 +70,84 @@ def test_stable_to_volatile_section_order() -> None:
     context = build()
     positions = [
         context.index("## Instrument profile"),
+        context.index("## Fundamentals"),
         context.index("## Quant score"),
         context.index("## Price/volume stats"),
+        context.index("## Peer / relative strength"),
         context.index("## Filing excerpts"),
         context.index("## News digest"),
         context.index("## Macro digest"),
         context.index("## Journal hits"),
     ]
     assert positions == sorted(positions)
+
+
+def test_fundamentals_section_renders_every_line_with_its_citation() -> None:
+    from datetime import datetime as _dt
+
+    import pandas as pd
+
+    from dynamo.research.fundamentals import build_fundamentals
+
+    facts = pd.DataFrame(
+        [
+            {
+                "symbol": "ACME",
+                "tag": "Assets",
+                "period_end": pd.Timestamp("2026-03-31"),
+                "value": 5_000_000.0,
+                "filed_at": _dt(2026, 4, 30, tzinfo=UTC),
+            }
+        ]
+    )
+    snapshot = build_fundamentals(facts, symbol="ACME", as_of=date(2026, 8, 3))
+    context = build(fundamentals=snapshot)
+    section = context.split("## Fundamentals", 1)[1].split("## Quant score", 1)[0]
+    assert "basis: point-in-time XBRL facts filed <= 2026-08-03" in section
+    assert (
+        "total_assets: 5.0M USD [xbrl:ACME:Assets:2026-03-31:filed-2026-04-30]" in section
+    )
+    assert "revenue_ttm: n/a" in section  # absent, not invented
+
+
+def test_fundamentals_and_peer_sections_absent_by_default() -> None:
+    context = build()
+    assert "## Fundamentals\nnone" in context
+    assert "## Peer / relative strength\nnone" in context
+
+
+def test_peer_section_renders_sorted_stats_with_its_header() -> None:
+    from dynamo.research.market_stats import PeerContext
+
+    peers = PeerContext(
+        symbol="ACME",
+        sector="Industrials",
+        sector_etf="XLI",
+        stats={"excess_vs_XLI_20d_pct": 3.5, "beta_120d_vs_SPY": 1.25},
+    )
+    context = build(peers=peers)
+    section = context.split("## Peer / relative strength", 1)[1].split("##", 1)[0]
+    assert "sector: Industrials | sector_etf: XLI | benchmark: SPY" in section
+    assert section.index("beta_120d_vs_SPY: 1.2500") < section.index(
+        "excess_vs_XLI_20d_pct: 3.5000"
+    )
+
+
+def test_market_news_is_a_separate_labelled_section() -> None:
+    unrelated = NewsItem(
+        id="m-1",
+        symbols=("ACME",),
+        headline="Sector index rallies",
+        source="finnhub",
+        published_at=datetime(2026, 8, 2, 8, tzinfo=UTC),
+    )
+    context = build(market_news_items=(unrelated,))
+    digest = context.split("## News digest", 1)[1].split("## Market news", 1)[0]
+    market = context.split("## Market news", 1)[1]
+    assert "[n-1]" in digest and "[m-1]" not in digest
+    assert "not about ACME" in market
+    assert "[m-1]" in market
+    assert "## Market news" not in build()  # absent when there is nothing to say
 
 
 def test_news_sorted_by_published_at_not_input_order() -> None:
