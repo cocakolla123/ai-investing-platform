@@ -157,16 +157,25 @@ def macro_series(context: AssetExecutionContext, dynamo: DynamoResource) -> Mate
 
 @dagster_asset(group_name=INGESTION_GROUP, partitions_def=daily_partitions)
 def earnings_calendar(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
-    """Upcoming earnings events (Finnhub calendar, daily)."""
+    """Upcoming earnings events (Finnhub calendar, daily).
+
+    Alongside the (destructive) ``earnings_events`` upsert, each fetch
+    APPENDS to ``earnings_estimate_vintages`` when an estimate changed vs
+    the latest stored vintage (migration 0019) — the estimate history that
+    makes the estimate-revision features live for future dates.
+    """
     as_of = as_of_from_partition(context.partition_key)
     finnhub = dynamo.finnhub()
     if finnhub is None:
         context.log.warning("earnings_calendar: FINNHUB_API_KEY unset — skipping")
         return _skipped("finnhub not configured")
-    rows = dynamo.market_repo().upsert_earnings(
+    events = list(
         finnhub.earnings_calendar(as_of - timedelta(days=7), as_of + timedelta(days=21))
     )
-    return MaterializeResult(metadata={"rows": rows})
+    repo = dynamo.market_repo()
+    rows = repo.upsert_earnings(events)
+    vintages = repo.append_estimate_vintages(events)
+    return MaterializeResult(metadata={"rows": rows, "estimate_vintages": vintages})
 
 
 @dagster_asset(

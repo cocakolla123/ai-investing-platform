@@ -47,6 +47,32 @@ def test_estimate_revision_features_nan_without_data(
         assert bool(raw[col].isna().all())
 
 
+def test_estimate_revision_features_live_with_vintage_frame(
+    inputs: FeatureInputs, bars: pd.DataFrame
+) -> None:
+    """With an ``earnings_estimate_vintages``-shaped estimates frame (the
+    gateway's new wiring, migration 0019) the three estimate-revision
+    features stop being structurally NaN."""
+    as_of = last_session(bars)
+    estimates = pd.DataFrame(
+        [
+            # 100 days ago: baseline estimate; 10 days ago: upward revision.
+            {"symbol": "AAA", "fetched_at": as_of - pd.Timedelta(days=100), "eps_est": 1.00},
+            {"symbol": "AAA", "fetched_at": as_of - pd.Timedelta(days=10), "eps_est": 1.20},
+            {"symbol": "BBB", "fetched_at": as_of - pd.Timedelta(days=100), "eps_est": 2.00},
+            {"symbol": "BBB", "fetched_at": as_of - pd.Timedelta(days=10), "eps_est": 1.50},
+        ]
+    )
+    with_est = FeatureInputs(
+        bars=bars, sector_map=dict(inputs.sector_map), estimates=estimates
+    )
+    raw = build_raw_features(with_est, as_of, ["AAA", "BBB"])
+    assert raw.loc["AAA", "est_rev_breadth_30d"] == 1.0  # sign of the revision
+    assert raw.loc["BBB", "est_rev_breadth_30d"] == -1.0
+    assert abs(raw.loc["AAA", "est_rev_magnitude_90d"] - 0.20) < 1e-12
+    assert abs(raw.loc["BBB", "fwd_estimate_momentum"] - (-0.25)) < 1e-12
+
+
 def test_fundamentals_respect_filed_at(inputs: FeatureInputs, bars: pd.DataFrame) -> None:
     as_of = last_session(bars)
     quarters = pd.date_range("2023-03-31", periods=8, freq="QE")

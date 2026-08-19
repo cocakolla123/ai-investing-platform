@@ -113,7 +113,12 @@ class HistoricalDataGateway:
         - macro: ``as_of - 400d <= ts <= as_of`` AND ``vintage_ts <= as_of``
           (revisions published later are invisible);
         - earnings calendar: ``event_date >= as_of - 30d`` AND
-          ``fetched_at <= as_of`` (knowledge-time bound).
+          ``fetched_at <= as_of`` (knowledge-time bound);
+        - estimates: append-only ``earnings_estimate_vintages`` rows with
+          ``fetched_at <= as_of`` (migration 0019) — the estimate-revision
+          features go live from the first collected vintage onward; dates
+          before collection started stay honestly NaN (the history was
+          never captured and is not fabricated).
         """
         from dynamo.data.universe import default_sector_etf_map
         from dynamo.research.quant.catalog import FeatureInputs
@@ -161,10 +166,20 @@ class HistoricalDataGateway:
             ),
             exempt=("event_date",),
         )
+        ev = schema.earnings_estimate_vintages
+        # event_date exempt for the same reason as the calendar above: the
+        # knowledge axis of a vintage row is fetched_at (bounded <= cutoff).
+        estimates = self._read_df(
+            select(ev.c.symbol, ev.c.event_date, ev.c.fetched_at, ev.c.eps_est).where(
+                ev.c.fetched_at <= self._cutoff
+            ),
+            exempt=("event_date",),
+        )
         return FeatureInputs(
             bars=bars,
             fundamentals=fundamentals if not fundamentals.empty else None,
             insider=insider if not insider.empty else None,
+            estimates=estimates if not estimates.empty else None,
             macro=macro if not macro.empty else None,
             earnings_calendar=earnings if not earnings.empty else None,
             sector_map=default_sector_etf_map(sectors),

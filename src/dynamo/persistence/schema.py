@@ -182,6 +182,22 @@ earnings_events = Table(
     Column("fetched_at", DateTime(timezone=True)),
 )
 
+# Append-only estimate history (migration 0019). ``earnings_events`` upserts
+# destructively (actuals overwrite estimates), so estimate-revision features
+# need this vintage table: one row per (symbol, event_date) each time the
+# fetched estimate CHANGES (no daily duplicates). Point-in-time reads filter
+# ``fetched_at <= as_of``. Forward-collecting only — rows exist from the
+# migration date onward, historical estimates stay unknowable (documented).
+earnings_estimate_vintages = Table(
+    "earnings_estimate_vintages",
+    metadata,
+    Column("symbol", Text, primary_key=True),
+    Column("event_date", Date, primary_key=True),
+    Column("fetched_at", DateTime(timezone=True), primary_key=True),
+    Column("eps_est", Float),
+    Column("revenue_est", Float),
+)
+
 # Earnings-call transcripts (migration 0006). ``earnings_events`` rows point
 # here via call_transcript_ref = 'transcripts:{symbol}:{event_date}:{source}'.
 transcripts = Table(

@@ -160,12 +160,24 @@ def test_feature_inputs_bound_every_frame(engine, gateway) -> None:  # type: ign
         [EarningsEvent(symbol="MSFT", event_date=AS_OF + timedelta(days=3))],
         fetched_at=_dt(AFTER),
     )
+    # Estimate vintages (migration 0019): the knowledge axis is fetched_at —
+    # a revision fetched after as_of is invisible, earlier vintages are not.
+    event_date = AS_OF + timedelta(days=3)
+    repo.append_estimate_vintages(
+        [EarningsEvent(symbol="AAPL", event_date=event_date, eps_est=1.10)],
+        fetched_at=_dt(BEFORE),
+    )
+    repo.append_estimate_vintages(
+        [EarningsEvent(symbol="AAPL", event_date=event_date, eps_est=9.99)],
+        fetched_at=_dt(AFTER),
+    )
 
     inputs = gateway.feature_inputs(["AAPL", "MSFT"])
     assert list(inputs.fundamentals["value"]) == [1.0]
     assert list(inputs.insider["accession_no"]) == ["a-1"]
     assert list(inputs.macro["value"]) == [15.0]
     assert list(inputs.earnings_calendar["symbol"]) == ["AAPL"]
+    assert list(inputs.estimates["eps_est"]) == [1.10]  # PIT: 9.99 invisible
 
 
 def test_quant_scores_hide_future_rows(engine, gateway) -> None:  # type: ignore[no-untyped-def]

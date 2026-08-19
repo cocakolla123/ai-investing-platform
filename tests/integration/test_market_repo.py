@@ -27,6 +27,7 @@ TABLES = [
     schema.instruments,
     schema.xbrl_facts,
     schema.transcripts,
+    schema.earnings_estimate_vintages,
 ]
 
 
@@ -302,3 +303,36 @@ def test_upsert_transcripts_dedupes_in_batch_keep_last(
         rows = conn.execute(select(schema.transcripts)).all()
     assert len(rows) == 1
     assert rows[0].content == "revised"
+
+
+def test_append_estimate_vintages_appends_only_on_change(
+    repo: MarketDataRepository, engine: Engine
+) -> None:
+    """Estimates vintage fix (migration 0019): first sight appends, an
+    unchanged re-fetch appends NOTHING, a revision appends a new vintage —
+    and every prior vintage survives (append-only, no destructive upsert)."""
+    from dynamo.domain.models.market import EarningsEvent
+
+    event = EarningsEvent(symbol="AAPL", event_date=date(2026, 9, 1), eps_est=1.10)
+    t0 = datetime(2026, 8, 1, 7, 0, tzinfo=UTC)
+    assert repo.append_estimate_vintages([event], fetched_at=t0) == 1
+    # Same estimate next day: no daily duplicate.
+    assert (
+        repo.append_estimate_vintages(
+            [event], fetched_at=t0.replace(day=2)
+        )
+        == 0
+    )
+    # Revision: appended as a NEW vintage; the old row survives.
+    revised = EarningsEvent(symbol="AAPL", event_date=date(2026, 9, 1), eps_est=1.25)
+    assert repo.append_estimate_vintages([revised], fetched_at=t0.replace(day=3)) == 1
+    with engine.connect() as cx:
+        rows = cx.execute(
+            select(schema.earnings_estimate_vintages.c.eps_est).order_by(
+                schema.earnings_estimate_vintages.c.fetched_at
+            )
+        ).all()
+    assert [r.eps_est for r in rows] == [1.10, 1.25]
+    # Events with no estimate at all never write vintages.
+    bare = EarningsEvent(symbol="MSFT", event_date=date(2026, 9, 2))
+    assert repo.append_estimate_vintages([bare], fetched_at=t0) == 0

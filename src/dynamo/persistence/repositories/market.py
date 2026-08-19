@@ -58,6 +58,39 @@ def _now() -> datetime:
 _PG_MAX_BIND_PARAMS = 65535
 
 
+def estimate_vintage_rows(
+    events: Sequence[EarningsEvent],
+    latest_by_key: Mapping[tuple[str, date], tuple[float | None, float | None]],
+    fetched_at: datetime,
+) -> list[dict[str, Any]]:
+    """Rows to APPEND to ``earnings_estimate_vintages`` — pure core.
+
+    One row per (symbol, event_date) whose ``(eps_est, revenue_est)`` differs
+    from the latest stored vintage (``latest_by_key``); unchanged estimates
+    append NOTHING (no daily duplicates). Events carrying no estimate at all
+    are skipped. In-batch duplicates keep the last occurrence.
+    """
+    by_key: dict[tuple[str, date], EarningsEvent] = {}
+    for event in events:
+        if event.eps_est is None and event.revenue_est is None:
+            continue
+        by_key[(event.symbol, event.event_date)] = event
+    rows: list[dict[str, Any]] = []
+    for key, event in by_key.items():
+        if latest_by_key.get(key) == (event.eps_est, event.revenue_est):
+            continue
+        rows.append(
+            {
+                "symbol": event.symbol,
+                "event_date": event.event_date,
+                "fetched_at": fetched_at,
+                "eps_est": event.eps_est,
+                "revenue_est": event.revenue_est,
+            }
+        )
+    return rows
+
+
 def _reported_rowcount(rowcount: int | None, fallback: int) -> int:
     """Driver-honest affected-row count for multi-VALUES statements.
 
@@ -279,6 +312,51 @@ class MarketDataRepository:
             for e in events
         ]
         return self.upsert_rows(schema.earnings_events, rows)
+
+    def latest_estimate_vintages(
+        self, keys: Iterable[tuple[str, date]]
+    ) -> dict[tuple[str, date], tuple[float | None, float | None]]:
+        """(symbol, event_date) -> latest stored (eps_est, revenue_est)."""
+        keys = list(keys)
+        if not keys:
+            return {}
+        from sqlalchemy import tuple_ as sa_tuple
+
+        t = schema.earnings_estimate_vintages
+        stmt = (
+            select(t.c.symbol, t.c.event_date, t.c.fetched_at, t.c.eps_est, t.c.revenue_est)
+            .where(sa_tuple(t.c.symbol, t.c.event_date).in_(keys))
+            .order_by(t.c.symbol, t.c.event_date, t.c.fetched_at)
+        )
+        latest: dict[tuple[str, date], tuple[float | None, float | None]] = {}
+        with self._engine.connect() as cx:
+            for r in cx.execute(stmt):  # ordered by fetched_at: last write wins
+                latest[(r.symbol, r.event_date)] = (r.eps_est, r.revenue_est)
+        return latest
+
+    def append_estimate_vintages(
+        self, events: Iterable[EarningsEvent], *, fetched_at: datetime | None = None
+    ) -> int:
+        """Append-only estimate history (migration 0019): write one vintage
+        row per (symbol, event_date) whose estimate CHANGED vs the latest
+        stored vintage — the estimates-vintage fix for the destructive
+        ``earnings_events`` upsert. Unchanged estimates write nothing, so
+        the daily calendar refresh never duplicates rows."""
+        ts = fetched_at or _now()
+        events = list(events)
+        latest = self.latest_estimate_vintages(
+            {(e.symbol, e.event_date) for e in events}
+        )
+        rows = estimate_vintage_rows(events, latest, ts)
+        if not rows:
+            return 0
+        t = schema.earnings_estimate_vintages
+        stmt = pg_insert(t).values(rows).on_conflict_do_nothing(
+            index_elements=[c.name for c in t.primary_key.columns]
+        )
+        with self._engine.begin() as cx:
+            result = cx.execute(stmt)
+        return _reported_rowcount(result.rowcount, len(rows))
 
     def upsert_transcripts(
         self, transcripts: Iterable[Transcript], *, fetched_at: datetime | None = None
