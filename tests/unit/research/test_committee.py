@@ -164,27 +164,13 @@ class TestDisagreement:
     @given(
         bull=st.floats(min_value=0.0, max_value=1.0),
         bear=st.floats(min_value=0.0, max_value=1.0),
-        arbiter=st.floats(min_value=0.0, max_value=1.0),
-        action=st.sampled_from(list(Action)),
     )
-    def test_score_always_in_unit_interval(
-        self, bull: float, bear: float, arbiter: float, action: Action
-    ) -> None:
-        score = compute_disagreement(
-            bull_conviction=bull,
-            bear_conviction=bear,
-            action=action,
-            arbiter_conviction=arbiter,
-        )
+    def test_score_always_in_unit_interval(self, bull: float, bear: float) -> None:
+        score = compute_disagreement(bull_conviction=bull, bear_conviction=bear)
         assert 0.0 <= score <= 1.0
 
     def test_unanimous_committee_scores_zero(self) -> None:
-        score = compute_disagreement(
-            bull_conviction=1.0,
-            bear_conviction=0.0,
-            action=Action.BUY,
-            arbiter_conviction=1.0,
-        )
+        score = compute_disagreement(bull_conviction=1.0, bear_conviction=0.0)
         assert score == 0.0
 
 

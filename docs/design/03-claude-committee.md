@@ -123,14 +123,29 @@ expiring (>24h) → resubmit failures only via deterministic `custom_id`s.
 
 ## 4. Disagreement measurement
 
-- Stances mapped to a score: bull conviction `+c_bull`, bear `−c_bear`, arbiter action mapped
-  to [−2,+2]. `disagreement_score` = normalized conviction-weighted dispersion ∈ [0,1].
+- Stances mapped to a score: bull conviction `+c_bull`, bear `−c_bear`, each weighted by its
+  own conviction. `disagreement_score` = normalized conviction-weighted dispersion ∈ [0,1].
+  **The arbiter's action is deliberately NOT a term.** It was one until the
+  `replay-e5a49317bbee` control run showed the metric was circular: the score gates
+  `buy`/`add`, yet `ACTION_SCORE[buy]/2 = 1.0` was its largest contributor — choosing `buy`
+  manufactured the disagreement that vetoed `buy` (counterfactual mean 0.575 vs observed
+  0.273), and `add` could never exceed 0.483, making `add` mechanically safer than `buy` for
+  reasons unrelated to evidence. The term also sat off-scale against advocate convictions,
+  which empirically live in 0.22–0.58. Advocate dispersion is a property of the evidence and
+  is knowable before the arbiter speaks.
 - Categorical checks, each surfaced on the report: (a) bull-vs-bear expected-value gap;
   (b) `quant_alignment` conflict (LLM stance vs quant score direction); (c) committee-implied
   probability vs prediction-market implied probability where a mapped market exists.
 - **Guardrails in code, not prompts:** `action ∈ {buy, add}` is rejected by the committee
   assembler if `disagreement_score > 0.6` or any bear `KillCase(severity="high")` lacks a
   matching `Rebuttal` — the verdict downgrades to `hold`/`no_action` with reason logged.
+- **Rebuttal matching is by index, not by text.** `arbiter_context_for` renders a
+  `## Bear kill cases (indexed)` block and the arbiter sets `Rebuttal.kill_case_index`;
+  a rebuttal also needs ≥1 `Evidence` item to count as substantive. Payloads with no index
+  (replayed history, model omissions) fall back to normalized text similarity —
+  severity-label strip, then content-word Jaccard ≥ 0.4 or `difflib` ratio ≥ 0.6. The
+  original raw-substring match failed 515 of 516 times, because the arbiter paraphrases and
+  prefixes `"HIGH: "`, which made `buy` unreachable for the entire control run.
 
 ## 5. Cost model & kill-switch
 

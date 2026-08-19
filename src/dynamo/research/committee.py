@@ -7,8 +7,10 @@ persistence is the caller's job. Guardrails live here in code, not in prompts.
 
 from __future__ import annotations
 
+import difflib
 import json
 import math
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import date
 from hashlib import sha256
@@ -17,7 +19,6 @@ from typing import Any
 import structlog
 
 from dynamo.domain.models.research import (
-    ACTION_SCORE,
     Action,
     AdvocateBrief,
     CommitteeVerdict,
@@ -37,6 +38,29 @@ from dynamo.research.prompt_loader import LoadedPrompt
 
 DISAGREEMENT_VETO_THRESHOLD = 0.6
 GUARDRAIL_AGENT = "guardrail"
+
+# --- Rebuttal <-> kill-case matching (see _unrebutted_high_kill_cases) ---
+# Tier-2 fallback thresholds, calibrated on the 516 high-severity kill cases of
+# run replay-e5a49317bbee: 88.8% of same-verdict pairs match, 0 of 516
+# cross-verdict (different-symbol) pairs match.
+REBUTTAL_JACCARD_THRESHOLD = 0.4
+REBUTTAL_RATIO_THRESHOLD = 0.6
+
+# The arbiter prefixes restated objections with a severity label ("HIGH: ...").
+_SEVERITY_PREFIX_RE = re.compile(r"^\s*(?:high|medium|low|critical|severe)\s*[:—-]\s*", re.I)
+_WORD_RE = re.compile(r"[a-z0-9]+")
+# Function words carry no topical signal; keeping them inflates Jaccard on
+# unrelated pairs and deflates it on paraphrases of different length.
+_STOPWORDS: frozenset[str] = frozenset({
+    "a", "an", "the", "and", "or", "but", "if", "of", "to", "in", "on", "for", "with", "without",
+    "by", "as", "at", "from", "into", "is", "are", "was", "were", "be", "been", "being", "that",
+    "this", "these", "those", "it", "its", "their", "there", "which", "who", "whom", "what",
+    "when", "while", "than", "then", "so", "not", "no", "any", "all", "some", "more", "most",
+    "other", "such", "only", "own", "same", "can", "could", "may", "might", "will", "would",
+    "shall", "should", "must", "do", "does", "did", "has", "have", "had", "over", "under",
+    "above", "below", "between", "through", "during", "before", "after", "up", "down", "out",
+    "off", "again", "further", "also", "both", "each", "few", "per", "via",
+})
 
 
 
@@ -167,16 +191,30 @@ def split_custom_id(custom_id: str) -> tuple[date, str, str]:
     return as_of, rest, stage
 
 
-def compute_disagreement(
-    *,
-    bull_conviction: float,
-    bear_conviction: float,
-    action: Action,
-    arbiter_conviction: float,
-) -> float:
-    """Normalized conviction-weighted dispersion of stances, in [0, 1] (doc 03 §4)."""
-    values = [bull_conviction, -bear_conviction, ACTION_SCORE[action] / 2.0]
-    weights = [bull_conviction, bear_conviction, arbiter_conviction]
+def compute_disagreement(*, bull_conviction: float, bear_conviction: float) -> float:
+    """Conviction-weighted dispersion of the two ADVOCATES, in [0, 1] (doc 03 §4).
+
+    Measures bull-vs-bear disagreement only. The arbiter's own action term
+    (formerly ``ACTION_SCORE[action] / 2.0``, a third value in the dispersion)
+    was removed for two reasons, both measured on run replay-e5a49317bbee:
+
+    1. **Circularity.** The score gates ``buy``/``add``, yet the action term was
+       its single largest contributor — choosing ``buy`` manufactured the
+       disagreement that then vetoed ``buy``. Counterfactual mean with the term
+       was 0.575 against an observed 0.273, and ``add`` (score 1.0 vs buy's 2.0)
+       could never exceed 0.483, making ``add`` mechanically safer than ``buy``
+       for reasons unrelated to the evidence.
+    2. **Scale mismatch.** ``ACTION_SCORE[BUY] / 2.0`` is 1.0, while advocate
+       convictions empirically live in 0.22-0.58; the action term sat outside
+       the range of the values it was being pooled with.
+
+    What the guardrail actually needs to know — do the two independently-run
+    advocates disagree? — is a property of the evidence, knowable before the
+    arbiter speaks. Range is preserved: two maximally-convicted opposed
+    advocates still score 1.0, a unanimous committee still scores 0.0.
+    """
+    values = [bull_conviction, -bear_conviction]
+    weights = [bull_conviction, bear_conviction]
     total = sum(weights)
     if total <= 0.0:
         return 0.0
@@ -201,17 +239,76 @@ def quant_alignment_for(action: Action, quant_score: QuantScore | None) -> Quant
     return QuantAlignment.AGREE if (eer > 0) == (direction > 0) else QuantAlignment.CONFLICT
 
 
+def _normalize_kill_case_text(text: str) -> str:
+    """Casefold, drop a leading severity label, collapse to bare word tokens."""
+    return " ".join(_WORD_RE.findall(_SEVERITY_PREFIX_RE.sub("", text.strip()).casefold()))
+
+
+def _content_words(normalized: str) -> set[str]:
+    return {w for w in normalized.split() if len(w) > 2 and w not in _STOPWORDS}
+
+
+def _texts_match(kill_case_text: str, rebuttal_text: str) -> bool:
+    """Tier-2 similarity: containment, then Jaccard, then sequence ratio."""
+    a = _normalize_kill_case_text(kill_case_text)
+    b = _normalize_kill_case_text(rebuttal_text)
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    words_a, words_b = _content_words(a), _content_words(b)
+    if words_a and words_b:
+        jaccard = len(words_a & words_b) / len(words_a | words_b)
+        if jaccard >= REBUTTAL_JACCARD_THRESHOLD:
+            return True
+    # autojunk=False is load-bearing: difflib's "popular element" heuristic
+    # activates above 200 elements and treats common letters as junk, which
+    # collapses the ratio of long prose pairs (measured 0.19 vs a true 0.63).
+    ratio = difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+    return ratio >= REBUTTAL_RATIO_THRESHOLD
+
+
 def _unrebutted_high_kill_cases(
     kill_cases: Iterable[KillCase], rebuttals: Iterable[Rebuttal]
 ) -> list[KillCase]:
-    rebuttal_keys = [r.kill_case.casefold() for r in rebuttals]
+    """High-severity bear kill cases with no substantive rebuttal (doc 03 §4).
+
+    A rebuttal only counts if it carries at least one Evidence item. Genuine
+    rebuttals in run replay-e5a49317bbee carried 2-5, so the bar costs nothing
+    and stops the tier-2 matcher being satisfied by a rebuttal that merely
+    restates the kill case's name.
+
+    Matching runs in two tiers:
+
+    - **Tier 1 — index.** ``Rebuttal.kill_case_index`` is the join key: the
+      bear's kill cases are numbered in ``arbiter_context_for`` and the arbiter
+      is instructed to echo the integer back. Exact, order-stable, unambiguous.
+    - **Tier 2 — text similarity.** For payloads with no index (replayed
+      history, or a model that omitted the field) fall back to normalized text:
+      casefold, strip a leading ``HIGH:``/``MEDIUM:`` label, reduce to word
+      tokens, then accept on substring containment, on Jaccard of content words
+      >= 0.4, or on ``difflib`` sequence ratio >= 0.6.
+
+    Tier 2 exists because the original implementation was raw substring
+    containment on un-normalized text, which failed 515 of 516 times (99.81%)
+    on real arbiter output — the arbiter paraphrases and prefixes a severity
+    label when restating an objection — making ``buy`` unreachable.
+    """
+    substantive = [r for r in rebuttals if len(r.evidence) >= 1]
+    indexed: set[int] = {
+        r.kill_case_index for r in substantive if r.kill_case_index is not None
+    }
+    unindexed_texts = [r.kill_case for r in substantive if r.kill_case_index is None]
+
     unmatched: list[KillCase] = []
-    for kc in kill_cases:
+    for position, kc in enumerate(kill_cases):
         if kc.severity is not Severity.HIGH:
             continue
-        desc = kc.description.casefold()
-        if not any(desc in key or key in desc for key in rebuttal_keys):
-            unmatched.append(kc)
+        if position in indexed:
+            continue
+        if any(_texts_match(kc.description, text) for text in unindexed_texts):
+            continue
+        unmatched.append(kc)
     return unmatched
 
 
@@ -333,10 +430,7 @@ class CommitteeEngine:
         self_critique = str(arbiter_payload.get("self_critique", ""))
 
         disagreement = compute_disagreement(
-            bull_conviction=bull.conviction,
-            bear_conviction=bear.conviction,
-            action=action,
-            arbiter_conviction=conviction,
+            bull_conviction=bull.conviction, bear_conviction=bear.conviction
         )
 
         # Guardrails: buy/add downgraded to hold on high disagreement or any
@@ -442,6 +536,33 @@ def advocate_context_for(context: str, dossier_payload: Mapping[str, Any]) -> st
     )
 
 
+KILL_CASE_INDEX_HEADING = "## Bear kill cases (indexed)"
+
+
+def render_indexed_kill_cases(bear_payload: Mapping[str, Any]) -> str:
+    """Number the bear's kill cases so rebuttals can cite them by integer.
+
+    The rendered position IS the join key `_unrebutted_high_kill_cases` uses,
+    so it must enumerate `bear_payload["kill_cases"]` in payload order with no
+    filtering — the bear brief is validated from the same list.
+    """
+    raw = bear_payload.get("kill_cases")
+    entries = list(raw) if isinstance(raw, (list, tuple)) else []
+    lines = [
+        KILL_CASE_INDEX_HEADING,
+        "Each rebuttal in bear_rebuttals MUST set kill_case_index to the integer i "
+        "of the kill case it answers, exactly as numbered here.",
+    ]
+    if not entries:
+        lines.append("(none)")
+        return "\n".join(lines)
+    for i, kc in enumerate(entries):
+        severity = str(kc.get("severity", "?")) if isinstance(kc, Mapping) else "?"
+        description = str(kc.get("description", "")) if isinstance(kc, Mapping) else str(kc)
+        lines.append(f"kill_cases[{i}] (severity={severity}): {description}")
+    return "\n".join(lines)
+
+
 def arbiter_context_for(
     context: str,
     dossier_payload: Mapping[str, Any],
@@ -454,6 +575,7 @@ def arbiter_context_for(
         json.dumps(dict(bull_payload), sort_keys=True, default=str),
         "## Bear advocate brief (JSON)",
         json.dumps(dict(bear_payload), sort_keys=True, default=str),
+        render_indexed_kill_cases(bear_payload),
         "## Quant score (JSON)",
         json.dumps(quant_score.model_dump(mode="json"), sort_keys=True)
         if quant_score is not None

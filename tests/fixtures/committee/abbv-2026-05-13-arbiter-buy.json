@@ -1,0 +1,366 @@
+{
+ "arbiter": {
+  "action": "buy",
+  "bear_case": "Roughly 49% of revenue is concentrated in immunology just as a competitor's drug data reportedly beat one of AbbVie's ~$17B products; if Skyrizi/Rinvoq growth decelerates, the multiple built on that durability compresses. The macro backdrop deteriorated (2Y +47bp to 4.00%, 10Y +28bp to 4.46%, HY OAS wider, VIX up), unfriendly for a dividend-defensive name mid-way through a $100B capex/R&D commitment whose funding capacity cannot be verified from the dossier (no balance sheet or cash flow data). Management itself conceded aesthetics faces 'a different cycle of pressure on the consumer,' and the obesity pipeline is early-stage with executives openly signaling appetite for combining assets \u2014 implying costly BD to catch up. The -9.35% YTD decline despite beats suggests the market is already discounting these risks, and the quant model's rank-1 signal rests on only 43% feature coverage.",
+  "bear_rebuttals": [
+   {
+    "evidence": [
+     {
+      "as_of": "2026-04-29",
+      "claim": "Skyrizi Q1 2026 sales were $4.5B, up 29.2% operationally, exceeding expectations, with share gains and leadership over all biologics and orals by a wide margin in psoriatic disease.",
+      "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+      "source_type": "journal"
+     },
+     {
+      "as_of": "2026-04-29",
+      "claim": "Management stated it expects Skyrizi and Rinvoq peak sales potential to exceed sell-side consensus estimates, citing significant remaining runway.",
+      "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+      "source_type": "journal"
+     },
+     {
+      "as_of": "2026-04-29",
+      "claim": "FDA approved adding genital/scalp psoriasis study results to the Skyrizi label; 5-year data show ~90% of psoriatic arthritis patients with no radiographic progression.",
+      "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+      "source_type": "journal"
+     },
+     {
+      "as_of": "2026-05-13",
+      "claim": "AbbVie presented fresh real-world and long-term data for Skyrizi and Rinvoq at Digestive Disease Week 2026, reinforcing the franchise's evidence base days before the verdict date.",
+      "source_ref": "finnhub:140282183",
+      "source_type": "news"
+     },
+     {
+      "as_of": "2026-05-11",
+      "claim": "The competitive threat rests on a single headline that a tiny biotech's drug data beat AbbVie's $17B drug, with no accompanying commercial, regulatory, or share-loss evidence in the provided context.",
+      "source_ref": "finnhub:140263776",
+      "source_type": "news"
+     }
+    ],
+    "kill_case": "HIGH: Competitive erosion in the core immunology franchise \u2014 if Skyrizi/Rinvoq lose share or pricing power to newer competitors (per the 'tiny biotech beat a $17B drug' headline), the ~49%-of-revenue growth engine decelerates and the premium multiple collapses.",
+    "rebuttal": "All observable, current-period evidence shows the franchise accelerating, not eroding: Skyrizi grew 29.2% operationally in Q1 2026 and exceeded internal expectations, with management citing share gains and clear leadership over all biologics and orals 'by a very wide margin' in psoriatic disease. Competitive moats were reinforced in-period: FDA approved adding genital/scalp psoriasis data to the Skyrizi label, 5-year data show ~90% of PsA patients with no radiographic progression, and fresh real-world/long-term data were presented at DDW 2026 in May. Management explicitly stated Skyrizi and Rinvoq peak sales should exceed sell-side consensus. The competing headline is a single news item about early clinical data from a 'tiny biotech' with no disclosed commercial traction, formulary access, or approval timeline \u2014 clinical data beats take years to translate into share loss against an entrenched franchise with quarterly dosing and payer positioning, well beyond this verdict's 180-day horizon. The kill case is a monitorable forward risk (captured in exit conditions), not a present fact; on the evidence as of 2026-05-13 it is rebutted."
+   },
+   {
+    "evidence": [
+     {
+      "as_of": "2026-05-13",
+      "claim": "HY OAS widened only modestly to 2.82% from 2.75%, NFCI remained accommodative-to-neutral (-0.591\u2192-0.524), and effective fed funds was flat at 3.63%, indicating repricing not stress.",
+      "source_ref": "DGS2/DGS10/T10Y2Y/T10Y3M/DFF; VIXCLS/BAMLH0A0HYM2",
+      "source_type": "macro"
+     },
+     {
+      "as_of": "2026-05-13",
+      "claim": "ABBV returned +3.84% over the trailing 20 days into the rate rise, closing at $207.03 with ~$1.4B daily dollar volume.",
+      "source_ref": "price_stats:ABBV:2026-05-13",
+      "source_type": "price"
+     },
+     {
+      "as_of": "2026-04-29",
+      "claim": "Management stated AbbVie has significant financial capacity to pursue early and late-stage BD opportunities given its strong growth outlook.",
+      "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+      "source_type": "journal"
+     }
+    ],
+    "kill_case": "MEDIUM: Macro repricing of defensive/dividend pharma \u2014 rising yields, wider HY spreads, and rising VIX compress multiples on bond-proxy names funding a $100B decade-long capex program.",
+    "rebuttal": "The macro move is real but modest in absolute terms (HY OAS 2.82% remains historically tight; NFCI is still below neutral at -0.524; fed funds flat), and ABBV posted +3.84% over 20 days into this backdrop, indicating idiosyncratic earnings momentum is currently overriding rate pressure. The $100B commitment is spread over a decade, and management cited 'significant financial capacity' \u2014 though I flag the unverifiable balance sheet as a residual risk rather than accept that claim at face value. This risk is sized into the modest position hint and a checkable macro exit condition."
+   },
+   {
+    "evidence": [
+     {
+      "as_of": "2026-04-29",
+      "claim": "Q1 2026 revenue of $15.0B (+12.4%) and raised EPS guidance were driven by immunology and neuroscience, independent of any obesity revenue.",
+      "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+      "source_type": "journal"
+     },
+     {
+      "as_of": "2026-04-29",
+      "claim": "Early-stage data for Amlin Analog 295 showed 'very encouraging weight loss results' per management.",
+      "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+      "source_type": "journal"
+     },
+     {
+      "as_of": "2026-05-13",
+      "claim": "AbbVie executive stated openness to combining obesity assets and characterized the obesity market as underpenetrated at the BofA Healthcare Conference.",
+      "source_ref": "finnhub:140290564",
+      "source_type": "news"
+     }
+    ],
+    "kill_case": "MEDIUM: Obesity strategic gap becomes value-destructive \u2014 early-stage internal data plus stated openness to 'combining obesity assets' risks an overpriced catch-up acquisition or continued absence from the category.",
+    "rebuttal": "Obesity is optionality, not a pillar of the current earnings base: the Q1 beat, guidance raise, and 12.4% growth were delivered with zero obesity contribution, so failure there does not impair the near-term thesis. Amlin Analog 295 showed encouraging early weight-loss data, and executive commentary about an underpenetrated market and asset combinations signals strategic flexibility rather than a committed large deal. A large premium-priced obesity acquisition is explicitly listed as an exit trigger rather than assumed away."
+   },
+   {
+    "evidence": [
+     {
+      "as_of": "2026-04-29",
+      "claim": "CCO Jeff Stewart described 'relative stability in the markets now' with low single-digit toxin growth and filler declines, acknowledging a different consumer pressure cycle than prior recessions.",
+      "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+      "source_type": "journal"
+     },
+     {
+      "as_of": "2026-04-29",
+      "claim": "Full-year adjusted EPS guidance was raised by $0.12 to $14.08-$14.28 despite the acknowledged aesthetics softness.",
+      "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+      "source_type": "journal"
+     }
+    ],
+    "kill_case": "LOW: Consumer-driven aesthetics deterioration spreads \u2014 management conceded 'a different cycle of pressure on the consumer,' and softness could broaden beyond fillers/toxins.",
+    "rebuttal": "Management characterized the aesthetics markets as showing 'relative stability' now \u2014 low single-digit toxin growth, fillers still declining \u2014 and the company beat and raised guidance inclusive of this known headwind. Aesthetics weakness is already in the reported numbers and the guidance; the pressure is consumer-discretionary-specific and there is no evidence in the context of contagion to prescription pharma demand."
+   }
+  ],
+  "bull_case": "Q1 2026 delivered a double beat (revenue +12.4% YoY, EPS $0.07 above midpoint) with raised full-year guidance. Immunology grew $1.0B YoY to $7.3B; Skyrizi grew 29.2% operationally with market-share leadership 'by a very wide margin' in psoriatic disease, new FDA label additions (genital/scalp psoriasis), and 5-year radiographic durability data. Management explicitly guided that Skyrizi/Rinvoq peak sales should exceed sell-side consensus. Pipeline catalysts are stacked into 2026: Skyrizi subcu Crohn's induction approval decision, Rinvoq alopecia areata submission, an accelerated oncology filing, Remagen PD-1/VEGF bispecific, and early obesity data. Shares are -9.35% YTD despite this, near multiyear-low valuation per news commentary, with +3.84% 20-day momentum and a #1 quant rank \u2014 a valuation dislocation with identifiable catalysts to close it.",
+  "conviction": 0.55,
+  "dissents": [
+   {
+    "agent": "bear_advocate",
+    "reason": "The -9.35% YTD decline despite a genuine beat-and-raise signals the market is discounting structural risks the committee cannot fully audit: ~49% revenue concentration in an immunology franchise now facing competitive data, an unverifiable balance sheet funding a $100B decade-long commitment into rising rates, and an obesity pipeline that requires costly BD to become competitive. The rank-1 quant signal should be heavily discounted at 0.20 confidence and 43% feature coverage.",
+    "stance": "sell"
+   },
+   {
+    "agent": "risk_conservative",
+    "reason": "Given missing balance sheet/cash flow data, a truncated transcript, no filing excerpts, and a low-confidence quant model, abstention (no_action) would have been the more defensible verdict than a small buy; the competitive headline cannot be fully evaluated from the provided context, so the high-severity rebuttal rests on backward-looking Q1 data.",
+    "stance": "hold"
+   }
+  ],
+  "exit_conditions": [
+   {
+    "checkable": true,
+    "description": "Immunology growth decelerates: Q2 2026 report shows Skyrizi operational growth below 15% YoY or combined Skyrizi+Rinvoq growth materially below trend, or management cites share loss to competitors.",
+    "predicate": "ABBV Q2 2026 earnings: Skyrizi operational YoY growth < 15% OR management discloses immunology share loss"
+   },
+   {
+    "checkable": true,
+    "description": "Price stop: close below $186 (~10% below the 2026-05-13 close of $207.03).",
+    "predicate": "ABBV daily close < 186.00"
+   },
+   {
+    "checkable": true,
+    "description": "Catalyst failure: FDA issues a CRL or delays the Skyrizi subcutaneous induction decision in Crohn's beyond year-end 2026.",
+    "predicate": "FDA decision on Skyrizi subcu Crohn's induction is negative or not received by 2026-12-31"
+   },
+   {
+    "checkable": true,
+    "description": "Macro regime break: 10Y Treasury yield sustained above 5.00% or HY OAS above 3.50%, indicating multiple-compression regime for defensive dividend equities.",
+    "predicate": "DGS10 > 5.00 for 5 consecutive sessions OR BAMLH0A0HYM2 > 3.50"
+   },
+   {
+    "checkable": true,
+    "description": "Value-destructive BD: AbbVie announces a large premium-priced obesity acquisition (> $20B) that materially raises leverage or dilutes earnings guidance.",
+    "predicate": "ABBV announces obesity-related acquisition with consideration > $20B before 2026-12-31"
+   },
+   {
+    "checkable": true,
+    "description": "Guidance cut: full-year 2026 adjusted EPS guidance is reduced below the $14.08 low end at any subsequent update.",
+    "predicate": "ABBV FY2026 adjusted EPS guidance low end < 14.08"
+   }
+  ],
+  "expected_downside_pct": -7.0,
+  "expected_upside_pct": 9.0,
+  "horizon_days": 180,
+  "position_size_hint_pct": 1.5,
+  "risks": [
+   "Competitive clinical data (the 'tiny biotech beat a $17B drug' report) could translate into formulary/share pressure on the immunology franchise, which is ~49% of revenue \u2014 concentration cuts both ways.",
+   "No balance sheet or cash flow data in the dossier: leverage, dividend coverage, and capacity for the $100B capex/R&D commitment plus BD (Remagen, potential obesity deals) cannot be independently verified.",
+   "Macro: 2Y/10Y yields rising, HY OAS and VIX drifting up; further rate pressure could compress multiples on dividend-defensive pharma regardless of execution.",
+   "Quant signal quality is weak: confidence 0.20 and feature coverage 0.43 mean the rank-1 score rests on incomplete inputs; realized 20-day vol (25.9%) exceeds the model's vol forecast (21.9%).",
+   "Aesthetics remains consumer-pressured (fillers declining, toxins low single digits) and could deteriorate further if consumer conditions worsen.",
+   "Regulatory/catalyst risk: a CRL or delay on Skyrizi subcu Crohn's induction or Rinvoq alopecia areata would remove near-term catalysts underpinning the re-rating case.",
+   "Earnings call transcript is truncated and no SEC filing excerpts were provided, so segment detail and guidance mechanics are partially unverified."
+  ],
+  "self_critique": "Weakest link: my rebuttal of the high-severity competitive kill case relies on backward-looking Q1 data and management's own characterization of its market position \u2014 the 'tiny biotech beat a $17B drug' headline provides no detail on which drug, which indication, or the data magnitude, so I am inferring the threat is slow-moving rather than verifying it. What would change my mind: payer/formulary data showing Skyrizi or Rinvoq share loss, Q2 2026 immunology growth decelerating below mid-teens, disclosure that the competitor asset is late-stage with a near-term approval path, or balance sheet data showing leverage that constrains the dividend or the capex program. Biases I may be exhibiting: recency bias toward the fresh beat-and-raise and +3.84% 20-day momentum; anchoring on the dossier's fundamentals-forward narrative and the bull brief's framing of the YTD decline as 'dislocation' when it may be rational discounting; and possible over-weighting of a rank-1 quant signal whose 0.20 confidence and 43% feature coverage I acknowledge but may not have discounted enough. I mitigated these with a small advisory size (1.5%), conviction only slightly above coin-flip (0.55), and six checkable exit conditions that directly encode the bear triggers.",
+  "thesis": "AbbVie's Q1 2026 results confirm the post-Humira transition is executing better than the market prices: revenue of $15.0B (+12.4% YoY) beat by $300M, adjusted EPS of $2.65 beat guidance midpoint by $0.07, full-year EPS guidance was raised to $14.08-$14.28, and the Skyrizi/Rinvoq engine grew ~29% with documented share gains and fresh label expansions. The stock is down 9.35% YTD despite these beats, and the campaign-v3 quant model independently ranks ABBV #1 with positive expected excess return \u2014 my stance is aligned with the quant direction, though I discount that signal for its low confidence (0.20) and thin feature coverage (0.43). The high-severity bear kill case (competitive erosion in immunology) is rebutted by current-quarter evidence of accelerating share gains, entrenched dosing/label advantages, and management's explicit above-consensus peak-sales guidance; the remaining bear points (macro multiple compression, aesthetics softness, obesity gap) are real but medium/low severity and are reflected in a modest conviction and small advisory size rather than abstention."
+ },
+ "as_of": "2026-05-13",
+ "bear": {
+  "conviction": 0.32,
+  "expected_move_pct": -7.0,
+  "horizon_days": 90,
+  "key_points": [
+   {
+    "as_of": "2026-05-11",
+    "claim": "A tiny biotech's drug data reportedly beat AbbVie's $17 billion drug, described as unwelcome news in what is framed as 'a challenging year' for AbbVie.",
+    "source_ref": "finnhub:140263776",
+    "source_type": "news"
+   },
+   {
+    "as_of": "2026-04-29",
+    "claim": "Immunology (Skyrizi + Rinvoq) generated $7.3B of AbbVie's $15.0B total Q1 revenue (~49%), making the company highly concentrated in a franchise now facing competitive threats.",
+    "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+    "source_type": "journal"
+   },
+   {
+    "as_of": "2026-04-29",
+    "claim": "CCO Jeff Stewart explicitly stated that unlike prior recessionary cycles where aesthetics proved resilient, this cycle shows 'a different cycle of pressure on the consumer,' with toxins at low single-digit growth and fillers still declining.",
+    "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+    "source_type": "journal"
+   },
+   {
+    "as_of": "2026-05-13",
+    "claim": "AbbVie's obesity program (Amlin Analog 295) is only at early-stage data, and management stated openness to 'combining obesity assets,' implying the internal pipeline is not yet competitive and may require costly M&A/BD to catch up in an already underpenetrated but crowded market.",
+    "source_ref": "finnhub:140290564",
+    "source_type": "news"
+   },
+   {
+    "as_of": "2026-05-13",
+    "claim": "Despite a 12.4% YoY revenue beat and raised EPS guidance, ABBV shares are down 9.35% YTD as of 2026-05-13, indicating the market is not rewarding the beat and may be pricing in structural risks.",
+    "source_ref": "finnhub:140282183",
+    "source_type": "news"
+   },
+   {
+    "as_of": "2026-05-13",
+    "claim": "Macro backdrop deteriorated into the period: 2Y yield up 47bp to 4.00%, 10Y up 28bp to 4.46%, HY OAS widened to 2.82% from 2.75%, VIX rose to 17.87 from 15.98, and NFCI tightened toward neutral \u2014 a less supportive environment for a high-multiple defensive/dividend pharma name funding a $100B decade-long capex/R&D commitment.",
+    "source_ref": "DGS2/DGS10/T10Y2Y/T10Y3M/DFF; VIXCLS/BAMLH0A0HYM2",
+    "source_type": "macro"
+   },
+   {
+    "as_of": "2026-05-13",
+    "claim": "The campaign-v3 quant model ranks ABBV #1 but with low confidence (0.20) and only 43.14% feature coverage, meaning the bullish quant signal rests on incomplete data and should be discounted.",
+    "source_ref": "quant_score:campaign-v3:ABBV:2026-05-13",
+    "source_type": "prediction_market"
+   },
+   {
+    "as_of": "2026-05-13",
+    "claim": "Model downside probability is 15.67% with a volatility forecast of 21.92%, versus realized 20-day annualized volatility of 25.95%, indicating elevated and possibly underestimated risk of a negative outcome.",
+    "source_ref": "price_stats:ABBV:2026-05-13",
+    "source_type": "price"
+   },
+   {
+    "as_of": "2026-05-13",
+    "claim": "No balance sheet, leverage, or cash flow data is available in the dossier to verify AbbVie's capacity to fund its stated $100B U.S. R&D/capex commitment plus ongoing BD (e.g., Remagen acquisition) without straining the balance sheet or dividend coverage.",
+    "source_ref": "dossier_analysis:data_gaps",
+    "source_type": "journal"
+   }
+  ],
+  "kill_cases": [
+   {
+    "description": "Competitive erosion in the core immunology franchise: if Skyrizi or Rinvoq lose share or pricing power to newer/cheaper competitor therapies (as flagged by the 'tiny biotech beat a $17B drug' news), the ~49%-of-revenue growth engine decelerates sharply, collapsing the premium multiple built on immunology durability.",
+    "severity": "high",
+    "trigger": "Subsequent quarters show operational growth deceleration in Skyrizi/Rinvoq sales below the 29.2%/high-teens trend, or payer/formulary data show accelerating share loss to competitor biologics."
+   },
+   {
+    "description": "Macro repricing of defensive/dividend pharma: continued yield curve moves (rising long rates, tightening liquidity, widening credit spreads) compress multiples on bond-proxy healthcare dividend stocks, especially one funding a $100B decade-long capex program partly via debt/BD spending.",
+    "severity": "medium",
+    "trigger": "10Y yield extends materially above 4.46%, HY OAS breaks above 3%, or NFCI moves into tightening territory, coinciding with ABBV multiple compression despite stable fundamentals."
+   },
+   {
+    "description": "Consumer-driven aesthetics deterioration spreads: management already conceded 'a different cycle of pressure on the consumer' versus prior resilience; if this consumer softness broadens beyond fillers/toxins into other discretionary-adjacent revenue lines, it undercuts the 'diversified growth' bull narrative.",
+    "severity": "low",
+    "trigger": "Aesthetics segment revenue declines accelerate or reported operational growth rates fall below current low-single-digit toxin growth in subsequent quarters."
+   },
+   {
+    "description": "Obesity strategic gap becomes value-destructive: AbbVie's admitted need to 'combine obesity assets' via BD, combined with only early-stage internal data, risks either continued absence from a category peers are winning, or an overpriced/dilutive acquisition to catch up, mirroring past large-deal integration risk (e.g., Remagen already added unproven pipeline exposure).",
+    "severity": "medium",
+    "trigger": "AbbVie announces a large premium-priced obesity acquisition, or reports no meaningful late-stage obesity asset progress by year-end 2026, while competitors extend their lead."
+   }
+  ],
+  "side": "bear",
+  "symbol": "ABBV",
+  "thesis": "AbbVie's headline Q1 beat masks three structural bear risks: (1) its ~49%-of-revenue immunology franchise is already being challenged by smaller competitors, threatening the durability of Skyrizi/Rinvoq's growth premium; (2) a tightening macro backdrop (rising 2Y/10Y yields, widening HY spreads, rising VIX) is unfriendly to a high-multiple, dividend-defensive pharma name mid-way through a $100B capex/BD spending program; and (3) management's own commentary shows consumer-driven softness in aesthetics and an admittedly early-stage, non-differentiated obesity pipeline, undercutting the 'diversified growth' narrative. The stock's -9.35% YTD decline despite a genuine EPS/revenue beat signals the market is already discounting these risks, and the quant model's own low confidence (0.20) and thin feature coverage (0.43) mean the 'rank 1' bullish signal should not be trusted at face value."
+ },
+ "bull": {
+  "conviction": 0.52,
+  "expected_move_pct": 9.0,
+  "horizon_days": 180,
+  "key_points": [
+   {
+    "as_of": "2026-04-29",
+    "claim": "Q1 2026 adjusted EPS was $2.65, $0.07 above guidance midpoint; total net revenues were $15.0B, beating expectations by $300M, reflecting 12.4% YoY sales growth.",
+    "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+    "source_type": "journal"
+   },
+   {
+    "as_of": "2026-04-29",
+    "claim": "Full-year 2026 adjusted EPS guidance was raised by $0.12 to $14.08-$14.28, signaling management confidence in forward earnings power.",
+    "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+    "source_type": "journal"
+   },
+   {
+    "as_of": "2026-04-29",
+    "claim": "Immunology segment revenue was $7.3B (+$1.0B YoY); Skyrizi sales were $4.5B, up 29.2% operationally, exceeding internal expectations, with continued share gains across psoriatic disease versus all biologics and orals.",
+    "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+    "source_type": "journal"
+   },
+   {
+    "as_of": "2026-04-29",
+    "claim": "Management stated it expects Skyrizi and Rinvoq peak sales to exceed sell-side consensus estimates, citing significant runway and upside beyond current Street models.",
+    "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+    "source_type": "journal"
+   },
+   {
+    "as_of": "2026-04-29",
+    "claim": "Pipeline catalysts include U.S. submission of Rinvoq for Alopecia Areata, a Skyrizi subcutaneous induction approval decision in Crohn's expected later in 2026, an oncology regulatory submission moved earlier than prior guidance, closing of the Remagen PD-1/VEGF bispecific acquisition, and encouraging early obesity data for Amlin Analog 295.",
+    "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+    "source_type": "journal"
+   },
+   {
+    "as_of": "2026-05-11",
+    "claim": "SeekingAlpha analysis argues AbbVie deserves a higher multiple, citing Q1 revenue +12.4% YoY, raised 2026 EPS guidance, and valuation near multiyear lows.",
+    "source_ref": "finnhub:140265987",
+    "source_type": "news"
+   },
+   {
+    "as_of": "2026-05-13",
+    "claim": "Despite YTD share price decline of -9.35%, 1-year total shareholder return is +14.17% and 5-year total shareholder return is also positive, suggesting recent weakness is a pullback within a longer uptrend rather than a structural breakdown.",
+    "source_ref": "finnhub:140282183",
+    "source_type": "news"
+   },
+   {
+    "as_of": "2026-05-13",
+    "claim": "AbbVie executives expressed openness to combining obesity assets and noted the obesity market remains underpenetrated, indicating optionality for inorganic or partnership-driven growth in a large addressable market.",
+    "source_ref": "finnhub:140290564",
+    "source_type": "news"
+   },
+   {
+    "as_of": "2026-05-06",
+    "claim": "AbbVie is cited among stocks delivering reliable dividend income, supporting a defensive total-return floor for the stock.",
+    "source_ref": "finnhub:140186825",
+    "source_type": "news"
+   },
+   {
+    "as_of": "2026-05-13",
+    "claim": "Quant model (campaign-v3) ranks ABBV #1 with expected excess return of 1.96% and downside probability of 15.67%, a positive though low-confidence signal.",
+    "source_ref": "quant_score:campaign-v3:ABBV:2026-05-13",
+    "source_type": "prediction_market"
+   },
+   {
+    "as_of": "2026-05-13",
+    "claim": "20-day price return is +3.84% with close at $207.03, indicating positive short-term momentum alongside the guidance raise.",
+    "source_ref": "price_stats:ABBV:2026-05-13",
+    "source_type": "price"
+   },
+   {
+    "as_of": "2026-04-29",
+    "claim": "AbbVie announced $1.4B North Carolina and $380M North Chicago manufacturing investments as part of a $100B U.S. R&D/capex commitment, signaling long-term confidence in demand and potential insulation from any future U.S. manufacturing/tariff policy shifts.",
+    "source_ref": "transcript ABBV 2026-04-29 via defeatbeta",
+    "source_type": "journal"
+   }
+  ],
+  "kill_cases": [
+   {
+    "description": "If the bear case rests on immunology franchise deceleration or share loss, this is directly contradicted by Skyrizi's 29.2% operational growth, segment revenue up $1B, and management's above-consensus peak sales confidence for Skyrizi/Rinvoq.",
+    "severity": "high",
+    "trigger": "Subsequent quarters show Skyrizi/Rinvoq operational growth sustaining double digits and/or FDA label expansions (e.g., Crohn's induction, Alopecia Areata) are approved as expected in 2026."
+   },
+   {
+    "description": "If the bear case rests on valuation being stretched or the stock being a value trap, the SeekingAlpha analysis and the -9.35% YTD decline despite raised guidance suggest the opposite: a valuation dislocation likely to close as guidance beats compound.",
+    "severity": "medium",
+    "trigger": "Forward P/E multiple re-rates upward toward peer/historical averages following continued EPS beats and guidance raises through 2026."
+   },
+   {
+    "description": "If the bear case leans heavily on the single news item that a smaller biotech's drug data beat one of AbbVie's ~$17B products as an existential competitive threat, this is undercut by AbbVie's broader diversified immunology leadership (psoriatic disease, genital/scalp psoriasis label additions, 5-year radiographic durability data) and management's explicit above-consensus long-term confidence.",
+    "severity": "medium",
+    "trigger": "AbbVie maintains or grows market share in psoriatic disease and IBD despite the competitor data, evidenced in subsequent quarterly share/volume commentary."
+   },
+   {
+    "description": "If the bear case rests on macro headwinds (rising yields pressuring dividend/defensive equities) sinking ABBV broadly, this is offset by company-specific fundamental momentum (guidance raise, EPS beat) that has historically decoupled pharma large-caps from rate-driven multiple compression when earnings execution is strong.",
+    "severity": "low",
+    "trigger": "ABBV outperforms XLV/S&P despite continued yield curve pressure, driven by idiosyncratic earnings beats rather than macro tailwinds."
+   }
+  ],
+  "side": "bull",
+  "symbol": "ABBV",
+  "thesis": "AbbVie is executing a well-telegraphed post-Humira transition better than the market is pricing: Q1 2026 beat on both revenue and EPS, management raised full-year EPS guidance, and the Skyrizi/Rinvoq immunology franchise is growing ~29% and ~well above consensus long-term peak estimates per management. With shares down ~9% YTD despite raised guidance and a diversified, still-accelerating pipeline (oncology, obesity, dermatology, Crohn's), the stock screens as a valuation dislocation that a top-ranked quant signal, positive recent price momentum, and durable dividend support argue should close."
+ },
+ "run_id": "replay-e5a49317bbee",
+ "stored_action": "hold",
+ "stored_disagreement": 0.5035810069363946,
+ "symbol": "ABBV"
+}

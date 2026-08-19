@@ -128,9 +128,22 @@ class AdvocateBrief(Frozen):
 
 
 class Rebuttal(Frozen):
-    kill_case: str  # description of the bear KillCase being rebutted
+    # Human-readable restatement of the bear KillCase being rebutted; rendered
+    # verbatim in reports. The arbiter paraphrases here, so it is NOT a
+    # reliable join key — kill_case_index is.
+    kill_case: str
     rebuttal: str
     evidence: tuple[Evidence, ...] = ()
+    kill_case_index: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Zero-based index of the bear kill case this rebuttal answers, exactly as "
+            "numbered in the '## Bear kill cases (indexed)' section of the context. "
+            "This integer is the join key the guardrail uses; the kill_case text is "
+            "prose for humans. Use null only if no listed kill case applies."
+        ),
+    )
 
 
 class ExitCondition(Frozen):
