@@ -300,3 +300,16 @@ def test_llm_boundary_normalizes_padded_keys_in_nested_payloads() -> None:
     )
     assert brief.side == Side.BULL
     assert str(brief.key_points[0].as_of) == "2026-03-10"
+
+
+def test_llm_boundary_unwraps_stringified_nested_objects() -> None:
+    """Real-run lesson three: nested objects stringified by the model
+    ('{"claim": ...}') are unwrapped and validated normally."""
+    from dynamo.domain.models.research import Dissent, Stance
+    from dynamo.research.committee import _validated
+
+    d = _validated(
+        Dissent,
+        '{"agent": "bear", "stance": "hold", "reason": "cyclical top"}',
+    )
+    assert d.agent == "bear" and d.stance == Stance.HOLD

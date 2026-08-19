@@ -49,6 +49,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol, cast
 
 import pandas as pd
+import structlog
 
 from dynamo.domain.models.learning import DecisionExperience
 from dynamo.domain.models.market import Instrument, NewsItem
@@ -83,6 +84,9 @@ from dynamo.research.committee import (
 )
 from dynamo.research.dossier import assemble_dossier_context, transcript_excerpt
 from dynamo.research.quant.scoring import ModelBundle
+
+log = structlog.get_logger(__name__)
+
 
 ENTRY_ACTIONS = frozenset({Action.BUY, Action.ADD})
 PRICE_STATS_LOOKBACK_DAYS = 120  # live build_deep_dive_contexts parity
@@ -711,17 +715,25 @@ class CommitteeReplay:
         regime = gw.regime_state()
         dives: list[ReplayDeepDive] = []
         for sym in sorted(arbiters):
-            verdict = CommitteeEngine.assemble_verdict(
-                symbol=sym,
-                as_of=day,
-                arbiter_payload=arbiters[sym],
-                bull=_brief(bulls[sym], sym, Side.BULL),
-                bear=_brief(bears[sym], sym, Side.BEAR),
-                quant_score=scores.get(sym),
-                prompt_version=self._prompts["arbiter"].version,
-                model_id=self._tier_models.get("arbiter", ""),
-                journal_context_used=tuple(eid for eid, _ in journal_hits.get(sym, [])),
-            )
+            try:
+                verdict = CommitteeEngine.assemble_verdict(
+                    symbol=sym,
+                    as_of=day,
+                    arbiter_payload=arbiters[sym],
+                    bull=_brief(bulls[sym], sym, Side.BULL),
+                    bear=_brief(bears[sym], sym, Side.BEAR),
+                    quant_score=scores.get(sym),
+                    prompt_version=self._prompts["arbiter"].version,
+                    model_id=self._tier_models.get("arbiter", ""),
+                    journal_context_used=tuple(eid for eid, _ in journal_hits.get(sym, [])),
+                )
+            except Exception:
+                # Fault isolation (live-path quarantine parity): one dive with
+                # unsalvageable model output must never void the day or the run.
+                log.exception(
+                    "replay_dive_quarantined", symbol=sym, as_of=day.isoformat()
+                )
+                continue
             dives.append(
                 ReplayDeepDive(
                     as_of=day,

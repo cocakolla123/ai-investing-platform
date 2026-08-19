@@ -58,6 +58,14 @@ def _normalized_keys(value: Any) -> Any:
         return out
     if isinstance(value, (list, tuple)):
         return [_normalized_keys(v) for v in value]
+    if isinstance(value, str):
+        # LLMs sometimes stringify nested objects ('{"claim": ...}') — unwrap.
+        stripped = value.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                return _normalized_keys(json.loads(stripped))
+            except (ValueError, TypeError):
+                return value
     return value
 
 
