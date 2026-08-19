@@ -29,14 +29,23 @@ Three real obstacles in the data (all verified against the live table):
     713,163M at 2026-01-31 (FY) next to 177,751M at 2026-04-30 (Q1); GOOGL
     files 402,836M at 2025-12-31 (FY) with no separate Q4 row at all. Summing
     "the last four period_ends" therefore double-counts a year.
-    :func:`annual_period_ends` recovers the annual periods from the revenue
-    series by magnitude (a period whose value is >= 1.8x the largest of its
-    three predecessors, all positive), and :func:`normalized_facts` replaces
-    each annual row with the *derived* Q4 (FY minus the three preceding
-    quarters). The annual period_ends found on revenue are applied to every
-    flow tag, because one 10-K publishes annual figures for all of them —
-    which keeps the inference working for tags that go negative (net income)
-    where a magnitude test alone would not.
+
+    Worse, the scope varies BY TAG and BY FISCAL YEAR inside one filer:
+    CAT's 2025 filings report ``Revenues`` as a discrete Q4,
+    ``OperatingIncomeLoss`` as the full year and
+    ``NetCashProvidedByUsedInOperatingActivities`` as year-to-date (10-Q cash
+    flow statements are cumulative by construction); ACN's ``Revenues`` are
+    fiscal-year totals through FY2023 and discrete quarters from FY2024. So
+    the scope is recovered per tag and per year from the numbers themselves:
+    :func:`fiscal_year_end_month` finds the year end, :func:`infer_shape`
+    classifies the tag (discrete / cumulative / fiscal-year-in-Q4 /
+    annual-only), and :func:`normalized_facts` rewrites every flow row into a
+    single quarter — a fiscal-year row becomes ``FY - (Q1+Q2+Q3)``, a
+    year-to-date row becomes ``YTD(q) - YTD(q-1)``. Rows whose predecessors
+    are missing are dropped, TTM windows must cover four DISTINCT fiscal
+    quarters, and a rewrite that turns revenue, cost of revenue or capex
+    negative marks the tag unusable. Absence beats a number nobody can
+    defend.
 (b) **Restatements.** Up to 6 rows share a (cik, tag, period_end) and differ
     only by ``filed_at``. ``quarterly_series``/``latest_value`` already take
     the latest filed row (<= ``as_of`` via ``pit_facts``); this module keeps
