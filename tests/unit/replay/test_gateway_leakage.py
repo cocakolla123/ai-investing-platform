@@ -180,6 +180,47 @@ def test_feature_inputs_bound_every_frame(engine, gateway) -> None:  # type: ign
     assert list(inputs.estimates["eps_est"]) == [1.10]  # PIT: 9.99 invisible
 
 
+def test_fundamentals_read_hides_future_filings(engine, gateway) -> None:  # type: ignore[no-untyped-def]
+    """The dossier's fundamentals read (longer window, symbol-filtered) is
+    bounded exactly like the feature one: a fact FILED after as_of — a
+    restatement of an old period — must be invisible."""
+    from dynamo.domain.models.market import Instrument, XbrlFact
+
+    repo = _repo(engine)
+    repo.upsert_instruments(
+        [
+            Instrument(symbol="AAPL", name="Apple", sector="tech", cik="0000320193"),
+            Instrument(symbol="MSFT", name="Microsoft", sector="tech", cik="0000789019"),
+        ]
+    )
+    old_period = AS_OF - timedelta(days=1200)  # inside the 1500-day window
+    repo.upsert_xbrl_facts(
+        [
+            XbrlFact(
+                cik="0000320193", tag="Revenues", period_end=old_period,
+                value=1.0, unit="USD", filed_at=_dt(BEFORE),
+            ),
+            XbrlFact(
+                cik="0000320193", tag="Revenues", period_end=old_period,
+                value=2.0, unit="USD", filed_at=_dt(AFTER),  # future restatement
+            ),
+            XbrlFact(
+                cik="0000789019", tag="Revenues", period_end=BEFORE,
+                value=3.0, unit="USD", filed_at=_dt(BEFORE),
+            ),
+        ]
+    )
+
+    frame = gateway.fundamentals(["AAPL"])
+    assert list(frame["value"]) == [1.0]  # future filing invisible
+    assert list(frame["symbol"]) == ["AAPL"]  # symbol filter honored
+    assert list(frame.columns) == ["symbol", "tag", "period_end", "value", "filed_at"]
+
+    both = gateway.fundamentals(["AAPL", "MSFT"])
+    assert sorted(both["value"]) == [1.0, 3.0]
+    assert gateway.fundamentals(["NOSUCH"]).empty
+
+
 def test_quant_scores_hide_future_rows(engine, gateway) -> None:  # type: ignore[no-untyped-def]
     from dynamo.persistence import schema
 
