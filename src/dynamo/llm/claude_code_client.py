@@ -94,10 +94,19 @@ _PLAN_LIMIT_RE = re.compile(
     r"|out\s+of\s+(usage|quota)|(5-hour|weekly|session)\s+limit)",
     re.IGNORECASE,
 )
+# CLI auth failures (expired OAuth, logged out) — terminal for the whole run.
+_AUTH_ERROR_RE = re.compile(
+    r"failed to authenticate|oauth.*(expired|invalid)|not logged in|please.*log ?in",
+    re.IGNORECASE,
+)
 
 
 class PlanLimitExhausted(RuntimeError):
     """Claude Code subscription window exhausted — wait for the next window."""
+
+
+class ClaudeCodeAuthError(RuntimeError):
+    """CLI OAuth/auth failure — terminal, never soft-skipped (fail the run loudly)."""
 
 
 class ClaudeCodeError(RuntimeError):
@@ -242,7 +251,16 @@ class ClaudeCodeResearchModel:
                 raise PlanLimitExhausted(
                     "Claude Code plan window exhausted (CLI reported a usage limit)"
                 )
-            raise ClaudeCodeError(f"claude CLI returned error envelope (subtype={subtype})")
+            if _AUTH_ERROR_RE.search(body):
+                # Auth failures are terminal for the whole run — every later call
+                # fails identically, so soft-skipping would silently void days.
+                raise ClaudeCodeAuthError(
+                    f"claude CLI authentication failed: {body[:200]} "
+                    "(run the CLI interactively and /login, then retry)"
+                )
+            raise ClaudeCodeError(
+                f"claude CLI returned error envelope (subtype={subtype}): {body[:200]}"
+            )
         return envelope
 
     def _record(self, envelope: dict[str, Any], *, role: str, model: str) -> None:

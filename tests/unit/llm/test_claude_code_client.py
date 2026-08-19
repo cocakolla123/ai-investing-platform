@@ -442,3 +442,23 @@ class TestPricingRegistry:
         assert spec.output_per_mtok == 0.0
         assert spec.knowledge_cutoff == date(2026, 1, 31)
         assert calculate_cost("claude-fable-5", input_tokens=1_000_000, output_tokens=50_000) == 0.0
+
+
+def test_auth_error_envelope_raises_terminal_auth_error() -> None:
+    """Expired-OAuth envelopes must abort loudly, never soft-skip (real-run lesson)."""
+    from dynamo.llm.claude_code_client import ClaudeCodeAuthError
+
+    envelope = json.dumps(
+        {
+            "is_error": True,
+            "subtype": "success",
+            "result": (
+                "Failed to authenticate: OAuth session expired "
+                "and could not be refreshed"
+            ),
+            "usage": {},
+        }
+    )
+    client, _ = make_client(FakeRunner([ok(envelope)]))
+    with pytest.raises(ClaudeCodeAuthError):
+        complete(client)
