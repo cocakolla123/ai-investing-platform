@@ -1018,10 +1018,14 @@ class CommitteeReplay:
 
 
 def _brief(payload: Mapping[str, Any], symbol: str, side: Side) -> AdvocateBrief:
+    # Tolerant boundary parse: nested LLM payloads may carry extra/padded keys
+    # (same real-run lesson as research.committee._validated — reuse it).
+    from dynamo.research.committee import _validated
+
     fields = set(AdvocateBrief.model_fields)
     filtered = {k: v for k, v in payload.items() if k in fields}
     filtered.update({"symbol": symbol, "side": side})
-    return AdvocateBrief.model_validate(filtered)
+    return _validated(AdvocateBrief, filtered)
 
 
 def _midnight(d: date) -> datetime:
