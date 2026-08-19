@@ -582,3 +582,128 @@ def test_registry_metrics_are_json_safe(smoke: dict[str, Any]) -> None:
         for v in smoke["report"].registry_metrics.values()
         if isinstance(v, float)
     )
+
+
+# -- multi-horizon labels + seed ensembling (--horizons / --ensemble-seeds) ---
+
+
+def test_horizons_and_ensemble_flags_parse_with_safe_defaults() -> None:
+    base = ["--train-start", "2024-01-02", "--train-end", "2025-01-02", "--label", "x"]
+    args = qt._build_parser().parse_args(base)
+    assert args.horizons is None
+    assert args.ensemble_seeds == 1
+    tuned = qt._build_parser().parse_args(
+        [*base, "--horizons", "5", "20", "--ensemble-seeds", "3"]
+    )
+    assert tuned.horizons == [5, 20]
+    assert tuned.ensemble_seeds == 3
+
+
+def test_main_refuses_bad_ensemble_and_horizon_values_before_db_work() -> None:
+    base = ["--train-start", "2026-01-05", "--train-end", "2026-02-27", "--label", "x"]
+    assert qt.main([*base, "--ensemble-seeds", "0", "--no-cache"]) == 1
+    assert qt.main([*base, "--horizons", "0", "--no-cache"]) == 1
+
+
+def test_build_panel_multi_horizon_label_columns_and_exclusion() -> None:
+    """--horizons 5 20: every horizon's label columns appear, the trailing
+    exclusion is the LONGEST horizon, and the 5d columns match a direct
+    single-horizon build (column plumbing, not new math)."""
+    from dynamo.research.quant.features import build_labels
+
+    universe = ["AAA", "BBB"]
+    bars = make_bars([*universe, "XLK", "SPY"], n_sessions=90)
+    inputs = FeatureInputs(bars=bars, sector_map={"AAA": "XLK", "BBB": "XLK"})
+    sector_map = {"AAA": "XLK", "BBB": "XLK"}
+    sessions = [cast(pd.Timestamp, t).date() for t in pd.bdate_range("2024-01-02", periods=90)]
+    panel = qt.build_panel(
+        lambda d: inputs, bars, sector_map, universe, sessions, horizons=(5, 20)
+    )
+    assert len(panel.sessions) == 70  # excluded by max(horizons)=20, not 5
+    for h in (5, 20):
+        for stem in ("excess_return", "downside", "realized_vol", "residual_return"):
+            assert f"{stem}_{h}d" in panel.labels.columns
+    day = panel.sessions[10]
+    direct = build_labels(bars, sector_map, pd.Timestamp(day), horizon_sessions=5)
+    multi = panel.labels.xs(pd.Timestamp(day), level="ts")
+    for col in ("excess_return_5d", "downside_5d", "realized_vol_5d"):
+        pd.testing.assert_series_equal(
+            multi[col], direct[col].reindex(universe), check_names=False
+        )
+
+
+def test_horizons_move_config_hash_and_registry_hyperparams(tmp_path: Path) -> None:
+    panel = separable_panel(n_symbols=25, n_sessions=150)
+    # Add 5d label columns so the multi-horizon panel is well-formed.
+    labels = panel.labels.copy()
+    for stem in ("excess_return", "downside", "realized_vol"):
+        labels[f"{stem}_5d"] = labels[f"{stem}_20d"]
+    panel5 = qt.TrainingPanel(features=panel.features, labels=labels, sessions=panel.sessions)
+    multi = qt.train_quant_bundle(
+        panel5,
+        version="hz-v1",
+        artifact_dir=tmp_path,
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+        horizons=(5, 20),
+    )
+    default = qt.train_quant_bundle(
+        panel,
+        version="hz-default",
+        artifact_dir=tmp_path,
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+    )
+    assert multi.config_hash != default.config_hash
+    # Task targets stay on the LONGEST horizon.
+    assert multi.task_reports["rank"]["target"] == "excess_return_20d"
+    mv = qt.registry_model_version(multi, TRAIN_START, TRAIN_END)
+    assert mv.hyperparams["horizons"] == [5, 20]
+    mv_default = qt.registry_model_version(default, TRAIN_START, TRAIN_END)
+    assert "horizons" not in mv_default.hyperparams
+    assert "ensemble_seeds" not in mv_default.hyperparams
+
+
+def test_ensemble_seeds_train_n_members_and_persist_through_the_bundle(
+    tmp_path: Path,
+) -> None:
+    """--ensemble-seeds 2: every task saves 2 member artifacts, the manifest
+    grows 'members', the loaded bundle averages, and the knob moves the
+    config hash + registry hyperparams."""
+    from dynamo.research.quant.bundle import read_bundle_manifest
+    from dynamo.research.quant.scoring import AveragingEnsemble
+
+    panel = separable_panel(n_symbols=25, n_sessions=150)
+    report = qt.train_quant_bundle(
+        panel,
+        version="ens-cli-v1",
+        artifact_dir=tmp_path,
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+        ensemble_seeds=2,
+    )
+    manifest = read_bundle_manifest(tmp_path, "ens-cli-v1")
+    for task in ("ranker", "downside", "vol"):
+        members = manifest["tasks"][task]["members"]
+        assert len(members) == 2
+        for m in members:
+            assert (tmp_path / m["artifact_file"]).is_file()
+    bundle = bundle_from_version(
+        "ens-cli-v1", tmp_path, current_feature_names=report.feature_names
+    )
+    assert isinstance(bundle.ranker, AveragingEnsemble)
+    last_ts = panel.features.index.get_level_values(0)[-1]
+    day = panel.features.xs(last_ts, level="ts")
+    scores = score_universe(bundle, day, panel.sessions[-1])
+    assert len(scores) == len(day)
+    assert all(s.expected_excess_return is not None for s in scores)
+    single = qt.train_quant_bundle(
+        panel,
+        version="ens-cli-single",
+        artifact_dir=tmp_path,
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+    )
+    assert report.config_hash != single.config_hash
+    mv = qt.registry_model_version(report, TRAIN_START, TRAIN_END)
+    assert mv.hyperparams["ensemble_seeds"] == 2

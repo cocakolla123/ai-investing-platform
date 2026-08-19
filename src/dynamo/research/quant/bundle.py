@@ -39,7 +39,7 @@ import pandas as pd
 from dynamo.domain.ports import ForecastModel
 from dynamo.learning.artifacts import load_model, save_model
 from dynamo.research.quant.catalog import FEATURE_CATALOG
-from dynamo.research.quant.scoring import ModelBundle
+from dynamo.research.quant.scoring import AveragingEnsemble, ModelBundle
 
 BUNDLE_SUFFIX = ".bundle.json"
 BUNDLE_TASKS = ("ranker", "downside", "vol")
@@ -126,8 +126,34 @@ def save_bundle(
     out-of-fold report so the go/no-go evidence travels with the artifact."""
     base = Path(directory)
     base.mkdir(parents=True, exist_ok=True)
-    tasks: dict[str, dict[str, str]] = {}
+    tasks: dict[str, dict[str, Any]] = {}
     for task, model in (("ranker", ranker), ("downside", downside), ("vol", vol)):
+        if isinstance(model, AveragingEnsemble):
+            # Seed ensemble (--ensemble-seeds): one artifact PER MEMBER, tied
+            # together by a 'members' list; the loader rebuilds the averaging
+            # wrapper. Single-model bundles keep the original manifest shape.
+            members: list[dict[str, str]] = []
+            for i, member in enumerate(model.members):
+                model_id = f"{version}-{task}-s{i:02d}"
+                manifest = save_model(
+                    member,
+                    base,
+                    model_id,
+                    feature_names=feature_names,
+                    train_start=train_start,
+                    train_end=train_end,
+                    n_samples=n_samples,
+                    extra={"task": task, "bundle_version": version, "member": i},
+                )
+                members.append(
+                    {
+                        "model_id": model_id,
+                        "sha256": manifest.sha256,
+                        "artifact_file": manifest.artifact_file,
+                    }
+                )
+            tasks[task] = {"members": members}
+            continue
         model_id = f"{version}-{task}"
         manifest = save_model(
             model,
@@ -237,7 +263,16 @@ def bundle_from_version(
             )
         # load_model re-hashes the artifact and refuses on any mismatch with
         # the sidecar manifest AND the bundle-recorded sha (double-checked).
-        models[task] = load_model(base, str(spec["model_id"]), str(spec["sha256"]))
+        members = spec.get("members")
+        if members:
+            # Seed-ensemble bundle: load every member artifact and rebuild
+            # the averaging wrapper. Pre-ensemble manifests have no
+            # 'members' key and take the single-model path unchanged.
+            models[task] = AveragingEnsemble(
+                [load_model(base, str(m["model_id"]), str(m["sha256"])) for m in members]
+            )
+        else:
+            models[task] = load_model(base, str(spec["model_id"]), str(spec["sha256"]))
 
     return ModelBundle(
         model_version=model_version,

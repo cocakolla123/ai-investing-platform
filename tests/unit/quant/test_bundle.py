@@ -257,3 +257,148 @@ def test_feature_quantiles_shape_and_nan_columns() -> None:
     assert list(q.columns) == list(features.columns)
     assert q.loc["q01", features.columns[0]] < q.loc["q99", features.columns[0]]
     assert np.isnan(q.loc["q01", "all_nan"])
+
+
+# -- seed-ensemble bundles (--ensemble-seeds; N artifacts per task) -----------
+
+
+def _ensemble_factory(objective: str, n: int = 2):
+    from dynamo.research.quant.scoring import AveragingEnsemble
+
+    def make() -> AveragingEnsemble:
+        return AveragingEnsemble(
+            [
+                LightGBMModel(
+                    objective,  # type: ignore[arg-type]
+                    seed=42 + i,
+                    n_estimators=15,
+                    # Subsample diversity: LightGBM's seed only changes the
+                    # fit under row/column subsampling (the trainer applies
+                    # the same recipe for --ensemble-seeds > 1).
+                    params={
+                        "min_child_samples": 5,
+                        "subsample": 0.7,
+                        "subsample_freq": 1,
+                        "colsample_bytree": 0.7,
+                    },
+                )
+                for i in range(n)
+            ]
+        )
+
+    return make
+
+
+def test_ensemble_bundle_saves_members_and_loads_averaging_wrapper(
+    tmp_path: Path,
+) -> None:
+    """An AveragingEnsemble task model persists one artifact PER member and
+    loads back as the same wrapper — predictions bit-identical to in-memory."""
+    from dynamo.research.quant.scoring import AveragingEnsemble
+
+    features, labels = _panel()
+    ranker = fit_final_model(
+        features, labels, task="rank", model_factory=_ensemble_factory("regression")
+    )
+    downside = fit_final_model(
+        features, labels, task="downside", model_factory=_ensemble_factory("binary")
+    )
+    vol = fit_final_model(
+        features, labels, task="vol", model_factory=_factory("regression")
+    )
+    save_bundle(
+        tmp_path,
+        "ens-v1",
+        ranker=ranker,
+        downside=downside,
+        vol=vol,
+        feature_names=list(features.columns),
+        train_feature_quantiles=feature_quantiles(features),
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+        n_samples=len(features),
+        config_hash="cfg-ens",
+        metrics={},
+        fold_ic_dispersion=0.02,
+    )
+    manifest = read_bundle_manifest(tmp_path, "ens-v1")
+    members = manifest["tasks"]["ranker"]["members"]
+    assert [m["model_id"] for m in members] == ["ens-v1-ranker-s00", "ens-v1-ranker-s01"]
+    for m in members:
+        assert (tmp_path / m["artifact_file"]).is_file()
+    # Mixed bundle: the single-model vol task keeps the original shape.
+    assert "members" not in manifest["tasks"]["vol"]
+    assert manifest["tasks"]["vol"]["model_id"] == "ens-v1-vol"
+
+    loaded = bundle_from_version("ens-v1", tmp_path)
+    assert isinstance(loaded.ranker, AveragingEnsemble)
+    assert len(loaded.ranker.members) == 2
+    assert not isinstance(loaded.vol, AveragingEnsemble)
+    from typing import Any, cast
+
+    import numpy as _np
+
+    last_ts = cast(Any, features.index.get_level_values(0)[-1])
+    day = features.xs(last_ts, level="ts")
+    _np.testing.assert_array_equal(loaded.ranker.predict(day), ranker.predict(day))
+    # The wrapper truly averages: member predictions differ (different seeds)
+    # and their mean equals the ensemble output.
+    member_preds = [
+        _np.asarray(m.predict(day), dtype=float) for m in loaded.ranker.members
+    ]
+    assert not _np.array_equal(member_preds[0], member_preds[1])
+    _np.testing.assert_allclose(
+        loaded.ranker.predict(day), _np.mean(_np.stack(member_preds), axis=0)
+    )
+
+
+def test_single_model_bundles_keep_the_pre_ensemble_manifest_shape(saved: dict) -> None:
+    manifest = read_bundle_manifest(saved["dir"], VERSION)
+    for task in ("ranker", "downside", "vol"):
+        assert "members" not in manifest["tasks"][task]
+        assert "model_id" in manifest["tasks"][task]
+
+
+def test_ensemble_member_sha_mismatch_is_loud(tmp_path: Path) -> None:
+    features, labels = _panel()
+    ranker = fit_final_model(
+        features, labels, task="rank", model_factory=_ensemble_factory("regression")
+    )
+    single = fit_final_model(
+        features, labels, task="vol", model_factory=_factory("regression")
+    )
+    save_bundle(
+        tmp_path,
+        "ens-bad",
+        ranker=ranker,
+        downside=single,
+        vol=single,
+        feature_names=list(features.columns),
+        train_feature_quantiles=None,
+        train_start=TRAIN_START,
+        train_end=TRAIN_END,
+        n_samples=len(features),
+        config_hash="cfg",
+        metrics={},
+        fold_ic_dispersion=0.0,
+    )
+    artifact = tmp_path / "ens-bad-ranker-s01.joblib"
+    artifact.write_bytes(artifact.read_bytes() + b"tamper")
+    with pytest.raises(ArtifactIntegrityError):
+        bundle_from_version("ens-bad", tmp_path)
+
+
+def test_existing_campaign_v3_bundle_on_disk_still_loads() -> None:
+    """Backward compatibility against the REAL registered bundle (when the
+    working copy has it): the ensemble-aware loader must read the
+    pre-ensemble manifest unchanged."""
+    root = Path(__file__).resolve().parents[3]
+    directory = root / "artifacts" / "models" / "quant"
+    if not (directory / "campaign-v3.bundle.json").is_file():
+        pytest.skip("campaign-v3 bundle not present on this machine")
+    manifest = read_bundle_manifest(directory, "campaign-v3")
+    bundle = bundle_from_version(
+        "campaign-v3", directory, current_feature_names=manifest["feature_names"]
+    )
+    assert bundle.ranker is not None and bundle.downside is not None
+    assert bundle.vol is not None

@@ -69,6 +69,16 @@ ALGO = "lightgbm"
 LABEL_KINDS = ("sector_excess", "residual")
 DEFAULT_LABEL_KIND = "sector_excess"
 
+# Seed-ensemble member subsampling (sklearn-API canonical names, no alias
+# warnings): LightGBM's random_state only changes the fit under row/column
+# subsampling, so ensemble members get the standard mild bagging diversity.
+# Applied ONLY when --ensemble-seeds > 1; explicit tuned params override.
+ENSEMBLE_MEMBER_PARAMS: dict[str, Any] = {
+    "subsample": 0.9,
+    "subsample_freq": 1,
+    "colsample_bytree": 0.9,
+}
+
 
 class PanelTooSmallError(RuntimeError):
     """The pooled panel is below the training gate — refuse (exit 2)."""
@@ -100,6 +110,8 @@ class TrainReport:
     lgbm_params: dict[str, Any] = field(default_factory=dict)
     feature_groups: tuple[str, ...] | None = None
     label_kind: str = DEFAULT_LABEL_KIND
+    horizons: tuple[int, ...] = (HORIZON_SESSIONS,)
+    ensemble_seeds: int = 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -132,6 +144,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "reproducible config hashes) or 'residual' (factor-residualized "
         "return — beta_mkt x SPY + beta_sector x sector-ETF excess stripped "
         "out, betas from ~250 trailing sessions <= as_of)",
+    )
+    parser.add_argument(
+        "--horizons",
+        nargs="+",
+        type=int,
+        default=None,
+        metavar="H",
+        help="label horizons in sessions (e.g. --horizons 5 20). The panel "
+        "grows column-suffixed label variants per horizon; the task models "
+        "train on the LONGEST one. Default: 20 only (reproducibility — "
+        "default runs keep pre-horizon config hashes).",
+    )
+    parser.add_argument(
+        "--ensemble-seeds",
+        type=int,
+        default=1,
+        help="train N seed variants per task and average their predictions "
+        "at scoring time (AveragingEnsemble; seeds 42..42+N-1). Default 1 "
+        "(single model, bit-identical to pre-ensemble runs).",
     )
     parser.add_argument(
         "--no-cache",
@@ -221,15 +252,20 @@ def build_panel(
     sessions: Sequence[date],
     *,
     horizon_sessions: int = HORIZON_SESSIONS,
+    horizons: Sequence[int] | None = None,
     progress: Callable[[str], None] | None = None,
     cache: Any | None = None,
     on_session: Callable[[int, int, float], None] | None = None,
 ) -> TrainingPanel:
     """Pooled panel: ``build_features`` per session (explicit as_of, the
     replay loading path) + ``build_labels`` per session from the shared
-    label-bars frame. The trailing ``horizon_sessions`` sessions are excluded
+    label-bars frame. The trailing label-horizon sessions are excluded
     — their forward windows extend past ``train_end`` so their labels cannot
-    be complete.
+    be complete. ``horizons`` (--horizons) builds column-suffixed label
+    variants per horizon; the exclusion tail is the LONGEST horizon so every
+    kept session carries complete labels at every horizon. Default stays
+    ``(horizon_sessions,)`` — identical sessions and label columns to
+    pre-horizon runs.
 
     ``cache`` (a ``PanelFeatureCache``-shaped object: ``get(day)`` /
     ``put(day, frame)``) short-circuits the per-session gateway build on a
@@ -247,8 +283,10 @@ def build_panel(
     from dynamo.research.quant.features import build_features, build_labels
 
     universe = [str(s) for s in universe]
-    feature_sessions = list(sessions)[: -horizon_sessions or None]
-    if horizon_sessions >= len(sessions):
+    hs = tuple(int(h) for h in horizons) if horizons is not None else (int(horizon_sessions),)
+    exclusion = max(hs)
+    feature_sessions = list(sessions)[: -exclusion or None]
+    if exclusion >= len(sessions):
         feature_sessions = []
     feature_frames: list[Any] = []
     label_frames: list[Any] = []
@@ -267,7 +305,7 @@ def build_panel(
             cache_hits += 1
             features = features.reindex(universe)
         labels = build_labels(
-            label_bars, sector_map, day, horizon_sessions=horizon_sessions
+            label_bars, sector_map, day, horizon_sessions=exclusion, horizons=hs
         ).reindex(universe)
         feature_frames.append(features)
         label_frames.append(labels)
@@ -424,6 +462,8 @@ def train_quant_bundle(
     lgbm_params: Mapping[str, Any] | None = None,
     feature_groups: Sequence[str] | None = None,
     label_kind: str = DEFAULT_LABEL_KIND,
+    horizons: Sequence[int] | None = None,
+    ensemble_seeds: int = 1,
 ) -> TrainReport:
     """Walk-forward evaluation for the three tasks, final-model fits on the
     full window, artifact + bundle-manifest save. Pure of the database —
@@ -434,17 +474,26 @@ def train_quant_bundle(
     catalog group BEFORE the gate check. Both flow into the config hash and
     the registry hyperparams so a tuned run is never confusable with a
     default one. ``label_kind`` selects the RANK task's target column
-    (``sector_excess`` -> excess_return_20d, ``residual`` ->
-    residual_return_20d); the default leaves the config hash bit-identical
-    to pre-residual runs, and a non-default kind moves the hash AND travels
-    in the registry hyperparams."""
+    (``sector_excess`` -> excess_return_{h}d, ``residual`` ->
+    residual_return_{h}d); ``horizons`` selects which label-horizon columns
+    the panel carries (task targets use the LONGEST); ``ensemble_seeds`` > 1
+    trains N seed variants per task wrapped in an
+    :class:`~dynamo.research.quant.scoring.AveragingEnsemble` (prediction =
+    member mean, one artifact per member in the bundle). Every non-default
+    knob moves the config hash AND travels in the registry hyperparams; the
+    defaults keep hashes bit-identical to pre-upgrade runs."""
     import math
 
     import numpy as np
 
     from dynamo.backtest.walkforward import compute_config_hash
     from dynamo.research.quant.bundle import save_bundle
-    from dynamo.research.quant.models import LightGBMModel, StatsforecastBaseline
+    from dynamo.research.quant.models import (
+        DEFAULT_SEED,
+        LightGBMModel,
+        StatsforecastBaseline,
+    )
+    from dynamo.research.quant.scoring import AveragingEnsemble
     from dynamo.research.quant.training import (
         feature_quantiles,
         fit_final_model,
@@ -459,11 +508,22 @@ def train_quant_bundle(
         )
     if label_kind not in LABEL_KINDS:
         raise ValueError(f"unknown label kind {label_kind!r}; valid: {list(LABEL_KINDS)}")
+    if ensemble_seeds < 1:
+        raise ValueError(f"--ensemble-seeds must be >= 1, got {ensemble_seeds}")
+    hs = tuple(int(h) for h in horizons) if horizons is not None else (HORIZON_SESSIONS,)
+    if any(h < 1 for h in hs):
+        raise ValueError(f"horizons must be positive session counts, got {list(hs)}")
+    primary = max(hs)  # task models train on the longest horizon's labels
+    rank_stem = "residual_return" if label_kind == "residual" else "excess_return"
+    targets = {
+        "rank": f"{rank_stem}_{primary}d",
+        "downside": f"downside_{primary}d",
+        "vol": f"realized_vol_{primary}d",
+    }
     tuned = dict(lgbm_params or {})
     n_sessions, n_symbols = check_panel(panel)
     features, labels = panel.features, panel.labels
     feature_names = tuple(str(c) for c in features.columns)
-    rank_target = "residual_return_20d" if label_kind == "residual" else None
     wf = wf_config if wf_config is not None else walkforward_for(n_sessions)
     config_payload: dict[str, Any] = {
         "version": version,
@@ -483,6 +543,10 @@ def train_quant_bundle(
         config_payload["lgbm_params"] = {k: tuned[k] for k in sorted(tuned)}
     if label_kind != DEFAULT_LABEL_KIND:  # default runs keep pre-residual hashes
         config_payload["label_kind"] = label_kind
+    if hs != (HORIZON_SESSIONS,):  # default runs keep pre-horizon hashes
+        config_payload["horizons"] = list(hs)
+    if ensemble_seeds > 1:  # default runs keep pre-ensemble hashes
+        config_payload["ensemble_seeds"] = int(ensemble_seeds)
     config_hash = compute_config_hash(config_payload)
     # Historic average only as the CLI's bar-to-beat: the full baseline suite
     # (seasonal-naive, AutoETS) stays available through train_and_evaluate
@@ -492,10 +556,27 @@ def train_quant_bundle(
         "baseline-historic-average": lambda: StatsforecastBaseline("historic_average")
     }
 
+    def _task_model(objective: str) -> Any:
+        if ensemble_seeds == 1:
+            return LightGBMModel(objective, params=tuned)  # type: ignore[arg-type]
+        # Seed ensemble: N variants differing in seed, averaged at prediction
+        # time. LightGBM's seed only matters under subsampling (deterministic
+        # full-data tree growth is seed-invariant), so ensemble members get
+        # mild row/column subsample diversity — the standard GBM seed-bagging
+        # recipe. Explicit --lgbm-* / tuned params still win on conflicts.
+        # Deterministic: seeds are DEFAULT_SEED..+N-1.
+        member_params = {**ENSEMBLE_MEMBER_PARAMS, **tuned}
+        return AveragingEnsemble(
+            [
+                LightGBMModel(objective, seed=DEFAULT_SEED + i, params=member_params)  # type: ignore[arg-type]
+                for i in range(ensemble_seeds)
+            ]
+        )
+
     factories = {
-        "rank": lambda: LightGBMModel("regression", params=tuned),
-        "downside": lambda: LightGBMModel("binary", params=tuned),
-        "vol": lambda: LightGBMModel("regression", params=tuned),
+        "rank": lambda: _task_model("regression"),
+        "downside": lambda: _task_model("binary"),
+        "vol": lambda: _task_model("regression"),
     }
     task_reports: dict[str, dict[str, Any]] = {}
     for task in ("rank", "downside", "vol"):
@@ -503,7 +584,7 @@ def train_quant_bundle(
             features,
             labels,
             task=task,  # type: ignore[arg-type]
-            target=rank_target if task == "rank" else None,
+            target=targets[task],
             model_factories={MODEL_NAME: factories[task]},
             baseline_factories=baselines,
             wf_config=wf,
@@ -522,12 +603,18 @@ def train_quant_bundle(
     )
 
     ranker = fit_final_model(
-        features, labels, task="rank", model_factory=factories["rank"], target=rank_target
+        features, labels, task="rank", model_factory=factories["rank"], target=targets["rank"]
     )
     downside = fit_final_model(
-        features, labels, task="downside", model_factory=factories["downside"]
+        features,
+        labels,
+        task="downside",
+        model_factory=factories["downside"],
+        target=targets["downside"],
     )
-    vol = fit_final_model(features, labels, task="vol", model_factory=factories["vol"])
+    vol = fit_final_model(
+        features, labels, task="vol", model_factory=factories["vol"], target=targets["vol"]
+    )
 
     n_samples = len(features)
     rank_pooled = task_reports["rank"]["pooled"][MODEL_NAME]
@@ -590,6 +677,8 @@ def train_quant_bundle(
         lgbm_params=dict(tuned),
         feature_groups=tuple(feature_groups) if feature_groups is not None else None,
         label_kind=label_kind,
+        horizons=hs,
+        ensemble_seeds=int(ensemble_seeds),
     )
 
 
@@ -623,6 +712,16 @@ def registry_model_version(report: TrainReport, train_start: date, train_end: da
             **(
                 {"label_kind": report.label_kind}
                 if report.label_kind != DEFAULT_LABEL_KIND
+                else {}
+            ),
+            **(
+                {"horizons": list(report.horizons)}
+                if report.horizons != (HORIZON_SESSIONS,)
+                else {}
+            ),
+            **(
+                {"ensemble_seeds": report.ensemble_seeds}
+                if report.ensemble_seeds > 1
                 else {}
             ),
         },
@@ -704,6 +803,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"valid: {sorted(GROUP_TARGETS)}"
             )
             return 1
+    # Validate cheap knobs NOW — a typo must fail in milliseconds, not after
+    # an hours-long panel build.
+    if args.ensemble_seeds < 1:
+        print(f"refused: --ensemble-seeds must be >= 1, got {args.ensemble_seeds}")
+        return 1
+    if args.horizons is not None and any(h < 1 for h in args.horizons):
+        print(f"refused: --horizons must be positive session counts, got {args.horizons}")
+        return 1
     lgbm_params = lgbm_params_from_flags(
         args.lgbm_max_depth, args.lgbm_min_data_in_leaf, args.lgbm_lambda_l2
     )
@@ -754,6 +861,7 @@ def main(argv: list[str] | None = None) -> int:
         sector_map,
         universe,
         sessions,
+        horizons=args.horizons,
         progress=lambda msg: print(msg, flush=True),
         cache=cache,
         on_session=(
@@ -762,11 +870,20 @@ def main(argv: list[str] | None = None) -> int:
             else None
         ),
     )
-    if lgbm_params or args.feature_groups or args.label_kind != DEFAULT_LABEL_KIND:
+    non_default = (
+        lgbm_params
+        or args.feature_groups
+        or args.label_kind != DEFAULT_LABEL_KIND
+        or args.horizons is not None
+        or args.ensemble_seeds > 1
+    )
+    if non_default:
         print(
             f"tuning: lgbm_params={lgbm_params or '{}'} "
             f"feature_groups={args.feature_groups or 'all'} "
-            f"label_kind={args.label_kind}",
+            f"label_kind={args.label_kind} "
+            f"horizons={args.horizons or [HORIZON_SESSIONS]} "
+            f"ensemble_seeds={args.ensemble_seeds}",
             flush=True,
         )
     try:
@@ -779,6 +896,8 @@ def main(argv: list[str] | None = None) -> int:
             lgbm_params=lgbm_params,
             feature_groups=args.feature_groups,
             label_kind=args.label_kind,
+            horizons=args.horizons,
+            ensemble_seeds=args.ensemble_seeds,
         )
     except PanelTooSmallError as exc:
         print(f"REFUSED: {exc}")

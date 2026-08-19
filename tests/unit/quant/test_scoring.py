@@ -98,3 +98,74 @@ def test_empty_universe_and_missing_models() -> None:
     scores = score_universe(no_models, features, date(2026, 8, 3))
     assert scores[0].expected_excess_return is None
     assert scores[0].rank is None
+
+
+# -- AveragingEnsemble (seed ensembling, --ensemble-seeds) --------------------
+
+
+class _ConstModel:
+    """ForecastModel-shaped fake predicting a constant; records fit calls."""
+
+    def __init__(self, value: float, importances: dict[str, float] | None = None) -> None:
+        self.value = value
+        self.importances = dict(importances or {})
+        self.fit_calls: list[tuple[int, dict]] = []
+
+    def fit(self, x, y, cfg):  # type: ignore[no-untyped-def]
+        self.fit_calls.append((len(x), dict(cfg or {})))
+        return self
+
+    def predict(self, x):  # type: ignore[no-untyped-def]
+        return np.full(len(x), self.value)
+
+    def feature_importances(self) -> dict[str, float]:
+        return dict(self.importances)
+
+
+def test_averaging_ensemble_predicts_member_mean() -> None:
+    from dynamo.research.quant.scoring import AveragingEnsemble
+
+    ensemble = AveragingEnsemble([_ConstModel(1.0), _ConstModel(3.0), _ConstModel(5.0)])
+    x = pd.DataFrame({"f1": [0.0, 1.0, 2.0, 3.0]})
+    np.testing.assert_allclose(ensemble.predict(x), np.full(4, 3.0))
+
+
+def test_averaging_ensemble_fit_delegates_to_every_member() -> None:
+    from dynamo.research.quant.scoring import AveragingEnsemble
+
+    members = [_ConstModel(1.0), _ConstModel(2.0)]
+    ensemble = AveragingEnsemble(members)
+    x = pd.DataFrame({"f1": [0.0, 1.0, 2.0]})
+    y = pd.Series([0.0, 1.0, 2.0])
+    assert ensemble.fit(x, y, {"k": "v"}) is ensemble
+    assert all(m.fit_calls == [(3, {"k": "v"})] for m in members)
+
+
+def test_averaging_ensemble_importances_average_across_members() -> None:
+    from dynamo.research.quant.scoring import AveragingEnsemble
+
+    ensemble = AveragingEnsemble(
+        [_ConstModel(0.0, {"a": 1.0, "b": 0.0}), _ConstModel(0.0, {"a": 0.0, "b": 0.5})]
+    )
+    assert ensemble.feature_importances() == {"a": 0.5, "b": 0.25}
+
+
+def test_averaging_ensemble_refuses_empty_members() -> None:
+    import pytest
+
+    from dynamo.research.quant.scoring import AveragingEnsemble
+
+    with pytest.raises(ValueError, match="at least one member"):
+        AveragingEnsemble([])
+
+
+def test_single_member_ensemble_matches_wrapped_model() -> None:
+    from dynamo.research.quant.scoring import AveragingEnsemble
+
+    bundle, features = _bundle()
+    assert bundle.ranker is not None
+    wrapped = AveragingEnsemble([bundle.ranker])
+    np.testing.assert_array_equal(
+        wrapped.predict(features.fillna(0.0)),
+        np.asarray(bundle.ranker.predict(features.fillna(0.0)), dtype=float),
+    )

@@ -13,8 +13,10 @@ dispersion)``. Symbols missing more than 30% of features are clamped low
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -25,7 +27,41 @@ from dynamo.domain.ports import ForecastModel
 MISSING_CLAMP_THRESHOLD = 0.30
 MISSING_CLAMP_CEILING = 0.20
 
-__all__ = ["ModelBundle", "score_universe"]
+__all__ = ["AveragingEnsemble", "ModelBundle", "score_universe"]
+
+
+class AveragingEnsemble:
+    """ForecastModel-shaped average over N seed variants of one task model.
+
+    ``fit`` fits every member on the same rows (members carry their own
+    seeds); ``predict`` is the elementwise mean of member predictions —
+    the classic cheap variance-reduction ensemble. Implements the same
+    :class:`~dynamo.domain.ports.ForecastModel` protocol as its members, so
+    walk-forward evaluation, final fits, and nightly scoring treat it as one
+    model. Persistence: ``bundle.py`` saves each member as its own artifact
+    and rebuilds the wrapper at load.
+    """
+
+    def __init__(self, members: Sequence[ForecastModel]) -> None:
+        if not members:
+            raise ValueError("AveragingEnsemble needs at least one member model")
+        self.members: list[ForecastModel] = list(members)
+
+    def fit(self, x: Any, y: Any, cfg: dict[str, Any] | None = None) -> AveragingEnsemble:
+        for member in self.members:
+            member.fit(x, y, dict(cfg or {}))
+        return self
+
+    def predict(self, x: Any) -> np.ndarray:
+        preds = [np.asarray(m.predict(x), dtype=float).ravel() for m in self.members]
+        return np.mean(np.stack(preds, axis=0), axis=0)
+
+    def feature_importances(self) -> dict[str, float]:
+        totals: dict[str, float] = {}
+        for member in self.members:
+            for name, value in member.feature_importances().items():
+                totals[name] = totals.get(name, 0.0) + float(value)
+        return {name: value / len(self.members) for name, value in totals.items()}
 
 
 @dataclass(frozen=True)
