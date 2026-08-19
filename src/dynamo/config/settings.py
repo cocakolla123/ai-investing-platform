@@ -5,8 +5,10 @@ from __future__ import annotations
 from enum import StrEnum
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from dynamo.domain.symbols import is_crypto_symbol
 
 
 class DynamoEnv(StrEnum):
@@ -97,6 +99,19 @@ class Settings(BaseSettings):
         "AVAX/USD",
         "LINK/USD",
     )
+
+    # --- Idle-cash ballast (owner-requested: ON by default) ---
+    # Cash above the true-cash floor defaults into a ballast ETF instead of
+    # sitting in dollars; active positions are funded by trimming ballast and
+    # exit proceeds flow back to it. The drawdown ladder and risk multipliers
+    # govern ballast exposure like everything else (see
+    # RuleBasedConstructor._ballast_lot). The DEFAULT is the diversified
+    # index (SPY) on purpose: ballast bypasses per-position/sector caps, and
+    # a single name carrying uncapped residual weight is not ballast — it is
+    # a concentrated bet. A single-stock ballast is technically possible
+    # (any non-crypto symbol validates) but deliberately not the default.
+    ballast_enabled: bool = Field(default=True, alias="BALLAST_ENABLED")
+    ballast_symbol: str = Field(default="SPY", alias="BALLAST_SYMBOL")
 
     # --- Market data ---
     tiingo_api_key: str = Field(default="", alias="TIINGO_API_KEY")
@@ -239,6 +254,16 @@ class Settings(BaseSettings):
     # --- Alerting ---
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
+
+    @field_validator("ballast_symbol")
+    @classmethod
+    def _ballast_not_crypto(cls, v: str) -> str:
+        if v and is_crypto_symbol(v):
+            raise ValueError(
+                f"BALLAST_SYMBOL {v!r} is a crypto pair; ballast must be an "
+                "equity/ETF symbol (crypto vol makes it cash-substitute-unfit)"
+            )
+        return v
 
     @property
     def is_live(self) -> bool:

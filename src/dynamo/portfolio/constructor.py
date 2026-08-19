@@ -2,7 +2,11 @@
 
 Four pure steps: sleeve split -> candidate selection -> sizing (DELEGATED to
 the risk engine's cascade, never duplicated here) -> cash residual with a
-floor. Every field of ``RiskVerdict`` is an inviolable bound: a final greedy
+floor. An optional fifth step (``ConstructionConfig.ballast_symbol``) parks
+the residual above the cash floor in a ballast ETF instead of dollars — see
+``_ballast_lot`` for the full semantics; empty symbol keeps construction
+bit-identical to the four-step path. Every field of ``RiskVerdict`` is an
+inviolable bound for ACTIVE lots: a final greedy
 compliance pass allocates weights in priority order against the verdict's
 caps, so the constructed portfolio can never violate a constraint — if the
 desired set is infeasible, lower-ranked names get less or nothing and the
@@ -40,7 +44,7 @@ from dynamo.domain.models.research import (
 from dynamo.domain.models.risk import Regime, RiskConfig, RiskVerdict
 from dynamo.domain.symbols import is_crypto_symbol
 from dynamo.portfolio.config import ConstructionConfig
-from dynamo.risk.ladder import effects_for
+from dynamo.risk.ladder import RungEffects, effects_for
 from dynamo.risk.sizing import SizingCandidate, SizingContext, size_positions
 
 # Below this weight a position is dropped rather than opened (doc 06 section 4).
@@ -243,7 +247,7 @@ class RuleBasedConstructor:
         mandatory = (
             set(exits)
             | set(trims)
-            | self._current_breaches(cur_w, verdict, candidates.sector_by_symbol)
+            | self._current_breaches(cur_w, verdict, candidates.sector_by_symbol, config)
         )
         ordered, deferred, skipped = self._apply_turnover(
             ordered, cur_w, config, mandatory, turnover_used_mtd, triggers
@@ -253,6 +257,12 @@ class RuleBasedConstructor:
         final_lots = self._clamp_to_verdict(
             ordered, verdict, rcfg, candidates.sector_by_symbol
         )
+
+        # ------------------------------ step 5: idle-cash ballast overlay
+        if config.ballast_symbol:
+            ballast = self._ballast_lot(config, verdict, effects, final_lots, cur_w)
+            if ballast is not None:
+                final_lots.append(ballast)
 
         weights = tuple(
             TargetWeight(
@@ -323,8 +333,15 @@ class RuleBasedConstructor:
         # Retained holdings first (incumbents; doc 07: holds are retained).
         # Crypto lots (Sleeve.CRYPTO) live inside the long-term selection
         # path — same retention/entry rules, crypto caps applied in sizing.
+        # The ballast symbol is NEVER auto-retained as an active incumbent:
+        # its weight is recomputed by the overlay every run (it may still
+        # become an ACTIVE pick via the normal entry path — watchlist rank +
+        # entry verdict — in which case the active weight wins and ballast
+        # is the residual on top).
         for symbol in sorted(held):
             if symbol in exits or symbol not in cur_w:
+                continue
+            if config.ballast_symbol and symbol == config.ballast_symbol:
                 continue
             if not held[symbol] & {Sleeve.LONG_TERM, Sleeve.CRYPTO}:
                 continue
@@ -428,6 +445,8 @@ class RuleBasedConstructor:
         for symbol in sorted(held):
             if symbol in exits or symbol in trims or symbol not in cur_w:
                 continue
+            if config.ballast_symbol and symbol == config.ballast_symbol:
+                continue  # ballast is overlay-governed, never a tactical incumbent
             if Sleeve.TACTICAL not in held[symbol]:
                 continue
             v = inputs.verdicts.get(symbol)
@@ -611,14 +630,21 @@ class RuleBasedConstructor:
         cur_w: Mapping[str, float],
         verdict: RiskVerdict,
         sector_by_symbol: Mapping[str, str],
+        config: ConstructionConfig,
     ) -> set[str]:
         """Symbols whose CURRENT weight violates the verdict -> mandatory trades."""
         breaches: set[str] = set()
         vetoed = {v.symbol for v in verdict.vetoes if v.symbol != "*"}
         gross = math.fsum(w for w in cur_w.values() if w > 0.0)
+        # With ballast enabled the portfolio deliberately sits AT the invested
+        # ceiling, so sub-noise mark-to-market drift would flag every symbol
+        # mandatory every other day; the noise floor is the drift band there
+        # (the overlay re-trims the residual anyway). Ballast disabled keeps
+        # the exact pre-ballast semantics bit-for-bit.
+        tol = config.min_trade_weight if config.ballast_symbol else 1e-12
         portfolio_breach = (
-            gross > verdict.gross_exposure_cap + 1e-12
-            or 1.0 - gross < verdict.cash_floor - 1e-12
+            gross > verdict.gross_exposure_cap + tol
+            or 1.0 - gross < verdict.cash_floor - tol
         )
         sector_tot: dict[str, float] = {}
         cluster_tot: dict[str, float] = {}
@@ -680,7 +706,17 @@ class RuleBasedConstructor:
         trigger = _primary_trigger(triggers)
 
         discretionary = sorted(
-            (s for s in symbols if s not in mandatory and abs(deltas[s]) > 0.0),
+            (
+                s
+                for s in symbols
+                if s not in mandatory
+                and abs(deltas[s]) > 0.0
+                # The ballast symbol is overlay-governed and budget-exempt: a
+                # held ballast position must never look like a discretionary
+                # full exit here (the overlay re-adds its weight afterwards),
+                # and funding trims for active picks must never be deferred.
+                and not (config.ballast_symbol and s == config.ballast_symbol)
+            ),
             key=lambda s: (-abs(deltas[s]), s),
         )
         for symbol in discretionary:
@@ -846,6 +882,95 @@ class RuleBasedConstructor:
             )
         return out
 
+    # ------------------------------------------------ idle-cash ballast
+    @staticmethod
+    def _ballast_lot(
+        config: ConstructionConfig,
+        verdict: RiskVerdict,
+        effects: RungEffects,
+        final_lots: list[_Lot],
+        cur_w: Mapping[str, float],
+    ) -> _Lot | None:
+        """Idle-cash ballast overlay: the post-compliance residual, governed
+        by the same risk posture as everything else.
+
+        Semantics (deliberate decisions, tested):
+
+        - Ballast is a CASH SUBSTITUTE, not an active bet. It is computed
+          AFTER the compliance pass as the residual between the invested
+          total and ``1 - max(verdict.cash_floor, config.ballast_cash_floor)``
+          (bounded by the gross cap), so by construction it can never crowd
+          out an active pick, breach the cash floor, or breach the gross cap.
+        - It deliberately bypasses per-position/sector/cluster caps: those
+          govern active bets, and the residual would otherwise be
+          un-investable. This is exactly why the production default is the
+          diversified index (SPY): a single name carrying uncapped residual
+          weight is not ballast, it is a concentrated bet.
+        - Ladder/risk governance: the residual scales with the rung's
+          ``risk_multiplier`` (DD5's 0.5 halves ballast, remainder to cash);
+          when increases are blocked (``new_risk_allowed`` false, a rung with
+          ``new_positions_allowed`` false, or a degraded verdict) existing
+          ballast is HELD but never increased — mirroring how active
+          positions are retained while no new risk opens. Defensive rungs
+          de-risk through ``verdict.gross_exposure_cap`` (DD15's 0.5 gross
+          override shrinks the residual; DD20's 0.0 exits ballast entirely).
+          A risk veto on the ballast symbol zeroes it (exit).
+        - If the ballast symbol also earns an ACTIVE weight, the active
+          weight wins and ballast is the residual on top (merged per-symbol
+          at execution).
+        - Churn guard: when the whole-symbol move is below
+          ``min_trade_weight``, ballast pins at its current weight (bounded
+          by the residual so compliance trims still happen).
+        """
+        symbol = config.ballast_symbol
+        active_total = math.fsum(
+            lot.desired for lot in final_lots if lot.desired > 0.0
+        )
+        floor = max(verdict.cash_floor, config.ballast_cash_floor)
+        investable = max(0.0, min(verdict.gross_exposure_cap, 1.0 - floor))
+        residual = max(0.0, investable - active_total)
+        active_sym = math.fsum(
+            lot.desired
+            for lot in final_lots
+            if lot.symbol == symbol and lot.desired > 0.0
+        )
+        held_ballast = max(0.0, cur_w.get(symbol, 0.0) - active_sym)
+        vetoed = any(v.symbol == symbol for v in verdict.vetoes)
+        increase_ok = (
+            verdict.new_risk_allowed
+            and effects.new_positions_allowed
+            and not verdict.degraded
+        )
+        if vetoed:
+            desired = 0.0
+            rationale = "ballast exited: risk veto on ballast symbol"
+        elif increase_ok:
+            desired = residual * effects.risk_multiplier
+            rationale = (
+                f"idle-cash ballast: residual {residual:.4f} above the "
+                f"{floor:.0%} cash floor x risk multiplier "
+                f"{effects.risk_multiplier:g}"
+            )
+        else:
+            desired = min(held_ballast, residual)
+            rationale = "ballast held, not increased (new risk blocked)"
+        if not vetoed:
+            current_total = cur_w.get(symbol, 0.0)
+            if abs((active_sym + desired) - current_total) < config.min_trade_weight:
+                desired = min(held_ballast, residual)
+        if desired < MIN_POSITION_WEIGHT:
+            return None  # dust never opens; a held dust position exits via diff
+        return _Lot(
+            symbol=symbol,
+            sleeve=Sleeve.BALLAST,
+            desired=desired,
+            is_new=held_ballast <= 0.0,
+            mandatory_cap=None,
+            strategy_id="ballast",
+            verdict_id=None,
+            rationale=rationale,
+        )
+
     # ------------------------------------------------------------------ diff
     @staticmethod
     def _diff(
@@ -912,7 +1037,11 @@ class RuleBasedConstructor:
                     constraints_applied=clamps_by_symbol.get(symbol, ()),
                 )
             )
-            executed_turnover += abs(delta) / 2.0
+            # Ballast trades never charge the monthly turnover budget: the
+            # ballast symbol is a cash substitute, and charging its funding
+            # trims would starve the active picks they exist to fund.
+            if not (config.ballast_symbol and symbol == config.ballast_symbol):
+                executed_turnover += abs(delta) / 2.0
         return tuple(changes), executed_turnover
 
     # ------------------------------------------------------ cash attribution

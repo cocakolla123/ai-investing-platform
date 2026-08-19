@@ -92,6 +92,7 @@ class Glance(BaseModel):
     day_change_pct: float | None = None
     cash_pct: float | None = None
     open_equities: int = 0
+    open_ballast: int = 0  # idle-cash ballast (index residual), own labeled line
     open_crypto: int = 0  # crypto sleeve (ADR-0013), same positions table
     open_options: int = 0
     open_kalshi: int = 0
@@ -247,6 +248,7 @@ def _glance(source: ReportSource, day: date, verdicts: list[Row], cost: CostSumm
         day_change_pct=day_change_pct,
         cash_pct=cash_pct,
         open_equities=int(counts.get("equities", 0)),
+        open_ballast=int(counts.get("ballast", 0)),
         open_crypto=int(counts.get("crypto", 0)),
         open_options=int(counts.get("options", 0)),
         open_kalshi=int(counts.get("kalshi", 0)),
@@ -535,8 +537,12 @@ def _render_glance(g: Glance, lines: list[str]) -> None:
         lines.append(f"- **Portfolio value:** {_usd(g.equity)}{change}")
     if g.cash_pct is not None:
         lines.append(f"- **Cash on hand:** {g.cash_pct:.1f}% of the portfolio")
+    ballast = (
+        f"{g.open_ballast} index ballast (idle cash at work), " if g.open_ballast else ""
+    )
     positions_line = (
-        f"- **Open positions:** {g.open_equities} stocks, {g.open_crypto} crypto, "
+        f"- **Open positions:** {g.open_equities} stocks, {ballast}"
+        f"{g.open_crypto} crypto, "
         f"{g.open_options} options, {g.open_kalshi} Kalshi event markets"
     )
     if g.open_polymarket_sim:

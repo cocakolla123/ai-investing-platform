@@ -27,7 +27,10 @@ def daily_report_asset(context: AssetExecutionContext, dynamo: DynamoResource) -
     settings = dynamo.settings()
     day = utcnow().date()
     report = build_daily_report_for_engine(
-        dynamo.engine(), day, settings.claude_monthly_budget_usd
+        dynamo.engine(),
+        day,
+        settings.claude_monthly_budget_usd,
+        ballast_symbol=settings.ballast_symbol if settings.ballast_enabled else "",
     )
     markdown = render_markdown(report)
 

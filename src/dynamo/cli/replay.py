@@ -141,6 +141,19 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--initial-equity", type=float, default=100_000.0)
     run.add_argument("--horizon-sessions", type=int, default=20)
     run.add_argument(
+        "--ballast",
+        default="",
+        metavar="SYMBOL",
+        help=(
+            "quant/portfolio modes: idle-cash ballast symbol (e.g. SPY) — "
+            "the residual above the cash floor rides this ETF instead of "
+            "dollars, ladder-governed. Part of config_hash, so a ballast "
+            "baseline never collides with the cash baseline's run id. "
+            "Committee mode refuses it (committee runs produce verdicts, "
+            "not portfolios)"
+        ),
+    )
+    run.add_argument(
         "--quant-model-version",
         default="",
         help=(
@@ -368,6 +381,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         commission_per_order=args.commission_per_order,
         generate_macro_digest=not args.no_macro_digest,
         within_run_learning=not args.no_within_run_learning,
+        ballast_symbol=args.ballast,
         code_version=args.code_version,
     )
     extras = _preflight_extras(engine, config, skip=args.skip_preflight)
@@ -488,6 +502,14 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
     command after the window resets skips days with persisted verdicts
     (deterministic run id + idempotent replay_verdicts upserts).
     """
+    if getattr(args, "ballast", ""):
+        print(
+            "--ballast applies to quant/portfolio modes only: a committee run "
+            "produces verdicts, not a portfolio — replay them with "
+            "--mode portfolio --ballast instead",
+            file=sys.stderr,
+        )
+        return 2
     from dynamo.config.settings import Settings
     from dynamo.llm.cost_meter import CostMeter, SqlAlchemyLedgerWriter
     from dynamo.llm.embeddings import LocalEmbedder

@@ -159,6 +159,12 @@ class ReplayConfig(BaseModel):
     # replay months learn from earlier ones — live-parity, still firewalled.
     generate_macro_digest: bool = True
     within_run_learning: bool = True
+    # Idle-cash ballast (empty = disabled, prior behavior bit-for-bit): the
+    # residual above the cash floor rides this symbol instead of dollars,
+    # ladder-governed (see RuleBasedConstructor._ballast_lot). In config_hash
+    # automatically like every field, so a ballast baseline re-run can never
+    # collide with the cash baseline's run id.
+    ballast_symbol: str = ""
     code_version: str = ""
 
     @property
@@ -553,7 +559,12 @@ class ReplayRunner:
         # top-fraction cut is redundant and would let a vetoed name consume
         # the candidate slots of eligible ones).
         self._construction_config = construction_config or ConstructionConfig(
-            quality_floor=0.0, long_term_top_fraction=1.0
+            quality_floor=0.0,
+            long_term_top_fraction=1.0,
+            # Idle-cash ballast (config.ballast_symbol, "" = off): threaded
+            # into the production constructor so a baseline can be re-run
+            # with the residual riding SPY instead of cash.
+            ballast_symbol=config.ballast_symbol,
         )
         self._engine = RiskEngine()
         self._constructor = RuleBasedConstructor()
@@ -698,8 +709,10 @@ class ReplayRunner:
 
             gw = self._gateway_factory(day)
             universe = gw.universe(cfg.universe_tiers)
+            ballast = self._construction_config.ballast_symbol
             panel_symbols = sorted(
                 {*universe, *shares, *BENCHMARK_SYMBOLS}
+                | ({ballast} if ballast else set())
             )
             bars = gw.bars(panel_symbols, RETURNS_LOOKBACK_DAYS)
             opens_today, closes_today = _day_prices(bars, day)
@@ -769,7 +782,13 @@ class ReplayRunner:
 
             # 3. Real RiskEngine verdict on point-in-time inputs.
             sigma_annual, adv = _sigma_and_adv(bars)
-            sectors = gw.sectors(panel_symbols)
+            sectors = dict(gw.sectors(panel_symbols))
+            if ballast:
+                # Dedicated sector tag: the engine subtracts same-sector held
+                # weight from per-symbol caps, so a large ballast position
+                # sharing a sector label with active candidates would zero
+                # their caps — the one thing ballast must never do.
+                sectors[ballast] = "ballast"
             state = _portfolio_state(day, equity, cash, shares, avg_cost, hwm, open_lots)
             prices = {s: last_close[s] for s in sorted(shares) if s in last_close}
             panel = _returns_panel(bars)
@@ -930,7 +949,10 @@ class ReplayRunner:
         or past ``horizon_sessions`` get a synthesized SELL verdict, which the
         production constructor treats as a mandatory exit."""
         out = dict(synth)
+        ballast = self._construction_config.ballast_symbol
         for sym in sorted(open_lots):
+            if ballast and sym == ballast:
+                continue  # ballast is not horizon-bound: it exits via the overlay
             lot = open_lots[sym]
             if session_index - lot.entry_session_index >= self.config.horizon_sessions:
                 out[sym] = CommitteeVerdict(

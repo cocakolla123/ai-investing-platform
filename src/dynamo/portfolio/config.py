@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import hashlib
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from dynamo.domain.models.risk import Regime, RiskBucket
+from dynamo.domain.symbols import is_crypto_symbol
 
 # Bucket presets (doc 07 section 3 table).
 _PRESETS: dict[RiskBucket, dict[str, float | int]] = {
@@ -66,6 +67,28 @@ class ConstructionConfig(BaseModel):
     tactical_entry_regimes: tuple[Regime, ...] = (Regime.RISK_ON, Regime.NEUTRAL)
     # Tactical-sleeve regime multipliers ("split honors whichever is tighter").
     risk_off_tactical_multiplier: float = Field(default=0.5, ge=0.0, le=1.0)
+    # --- Idle-cash ballast (empty symbol = disabled; bit-identical to the
+    # pre-ballast constructor when disabled). Residual weight above
+    # ``max(verdict.cash_floor, ballast_cash_floor)`` is parked in this
+    # symbol AFTER active sleeves are sized and compliance-clamped, scaled by
+    # the drawdown ladder's risk posture. The DEFAULT ballast in production
+    # is the diversified index (SPY, settings.ballast_symbol): ballast is a
+    # cash substitute deliberately exempt from per-position/sector caps, and
+    # a single name carrying uncapped residual weight is not ballast — it is
+    # a concentrated bet. Single-stock ballast stays technically possible
+    # (any non-crypto symbol validates) but is not the default.
+    ballast_symbol: str = ""
+    ballast_cash_floor: float = Field(default=0.05, ge=0.0, le=1.0)
+
+    @field_validator("ballast_symbol")
+    @classmethod
+    def _ballast_not_crypto(cls, v: str) -> str:
+        if v and is_crypto_symbol(v):
+            raise ValueError(
+                f"ballast_symbol {v!r} is a crypto pair; ballast must be an "
+                "equity/ETF symbol (crypto vol makes it cash-substitute-unfit)"
+            )
+        return v
 
     @classmethod
     def for_bucket(cls, bucket: RiskBucket) -> ConstructionConfig:

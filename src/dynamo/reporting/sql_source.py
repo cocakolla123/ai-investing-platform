@@ -28,9 +28,14 @@ def _day_end(day: date) -> datetime:
 class SqlReportSource:
     """Reads one day's activity straight from the tables schema.py owns."""
 
-    def __init__(self, engine: Engine, monthly_budget_usd: float) -> None:
+    def __init__(
+        self, engine: Engine, monthly_budget_usd: float, ballast_symbol: str = ""
+    ) -> None:
         self._engine = engine
         self._budget = monthly_budget_usd
+        # Idle-cash ballast symbol ("" = disabled): broken out of the stock
+        # count so the report shows it as its own labeled line.
+        self._ballast_symbol = ballast_symbol
 
     def _rows(self, stmt: Any) -> list[Row]:
         with self._engine.connect() as cx:
@@ -56,14 +61,29 @@ class SqlReportSource:
         # Crypto shares the positions table (same broker, ADR-0013); the
         # canonical "BASE/QUOTE" symbol form makes the slash the discriminator
         # (dynamo.domain.symbols.is_crypto_symbol, in SQL).
+        ballast = self._ballast_symbol
+        equities_where = [eq.c.qty != 0, eq.c.symbol.not_like("%/%")]
+        if ballast:
+            equities_where.append(eq.c.symbol != ballast)
         return {
             "equities": int(
                 self._scalar(
-                    select(func.count())
-                    .select_from(eq)
-                    .where(eq.c.qty != 0, eq.c.symbol.not_like("%/%"))
+                    select(func.count()).select_from(eq).where(*equities_where)
                 )
                 or 0
+            ),
+            # Idle-cash ballast (its own labeled line; 0 rows when disabled).
+            "ballast": (
+                int(
+                    self._scalar(
+                        select(func.count())
+                        .select_from(eq)
+                        .where(eq.c.qty != 0, eq.c.symbol == ballast)
+                    )
+                    or 0
+                )
+                if ballast
+                else 0
             ),
             "crypto": int(
                 self._scalar(
@@ -375,7 +395,9 @@ class SqlReportSource:
 
 
 def build_daily_report_for_engine(
-    engine: Engine, day: date, monthly_budget_usd: float
+    engine: Engine, day: date, monthly_budget_usd: float, ballast_symbol: str = ""
 ) -> DailyReport:
     """Convenience wrapper: build the report for ``day`` straight from SQL."""
-    return build_daily_report(SqlReportSource(engine, monthly_budget_usd), day)
+    return build_daily_report(
+        SqlReportSource(engine, monthly_budget_usd, ballast_symbol), day
+    )

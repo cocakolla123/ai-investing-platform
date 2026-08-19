@@ -230,6 +230,12 @@ class Sleeve(StrEnum):
     # Crypto sleeve (ADR-0013): Alpaca crypto pairs ("BTC/USD"), capped by
     # settings.crypto_sleeve_cap / crypto_max_position in the sizing cascade.
     CRYPTO = "crypto"
+    # Idle-cash ballast: residual weight above the cash floor parked in a
+    # diversified index ETF (SPY by default) instead of dollars. A cash
+    # substitute, not an active bet — the constructor computes it AFTER the
+    # active sleeves, so it never consumes their budgets. A distinct sleeve
+    # tag lets orders / trades / attribution label it as its own line.
+    BALLAST = "ballast"
 
 
 class WatchlistRow(Frozen):

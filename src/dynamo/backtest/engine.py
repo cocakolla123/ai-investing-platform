@@ -229,6 +229,12 @@ class BacktestEngine:
         risk_config: RiskConfig | None = None,
     ) -> None:
         self.config = config
+        # Idle-cash ballast rides through here untouched: pass
+        # ConstructionConfig(ballast_symbol="SPY") and the production
+        # constructor's overlay applies. BacktestConfig itself carries no
+        # ballast field — replay is the campaign-grade harness for ballast
+        # baselines; a dedicated backtest knob is deferred until a backtest
+        # campaign needs one.
         self.construction_config = construction_config or ConstructionConfig()
         self.risk_config = risk_config or RiskConfig()
         self._constructor = RuleBasedConstructor()

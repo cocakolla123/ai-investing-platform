@@ -111,6 +111,27 @@ def _meta_effective_probability(dynamo: DynamoResource, as_of: date) -> dict[str
     }
 
 
+def _ballast_symbol(dynamo: DynamoResource) -> str:
+    """The active ballast symbol ("" when disabled). Owner default: SPY ON."""
+    s = dynamo.settings()
+    return s.ballast_symbol if s.ballast_enabled else ""
+
+
+def _with_ballast_sector(sector_by_symbol: dict[str, str], ballast: str) -> dict[str, str]:
+    """Give the ballast symbol a dedicated sector tag.
+
+    The risk engine treats held weight as sector exposure when computing
+    per-symbol caps (sector_cap minus same-sector usage). A large held
+    ballast position sharing a sector label (e.g. "unknown") with active
+    candidates would zero their caps and block active picks — the one thing
+    ballast must never do. A dedicated tag keeps the engine's math intact
+    while isolating ballast in its own bucket.
+    """
+    if ballast:
+        sector_by_symbol[ballast] = "ballast"
+    return sector_by_symbol
+
+
 def _latest_risk_verdict(dynamo: DynamoResource) -> tuple[str, Any] | None:
     from dynamo.domain.models.risk import RiskVerdict
 
@@ -161,9 +182,13 @@ def risk_verdict_asset(context: AssetExecutionContext, dynamo: DynamoResource) -
 
     inst = schema.instruments
     inst_df = _read_df(dynamo, select(inst.c.symbol, inst.c.sector))
-    sector_by_symbol = {
-        str(r["symbol"]): str(r["sector"] or "unknown") for r in inst_df.to_dict(orient="records")
-    }
+    sector_by_symbol = _with_ballast_sector(
+        {
+            str(r["symbol"]): str(r["sector"] or "unknown")
+            for r in inst_df.to_dict(orient="records")
+        },
+        _ballast_symbol(dynamo),
+    )
     adv: dict[str, float] = {}
     for sym, grp in bars.groupby("symbol"):
         adv[str(sym)] = float(
@@ -353,11 +378,16 @@ def target_portfolio_asset(
             adv[str(sym)] = float(
                 (grp["close"].astype(float) * grp["volume"].astype(float)).tail(20).median()
             )
+    ballast = _ballast_symbol(dynamo)
     inst = schema.instruments
     inst_df = _read_df(dynamo, select(inst.c.symbol, inst.c.sector))
-    sector_by_symbol = {
-        str(r["symbol"]): str(r["sector"] or "unknown") for r in inst_df.to_dict(orient="records")
-    }
+    sector_by_symbol = _with_ballast_sector(
+        {
+            str(r["symbol"]): str(r["sector"] or "unknown")
+            for r in inst_df.to_dict(orient="records")
+        },
+        ballast,
+    )
 
     target = RuleBasedConstructor().construct(
         AdvisoryInputs(
@@ -375,7 +405,9 @@ def target_portfolio_asset(
         ),
         risk,
         state,
-        ConstructionConfig(),
+        # Idle-cash ballast (settings.ballast_enabled, default ON): the
+        # residual above the cash floor rides SPY instead of dollars.
+        ConstructionConfig(ballast_symbol=ballast),
         risk_verdict_ref=verdict_id,
     )
     repo.upsert_rows(

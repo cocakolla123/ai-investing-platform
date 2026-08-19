@@ -149,12 +149,20 @@ class OrderManager:
                 current_weights.get(pos.symbol, 0.0) + pos.qty * px / current.equity
             )
 
-        target_by_symbol = {tw.symbol: tw for tw in target.weights}
+        # A symbol may carry multiple target lots (long-term + tactical, or an
+        # active lot + the ballast residual): trade the SUMMED weight in one
+        # order, labeled with the first lot's sleeve (constructor priority
+        # order — active before ballast).
+        target_by_symbol: dict[str, Any] = {}
+        target_weight_sum: dict[str, float] = {}
+        for tw in target.weights:
+            target_by_symbol.setdefault(tw.symbol, tw)
+            target_weight_sum[tw.symbol] = target_weight_sum.get(tw.symbol, 0.0) + tw.weight
         ts_bucket = target.as_of.date().isoformat()
         out: list[Order] = []
         for symbol in sorted(set(target_by_symbol) | set(current_weights)):
             tw = target_by_symbol.get(symbol)
-            target_weight = tw.weight if tw is not None else 0.0
+            target_weight = target_weight_sum.get(symbol, 0.0)
             delta = target_weight - current_weights.get(symbol, 0.0)
             if abs(delta) < self._min_weight_delta:
                 continue

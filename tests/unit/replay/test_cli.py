@@ -1445,3 +1445,41 @@ def test_estimate_backend_flag_overrides_settings(
     out = capsys.readouterr().out
     assert "backend:             api" in out
     assert "projected total:" in out and "claude-opus-5" in out
+
+
+def test_replay_ballast_flag_parses_and_defaults_off() -> None:
+    parser = replay_cli._build_parser()
+    args = parser.parse_args(
+        ["run", "--start", "2026-06-01", "--end", "2026-06-10", "--run-label", "x"]
+    )
+    assert args.ballast == ""
+    args = parser.parse_args(
+        [
+            "run",
+            "--start", "2026-06-01",
+            "--end", "2026-06-10",
+            "--run-label", "x",
+            "--ballast", "SPY",
+        ]
+    )
+    assert args.ballast == "SPY"
+
+
+def test_replay_committee_mode_refuses_ballast(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Committee runs produce verdicts, not portfolios: --ballast is an error
+    there (exit 2), pointing at --mode portfolio instead."""
+    rc = replay_cli.main(
+        [
+            "run",
+            "--start", "2026-06-01",
+            "--end", "2026-06-10",
+            "--mode", "committee",
+            "--run-label", "x",
+            "--max-usd", "5",
+            "--ballast", "SPY",
+        ]
+    )
+    assert rc == 2
+    assert "--mode portfolio" in capsys.readouterr().err
