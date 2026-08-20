@@ -121,7 +121,12 @@ def test_journal_insert_and_text_search(engine) -> None:  # type: ignore[no-unty
 
 def test_journal_search_as_of_hides_future_entries(engine) -> None:  # type: ignore[no-untyped-def]
     """Write -> search round trip with the hash-fallback embedder; an entry
-    created after ``as_of`` is invisible (leakage guard for replay)."""
+    created after ``as_of`` is invisible (leakage guard for replay).
+
+    ``allow_hash_fallback=True`` throughout: this test is about the as-of
+    bound, and without the opt-in the searches below would correctly return
+    nothing at all, because a vector search excludes fallback-stamped rows
+    by default (they are random Gaussians, see dynamo.learning.journal)."""
     from dynamo.llm.embeddings import LocalEmbedder
     from dynamo.persistence.repositories.learning import JournalRepository
 
@@ -139,10 +144,51 @@ def test_journal_search_as_of_hides_future_entries(engine) -> None:  # type: ign
         repo.insert(entry, embedder.embed([entry.text])[0], embedding_version=embedder.backend)
 
     query = embedder.embed(["AAPL investment lessons"])[0]
-    unbounded = repo.search(embedding=query, top_k=5)
+    unbounded = repo.search(embedding=query, top_k=5, allow_hash_fallback=True)
     assert {e.id for e, _ in unbounded} == {"j-past", "j-future"}
-    bounded = repo.search(embedding=query, top_k=5, as_of=NOW + timedelta(days=1))
+    bounded = repo.search(
+        embedding=query, top_k=5, as_of=NOW + timedelta(days=1), allow_hash_fallback=True
+    )
     assert {e.id for e, _ in bounded} == {"j-past"}  # the future entry is invisible
+
+
+def test_vector_search_excludes_hash_fallback_entries_by_default(engine) -> None:  # type: ignore[no-untyped-def]
+    """Every journal search feeds a committee prompt that labels the result
+    "similar past situations". A hash-fallback vector is a random Gaussian
+    seeded from sha256(text), so ranking against it returns a random ordering
+    of the journal -- fabricated precedent. The exclusion lives in the
+    repository, the one place every caller (live AND replay) goes through, so
+    a new caller is protected by default rather than by remembering."""
+    from dynamo.learning.journal import HASH_FALLBACK_BACKEND
+    from dynamo.persistence.repositories.learning import JournalRepository
+
+    repo = JournalRepository(engine)  # type: ignore[arg-type]
+    stamps = {
+        "j-random": HASH_FALLBACK_BACKEND,
+        "j-real": "sentence-transformers",
+        "j-unstamped": "",  # predates the column: an absent stamp is not a denial
+    }
+    for entry_id, version in stamps.items():
+        repo.insert(
+            JournalEntry(
+                id=entry_id, kind=JournalKind.LESSON, symbols=("AAPL",),
+                text=f"AAPL lesson {entry_id}", created_at=NOW,
+            ),
+            embedding=[0.1] * 384,
+            embedding_version=version,
+        )
+
+    query = [0.1] * 384
+    assert {e.id for e, _ in repo.search(embedding=query, top_k=5)} == {
+        "j-real",
+        "j-unstamped",
+    }
+    # Explicit opt-in brings the random one back, and nothing else changes.
+    assert {
+        e.id for e, _ in repo.search(embedding=query, top_k=5, allow_hash_fallback=True)
+    } == set(stamps)
+    # Text search is untouched: an ILIKE match is real whatever the vector holds.
+    assert {e.id for e, _ in repo.search(text_query="j-random")} == {"j-random"}
 
 
 def test_proposal_calibration_metrics_roundtrip(engine) -> None:  # type: ignore[no-untyped-def]

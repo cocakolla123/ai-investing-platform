@@ -26,6 +26,13 @@ the QUERY backend, and each candidate's stored ``embedding_version`` — a real
 query vector ranked against 113 stored random ones is exactly as meaningless
 as the reverse.
 
+The stored-vector half is enforced twice, on purpose.
+``JournalRepository.search`` excludes fallback-stamped rows in SQL, because
+it is the one seam EVERY caller goes through — live, replay, and whatever is
+added next — so a new caller is protected by default rather than by
+remembering. :func:`drop_hash_fallback_entries` applies the same rule at the
+call site, which is the only place that can count what it removed and log it.
+
 REMEDIATION (the whole fix, two commands)::
 
     uv sync --extra embeddings

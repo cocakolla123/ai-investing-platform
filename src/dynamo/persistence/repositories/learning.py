@@ -29,6 +29,7 @@ from dynamo.domain.models.learning import (
 from dynamo.domain.models.portfolio import DecisionContext
 from dynamo.domain.models.research import Sleeve
 from dynamo.learning.hash_chain import GENESIS, ChainVerification, row_hash, verify_chain
+from dynamo.learning.journal import HASH_FALLBACK_BACKEND
 from dynamo.learning.promotion import validate_transition
 from dynamo.persistence.schema import (
     calibration_points,
@@ -234,11 +235,26 @@ class JournalRepository:
         regime: str | None = None,
         top_k: int = 5,
         as_of: datetime | None = None,
+        allow_hash_fallback: bool = False,
     ) -> list[tuple[JournalEntry, float]]:
         """Returns (entry, similarity). Cosine similarity in [0
         .. 1]-ish when searching by embedding; 0.0 for text-only matches.
         ``as_of`` hides entries written after that instant (leakage guard —
-        live retrieval passes the run's as-of; replay depends on it)."""
+        live retrieval passes the run's as-of; replay depends on it).
+
+        A VECTOR search excludes entries stamped with the hash-fallback
+        backend unless ``allow_hash_fallback`` is set. Those vectors are a
+        random Gaussian seeded from sha256(text)
+        (:mod:`dynamo.llm.embeddings`), so ranking against them returns a
+        random ordering of the journal — and every caller of this method
+        feeds a committee prompt that presents the result as "similar past
+        situations". The exclusion lives HERE, in the one place every path
+        goes through, rather than in each composition root, so a new caller
+        is protected by default instead of by remembering.
+
+        Text search is unaffected: an ILIKE match is real regardless of what
+        the row's vector holds.
+        """
         stmt = select(journal_entries)
         if as_of is not None:
             stmt = stmt.where(journal_entries.c.created_at <= as_of)
@@ -259,6 +275,14 @@ class JournalRepository:
                 .order_by(distance)
                 .limit(top_k)
             )
+            if not allow_hash_fallback:
+                # IS DISTINCT FROM, not !=: a NULL stamp predates the column
+                # and must stay visible, where `!=` would drop it silently.
+                stmt = stmt.where(
+                    journal_entries.c.embedding_version.is_distinct_from(
+                        HASH_FALLBACK_BACKEND
+                    )
+                )
         else:
             if text_query:
                 stmt = stmt.where(journal_entries.c.text.ilike(f"%{text_query}%"))

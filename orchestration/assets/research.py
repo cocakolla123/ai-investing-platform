@@ -1312,11 +1312,16 @@ def _journal_hits_for(
             # backend would otherwise return other tickers' entries as this
             # one's "similar situations".
             candidates = repo.search(
-                embedding=vector, symbols=[sym], top_k=max(top_k * 4, top_k), as_of=cutoff
+                embedding=vector,
+                symbols=[sym],
+                top_k=max(top_k * 4, top_k),
+                as_of=cutoff,
+                allow_hash_fallback=allow_fallback,
             )
-            # The other half of the guard: a real query vector ranked against
-            # stored random ones is just as meaningless. After a partial
-            # re-embed both kinds are in the table at once.
+            # The other half of the guard. The repository already excludes
+            # fallback-stamped rows in SQL — this is the same rule applied
+            # again in the one place that can COUNT what it removed, so a
+            # regression there surfaces as a log line rather than as silence.
             candidates, n = drop_hash_fallback_entries(
                 candidates,
                 repo.embedding_versions([e.id for e, _ in candidates]),

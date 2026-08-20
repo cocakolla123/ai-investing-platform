@@ -66,6 +66,17 @@ paths cannot drift apart on it:
 Both are wired into the live path in
 `orchestration/assets/research.py::_journal_hits_for`.
 
+The stored-vector rule is *also* enforced one level down, in
+`JournalRepository.search`: a vector search excludes fallback-stamped rows in
+SQL unless `allow_hash_fallback=True`. That is deliberate placement — the
+repository is the one seam **every** caller goes through, live and replay
+alike, so a new caller is protected by default rather than by remembering to
+ask. The caller-side filter stays as well, because it is the only place that
+can *count* what it removed and say so in the log.
+
+Text search is unaffected in both layers: an ILIKE match is real whatever the
+row's vector holds.
+
 Structured retrieval is untouched. The prior-similar-case lines that share the
 `journal_hits` channel come from `decision_experience` via SQL filters and use
 no embedding at all, so they keep flowing. **The abstention removes the noise,

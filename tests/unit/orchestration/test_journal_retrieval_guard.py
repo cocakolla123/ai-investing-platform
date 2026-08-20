@@ -41,9 +41,14 @@ class _JournalRepo:
     def __init__(self, versions: dict[str, str]) -> None:
         self.versions = versions
         self.searches = 0
+        self.allow_flags: list[Any] = []
 
     def search(self, **kwargs: Any) -> list[tuple[JournalEntry, float]]:
         self.searches += 1
+        self.allow_flags.append(kwargs.get("allow_hash_fallback"))
+        # Deliberately does NOT apply the repository's own SQL exclusion:
+        # this fake exists to prove the caller-side filter still bites if
+        # that exclusion ever regresses.
         return [
             (
                 JournalEntry(
@@ -172,3 +177,17 @@ def test_retrieval_disabled_short_circuits_before_the_gate(
     wired["settings"].journal_retrieval_enabled = False
     assert _journal_hits_for(_Dynamo(wired["settings"]), ["ACME"], AS_OF) == {"ACME": []}  # type: ignore[arg-type]
     assert wired["repo"].searches == 0
+
+
+def test_the_setting_is_passed_down_to_the_sql_exclusion(
+    wired: dict[str, Any],
+) -> None:
+    """The repository excludes fallback-stamped rows in SQL by default; the
+    escape hatch has to reach it, or opting in would still return nothing."""
+    wired["embedder"].backend = REAL_BACKEND
+    _run(wired)
+    assert wired["repo"].allow_flags == [False]
+
+    wired["settings"].journal_allow_hash_fallback = True
+    _run(wired)
+    assert wired["repo"].allow_flags[-1] is True
