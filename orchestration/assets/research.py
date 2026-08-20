@@ -209,13 +209,22 @@ def _triage_flags(
 @dagster_asset(group_name=RESEARCH_GROUP, deps=["data_quality"])
 def tier2_scan(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Tier-2 detectors -> flags -> Haiku triage -> Tier-3 promotions."""
+    from dynamo.data.detector_windows import TIER2_SCAN_LOOKBACK_DAYS
     from dynamo.data.detectors import DetectorInputs, run_detectors
     from dynamo.domain.models.market import EarningsEvent, Filing, InsiderTx, NewsItem
 
     as_of = utcnow().date()
     repo = dynamo.market_repo()
     tier2 = dynamo.universe_symbols(as_of, tiers=(2,))
-    bars = dynamo.bars_window(tier2 or None, as_of, 100)
+    # 420 calendar days, NOT the 100 this used to pass. The detectors share
+    # one frame and the longest lookback in the catalog is range_break's 252
+    # sessions; at 100 days (~167 sessions) range_break reported 3-month
+    # highs as 52-week breakouts (61% false on the live universe) and
+    # range_bound — which gates at 131 sessions — could not fire at all.
+    # The number is derived from the detectors themselves in
+    # dynamo.data.detector_windows and guarded by a test there, so a
+    # longer-lookback detector fails loudly instead of silently no-op'ing.
+    bars = dynamo.bars_window(tier2 or None, as_of, TIER2_SCAN_LOOKBACK_DAYS)
     if bars.empty and not tier2:
         context.log.warning("tier2_scan: no bars and no tier-2 members — skipping")
         return MaterializeResult(metadata={"flags": 0, "skipped": "no data"})
