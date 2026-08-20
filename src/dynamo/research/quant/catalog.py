@@ -166,6 +166,37 @@ class FeatureContext:
     # Weekly resamples, built lazily once per (inputs, as_of) and shared by the
     # whole multi-timeframe group — see :meth:`weekly`.
     weekly_cache: dict[str, pd.DataFrame] = field(default_factory=dict, repr=False)
+    # Point-in-time facts split per symbol, built lazily once and shared by
+    # every fundamental feature — see :meth:`symbol_facts`.
+    facts_cache: dict[str, pd.DataFrame] | None = field(default=None, repr=False)
+
+    def symbol_facts(self, symbol: str) -> pd.DataFrame:
+        """This symbol's point-in-time XBRL facts, and only this symbol's.
+
+        Two costs collapse here. ``pit_facts`` used to run once per FEATURE
+        (a full copy plus two datetime conversions of the whole frame, ~12
+        times); it now runs once per context. And every ``(facts, sym)``
+        helper used to boolean-scan the WHOLE frame — ``facts["symbol"] ==
+        sym``, once per symbol per tag, plus a ``filed_at <= at`` rescan
+        inside the per-quarter loops. At 40 CIKs the frame was small enough
+        that none of it showed. After the fundamentals backfill it is ~3M
+        rows a session, and one session of ``build_features`` measured
+        **4,642 seconds**.
+
+        Handing each helper its own symbol's rows is semantically identical —
+        every one of them filters on ``sym`` as its first act — and turns a
+        3M-row scan into a ~2k-row one.
+        """
+        cached = self.facts_cache
+        if cached is None:
+            facts = pit_facts(self.inputs.fundamentals, self.as_of)
+            cached = (
+                {str(k): v for k, v in facts.groupby("symbol", sort=False)}
+                if not facts.empty
+                else {}
+            )
+            self.facts_cache = cached
+        return cached.get(symbol, _EMPTY_FACTS)
 
     def weekly(self, kind: str) -> pd.DataFrame:
         """Weekly panel for ``kind`` in ``price|close|high|low|volume``.
@@ -668,6 +699,10 @@ def _days_to_exit(ctx: FeatureContext) -> pd.Series:
 # ---------------------------------------------------------------------------
 
 
+_FACT_COLS = ["symbol", "tag", "period_end", "value", "filed_at"]
+_EMPTY_FACTS = pd.DataFrame(columns=pd.Index(_FACT_COLS))
+
+
 def pit_facts(fundamentals: pd.DataFrame | None, as_of: pd.Timestamp) -> pd.DataFrame:
     """Rows with filed_at <= as_of; the only accessor the feature path uses."""
     cols = ["symbol", "tag", "period_end", "value", "filed_at"]
@@ -764,11 +799,10 @@ def _fcf_ttm(facts: pd.DataFrame, sym: str, as_of: pd.Timestamp, offset: int = 0
 
 
 def _per_symbol(ctx: FeatureContext, fn: Callable[[pd.DataFrame, str], float]) -> pd.Series:
-    facts = pit_facts(ctx.inputs.fundamentals, ctx.as_of)
     out = {}
     for sym in ctx.universe:
         try:
-            out[sym] = fn(facts, sym)
+            out[sym] = fn(ctx.symbol_facts(sym), sym)
         except Exception:  # missing inputs -> NaN, never raise
             out[sym] = float("nan")
     return pd.Series(out, dtype=float).reindex(ctx.universe)
@@ -1603,13 +1637,12 @@ def _short_interest_pct_float(ctx: FeatureContext) -> pd.Series:
     if latest.empty:
         return _nan_series(ctx)
     shorts = _short_interest_column(latest, "shares_short")
-    facts = pit_facts(ctx.inputs.fundamentals, ctx.as_of)
     out: dict[str, float] = {}
     for sym in ctx.universe:
         if sym not in shorts.index:
             out[sym] = float("nan")
             continue
-        shares = shares_outstanding(facts, sym, ctx.as_of)
+        shares = shares_outstanding(ctx.symbol_facts(sym), sym, ctx.as_of)
         short = float(shorts[sym])
         out[sym] = short / shares if shares > 0 and math.isfinite(short) else float("nan")
     return pd.Series(out, dtype=float).reindex(ctx.universe)
