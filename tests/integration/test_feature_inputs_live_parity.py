@@ -29,7 +29,9 @@ pytestmark = [
     pytest.mark.skipif(not INTEGRATION_URL, reason="INTEGRATION_DB_URL not set"),
 ]
 
-AS_OF = date.today()
+# The gateway's cutoff is end-of-day UTC, so the session day has to be the
+# UTC one — a local ``date.today()`` behind UTC would make "now" look future.
+AS_OF = datetime.now(UTC).date()
 SYMBOLS = ["ACME", "PEER"]
 
 
@@ -99,7 +101,16 @@ def seeded(engine: Any) -> Any:
                 value=1_000.0,
                 unit="USD",
                 filed_at=_dt(AS_OF - timedelta(days=40)),
-            )
+            ),
+            # The denominator of ``short_interest_pct_float``.
+            XbrlFact(
+                cik="0000000001",
+                tag="CommonStockSharesOutstanding",
+                period_end=AS_OF - timedelta(days=60),
+                value=100_000.0,
+                unit="shares",
+                filed_at=_dt(AS_OF - timedelta(days=40)),
+            ),
         ]
     )
     repo.upsert_insider_tx(
@@ -134,7 +145,10 @@ def seeded(engine: Any) -> Any:
                 period="Q2",
                 eps_est=1.0,
             )
-        ]
+        ],
+        # Explicit: the gateway bounds this frame on fetched_at, so a wall
+        # clock a hair past midnight UTC would hide the row from replay only.
+        fetched_at=_dt(AS_OF - timedelta(days=1)),
     )
     repo.upsert_news(
         [
@@ -269,6 +283,7 @@ def test_dark_features_are_no_longer_nan_in_the_live_path(
     live = _feature_inputs(_Dynamo(engine), SYMBOLS, AS_OF)  # type: ignore[arg-type]
     frame = build_features(live, AS_OF, SYMBOLS)
     assert not frame.empty
-    for name in ("news_count_60d", "short_interest_pct_float", "days_to_cover"):
-        if name in frame.columns:
-            assert frame[name].notna().any(), f"{name} is still entirely NaN"
+    wanted = {"news_count_60d", "short_interest_pct_float", "days_to_cover"}
+    assert wanted <= set(frame.columns)
+    for name in sorted(wanted):
+        assert bool(frame[name].notna().any()), f"{name} is still entirely NaN"
