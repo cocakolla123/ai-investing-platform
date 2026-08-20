@@ -1,4 +1,14 @@
-"""Feature catalog — doc 04 section 2.2. ~51 features across 10 groups.
+"""Feature catalog — doc 04 section 2.2, plus five groups this repo added.
+
+69 features across 15 groups. Groups 1-10 are doc 04's original set;
+11-15 came out of the strategy audit that found the catalog was price and
+volume only, on a single timeframe:
+
+11. ``weekly``           — multi-timeframe structure (weekly resamples)
+12. ``accumulation``     — signed-volume direction and sustained expansion
+13. ``momentum_quality`` — the PATH of a move, not just its total
+14. ``attention``        — how closely a name is followed (news coverage)
+15. ``shortinterest``    — FINRA bi-monthly cycles (``dynamo.data.finra``)
 
 Every feature is a pure function of data available at ``as_of``:
 
@@ -8,10 +18,14 @@ Every feature is a pure function of data available at ``as_of``:
 * insider: Form 4 ``filed_at`` <= as_of
 * macro: FRED vintages with ``vintage_ts`` <= as_of
 * estimates/calendar: snapshot rows <= as_of
+* news: ``published_at`` <= as_of
+* short interest: ``publication_date`` <= as_of — NOT ``settlement_date``,
+  which precedes publication by ~8 days (see :mod:`dynamo.data.finra`)
 
-Missing inputs produce NaN — feature functions never raise. Groups 1-8 are
-cross-sectionally normalized downstream (features.py); groups 9-10 (macro,
-calendar) stay raw.
+Missing inputs produce NaN — feature functions never raise. Every group
+except ``macro`` and ``calendar`` is cross-sectionally normalized downstream
+(features.py); those two stay raw because they are context shared across
+names rather than per-name readings.
 """
 
 from __future__ import annotations
