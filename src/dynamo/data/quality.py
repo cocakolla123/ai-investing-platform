@@ -14,6 +14,12 @@ Pure checks (unit-testable on small frames):
 Runner: :func:`run_quality_checks` writes quarantine rows and raises a
 systemic alert when more than ``systemic_threshold`` symbols are flagged
 (default 20, doc 02 §6.1).
+
+Census (a *measurement*, not a per-symbol check): :func:`extreme_move_census`
+counts single-session moves large enough to be corporate actions rather than
+prices, and how many of those land on a near-exact split ratio. It exists
+because "is this panel adjusted?" was, before it, a question nobody could
+answer with a number — see its docstring for the measurement that motivated it.
 """
 
 from __future__ import annotations
@@ -151,6 +157,169 @@ def corp_action_sanity(
             )
             break  # one issue per symbol is enough to quarantine
     return issues
+
+
+# --- Split-artifact census (D1) -------------------------------------------
+#
+# A price series that has not been adjusted for corporate actions still looks
+# like a price series. Nothing raises; the split simply appears as a return.
+# The only way to know is to count the moves that are too large to be prices
+# and ask how many of them land on a split ratio.
+
+#: Single-session simple return below this is "extreme" (a crash, or a split).
+EXTREME_DOWN_RETURN = -0.30
+#: Single-session simple return above this is "extreme" (a squeeze, or a
+#: reverse split). Asymmetric because an N-for-1 reverse split multiplies the
+#: price, so its upside tail is unbounded while a split's downside is not.
+EXTREME_UP_RETURN = 0.45
+
+#: ``prev_close / close`` values that a split produces. A 2-for-1 forward
+#: split halves the price (ratio 2.0); a 1-for-10 reverse split multiplies it
+#: tenfold (ratio 0.1). These five are the ones the wide panel was measured
+#: against; the parameter is open so a wider audit can pass more.
+SPLIT_RATIOS: tuple[float, ...] = (2.0, 3.0, 4.0, 0.5, 0.1)
+#: Relative tolerance for calling a ratio "near-exact". 1% is tight enough
+#: that an ordinary -50% crash does not masquerade as a 2-for-1 split, and
+#: loose enough to absorb the day's genuine price move on top of the split.
+SPLIT_RATIO_TOLERANCE = 0.01
+
+
+def nearest_split_ratio(
+    ratio: float,
+    *,
+    ratios: Sequence[float] = SPLIT_RATIOS,
+    tolerance: float = SPLIT_RATIO_TOLERANCE,
+) -> float | None:
+    """The split ratio ``ratio`` matches within ``tolerance``, else ``None``.
+
+    ``tolerance`` is *relative* to the candidate, so 1% means 1% of 0.1 for a
+    1-for-10 and 1% of 4.0 for a 4-for-1 — a split leaves a much tighter
+    fingerprint on a cheap stock than an absolute tolerance would allow.
+    """
+    if not (ratio > 0.0) or ratio != ratio:  # non-positive or NaN
+        return None
+    best: float | None = None
+    best_error = float("inf")
+    for candidate in ratios:
+        error = abs(ratio - candidate)
+        if error <= tolerance * abs(candidate) and error < best_error:
+            best, best_error = float(candidate), error
+    return best
+
+
+@dataclass(frozen=True)
+class ExtremeMoveCensus:
+    """How much of a bar panel is corporate action wearing a price's clothes.
+
+    ``split_artifact_events`` is the headline: sessions whose move is extreme
+    AND whose ``prev_close / close`` is a near-exact split ratio. On an
+    adjusted panel it should be ~0 — real single-day moves do not land on
+    2.000x, 3.000x or 0.100x to within 1%.
+    """
+
+    symbols: int
+    """Distinct symbols in the panel."""
+    sessions: int
+    """Symbol-days with a computable previous close."""
+    extreme_events: int
+    extreme_symbols: int
+    split_artifact_events: int
+    split_artifact_symbols: int
+    events: pd.DataFrame
+    """One row per extreme event: ``symbol, ts, prev_close, close, ret,
+    ratio, split_ratio`` (``split_ratio`` is NaN when it is not a match)."""
+
+    def summary(self) -> str:
+        pct = 100.0 * self.extreme_symbols / self.symbols if self.symbols else 0.0
+        return (
+            f"{self.symbols} symbols / {self.sessions} sessions: "
+            f"{self.extreme_events} extreme moves across {self.extreme_symbols} "
+            f"symbols ({pct:.1f}%); "
+            f"{self.split_artifact_events} of them are near-exact split ratios "
+            f"across {self.split_artifact_symbols} symbols"
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "symbols": self.symbols,
+            "sessions": self.sessions,
+            "extreme_events": self.extreme_events,
+            "extreme_symbols": self.extreme_symbols,
+            "split_artifact_events": self.split_artifact_events,
+            "split_artifact_symbols": self.split_artifact_symbols,
+        }
+
+
+def extreme_move_census(
+    bars: pd.DataFrame,
+    *,
+    down: float = EXTREME_DOWN_RETURN,
+    up: float = EXTREME_UP_RETURN,
+    ratios: Sequence[float] = SPLIT_RATIOS,
+    tolerance: float = SPLIT_RATIO_TOLERANCE,
+    min_median_close: float = 0.0,
+) -> ExtremeMoveCensus:
+    """Count extreme single-session moves and the split artifacts among them.
+
+    ``bars``: columns ``symbol, ts, close`` (extra columns ignored). Rows are
+    sorted per symbol here, so an unsorted frame is fine.
+
+    ``min_median_close`` drops symbols whose median close is below the floor
+    before counting. Sub-$5 names dominate percentage-move detectors and are
+    where unadjusted reverse splits live, so the census is usually worth
+    reading twice: once unfiltered, once at the floor the live screen uses.
+
+    WHY THIS EXISTS. Measured on this repo's ``bars_1d`` (source=alpaca,
+    2024-01-02..2026-08-18, 6,039,736 rows) while every row was still
+    ``Adjustment.RAW``: 9,153 extreme moves across 2,459 of 11,264 symbols
+    (21.8%), of which **217 events across 211 symbols** landed on a near-exact
+    2:1/3:1/4:1/1:2/1:10 ratio. Those are splits, indistinguishable from
+    crashes, and they land disproportionately in the surveillance detectors'
+    flagged set because a crash is exactly what those detectors hunt.
+    """
+    columns = ["symbol", "ts", "prev_close", "close", "ret", "ratio", "split_ratio"]
+    empty = ExtremeMoveCensus(0, 0, 0, 0, 0, 0, pd.DataFrame({c: [] for c in columns}))
+    if bars.empty:
+        return empty
+
+    frame = cast(pd.DataFrame, bars[["symbol", "ts", "close"]]).copy()
+    frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+    if min_median_close > 0.0:
+        medians = cast(pd.Series, frame.groupby("symbol")["close"].median())
+        liquid = cast(pd.Series, medians[medians >= min_median_close])
+        keep = [str(s) for s in liquid.index]
+        frame = cast(pd.DataFrame, frame[cast(pd.Series, frame["symbol"]).isin(keep)])
+        if frame.empty:
+            return empty
+
+    frame = frame.sort_values(by=["symbol", "ts"], kind="mergesort")
+    close = cast(pd.Series, frame["close"])
+    frame["prev_close"] = frame.groupby("symbol")["close"].shift(1)
+    prev = cast(pd.Series, frame["prev_close"])
+    # Only a positive previous close yields a meaningful return or ratio.
+    valid = prev > 0.0
+    frame["ret"] = close / prev - 1.0
+    frame["ratio"] = prev / close.where(close > 0.0)
+
+    ret = cast(pd.Series, frame["ret"])
+    extreme = valid & ((ret < down) | (ret > up))
+    events = cast(pd.DataFrame, frame[extreme]).copy()
+    events["split_ratio"] = [
+        nearest_split_ratio(float(r), ratios=ratios, tolerance=tolerance)
+        if pd.notna(r)
+        else None
+        for r in cast(pd.Series, events["ratio"])
+    ]
+    artifacts = cast(pd.DataFrame, events[cast(pd.Series, events["split_ratio"]).notna()])
+    return ExtremeMoveCensus(
+        symbols=int(cast(pd.Series, frame["symbol"]).nunique()),
+        sessions=int(valid.sum()),
+        extreme_events=len(events),
+        extreme_symbols=int(cast(pd.Series, events["symbol"]).nunique()),
+        split_artifact_events=len(artifacts),
+        split_artifact_symbols=int(cast(pd.Series, artifacts["symbol"]).nunique()),
+        events=cast(pd.DataFrame, events[columns]).reset_index(drop=True),
+    )
 
 
 def staleness_check(
