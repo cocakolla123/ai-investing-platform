@@ -88,7 +88,7 @@ def _pm_gate(settings: Settings, scope_fn: Callable[[str], str] | None = None) -
         return live_orders_permitted(
             settings.dynamo_env,
             approval,
-            kill_switch_engaged(settings.kill_switch_path),
+            kill_switch_engaged(settings.kill_switch_file),
             Readiness(),  # LIVE readiness comes from stored metrics; unset → refuse
             scope_target=scope(order.market_id),
         )
@@ -118,7 +118,7 @@ def _polymarket_live_gate_result(settings: Settings, readiness: Any | None = Non
     return live_orders_permitted(
         settings.dynamo_env,
         approval,
-        kill_switch_engaged(settings.kill_switch_path),
+        kill_switch_engaged(settings.kill_switch_file),
         readiness if readiness is not None else Readiness(),
         scope_target=None,
     )
@@ -669,10 +669,8 @@ def pm_reconcile_broker_state(context: OpExecutionContext, dynamo: DynamoResourc
     from dynamo.persistence.repositories.execution import ReconciliationRepository
     from dynamo.persistence.repositories.pm import PMPositionRepository
 
-    repo = dynamo.market_repo()
-
     def alert(name: str, message: str) -> None:
-        repo.add_alert(severity="page", name=name, message=message)
+        dynamo.alert("page", name, message)
 
     broker = _pm_broker(dynamo)
     if broker is None:

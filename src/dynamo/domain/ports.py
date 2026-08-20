@@ -214,6 +214,20 @@ class EmbeddingModel(Protocol):
     def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
 
 
+@runtime_checkable
+class Notifier(Protocol):
+    """Out-of-band operator paging (doc 12 §7).
+
+    Writing an ``alerts`` row is durable but silent — nobody is watching the
+    table at 03:00. A ``Notifier`` is the channel that actually reaches a
+    human. Implementations MUST NOT raise: a broken notification channel is
+    never allowed to fail the pipeline it is reporting on. ``send`` returns
+    True iff the message was transmitted.
+    """
+
+    def send(self, *, severity: str, name: str, message: str) -> bool: ...
+
+
 class Clock(Protocol):
     """Injectable time source — risk/portfolio code never reads the wall clock."""
 

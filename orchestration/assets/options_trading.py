@@ -71,7 +71,7 @@ def _options_gate(settings: Settings) -> Any:
         return live_orders_permitted(
             settings.dynamo_env,
             approval,
-            kill_switch_engaged(settings.kill_switch_path),
+            kill_switch_engaged(settings.kill_switch_file),
             Readiness(),  # LIVE readiness comes from stored metrics; unset → refuse
             scope_target=opt_scope(order.occ_symbol),
         )
@@ -154,7 +154,6 @@ def _close_expired_positions(dynamo: DynamoResource, today: date) -> int:
     engine = dynamo.engine()
     positions = OptionsPositionRepository(engine)
     trades = OptionsTradeRepository(engine)
-    repo = dynamo.market_repo()
     closed = 0
     for position in positions.expired_positions(today):
         trades.insert(
@@ -171,9 +170,9 @@ def _close_expired_positions(dynamo: DynamoResource, today: date) -> int:
             )
         )
         positions.close(position.occ_symbol)
-        repo.add_alert(
-            severity="warn",
-            name="options_position_expired",
+        dynamo.alert(
+            "warn",
+            "options_position_expired",
             message=(
                 f"{position.occ_symbol} expired ({position.structure.value}, "
                 f"{position.contracts} contracts) — review for assignment/exercise"
@@ -393,10 +392,8 @@ def options_reconcile_broker_state(context: OpExecutionContext, dynamo: DynamoRe
     manager = _options_manager(dynamo, broker)
     fills = _apply_new_fills(dynamo, manager)
 
-    repo = dynamo.market_repo()
-
     def alert(name: str, message: str) -> None:
-        repo.add_alert(severity="page", name=name, message=message)
+        dynamo.alert("page", name, message)
 
     reconciler = OptionsReconciler(broker, ReconciliationRepository(dynamo.engine()), alert)
     result = reconciler.reconcile(

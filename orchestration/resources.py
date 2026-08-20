@@ -82,6 +82,7 @@ class DynamoResource(ConfigurableResource):
     _engine: Any = PrivateAttr(default=None)
     _cost_meter: Any = PrivateAttr(default=None)
     _research_model: Any = PrivateAttr(default=None)
+    _notifier: Any = PrivateAttr(default=None)
 
     # --- config / infrastructure ---
 
@@ -309,8 +310,25 @@ class DynamoResource(ConfigurableResource):
                 .values(status="expired", resolved_at=utcnow())
             )
 
-    def alert(self, severity: str, name: str, message: str) -> None:
-        self.market_repo().add_alert(severity=severity, name=name, message=message)
+    def notifier(self) -> Any:
+        """Out-of-band paging channel (doc 12 §7); disabled when unconfigured."""
+        if self._notifier is None:
+            from dynamo.observability.notify import build_notifier
+
+            self._notifier = build_notifier(self.settings())
+        return self._notifier
+
+    def alert(self, severity: str, name: str, message: str, *, ackable: bool = True) -> None:
+        """Record the alert AND page the operator when it is page-severity.
+
+        The row is the audit record and is written first; the notification is
+        best-effort and can never fail the asset that raised the alert.
+        """
+        from dynamo.observability.notify import AlertDispatcher
+
+        AlertDispatcher(self.market_repo().add_alert, self.notifier())(
+            severity, name, message, ackable=ackable
+        )
 
     def quarantine_count_24h(self) -> int:
         """Distinct unresolved quarantined symbols created in the last 24h."""

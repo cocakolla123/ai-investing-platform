@@ -30,6 +30,7 @@ from dynamo.execution.gate import (
     engage_kill_switch,
     kill_switch_engaged,
 )
+from dynamo.observability.notify import AlertDispatcher, DisabledNotifier, build_notifier
 from dynamo.persistence.db import make_engine
 from dynamo.persistence.repositories.market import MarketDataRepository
 
@@ -54,18 +55,25 @@ class FileKillSwitch:
     """
 
     def __init__(
-        self, path: str | Path, market_repo: MarketDataRepository, broker: Broker | None = None
+        self,
+        path: str | Path,
+        market_repo: MarketDataRepository,
+        broker: Broker | None = None,
+        notifier: object | None = None,
     ) -> None:
         self._path = Path(path)
         self._repo = market_repo
         self._broker = broker
+        self._notifier = notifier if notifier is not None else DisabledNotifier()
 
     def engaged(self) -> bool:
         return kill_switch_engaged(self._path)
 
     def engage(self, note: str, engaged_by: str) -> None:
+        dispatch = AlertDispatcher(self._repo.add_alert, self._notifier)
+
         def alert(name: str, message: str) -> None:
-            self._repo.add_alert(severity="page", name=name, message=message, ackable=False)
+            dispatch("page", name, message, ackable=False)
 
         broker = self._broker if self._broker is not None else _NullBroker()
         engage_kill_switch(
@@ -78,8 +86,8 @@ class FileKillSwitch:
 
     def disengage(self, note: str) -> None:
         disengage_kill_switch(self._path, ack=note)
-        self._repo.add_alert(
-            severity="info", name="kill_switch_disengaged", message=note, ackable=True
+        AlertDispatcher(self._repo.add_alert, self._notifier)(
+            "info", "kill_switch_disengaged", note, ackable=True
         )
 
 
@@ -99,7 +107,12 @@ def build_deps(
         journal=SqlJournalStore(engine),
         ops=SqlOpsStore(engine, settings),
         admin=SqlAdminStore(engine),
-        kill=FileKillSwitch(settings.kill_switch_path, market_repo, broker),
+        # settings.kill_switch_file, NOT settings.kill_switch_path: the API,
+        # the Dagster daemon and the operator's shell run from different
+        # working directories and must agree on one file (doc 09 §7).
+        kill=FileKillSwitch(
+            settings.kill_switch_file, market_repo, broker, build_notifier(settings)
+        ),
         ping=make_ping(engine),
         auth=AuthConfig(
             password=os.environ.get(DASHBOARD_PASSWORD_ENV) or None,

@@ -1387,7 +1387,7 @@ def chain_verify_check(
             f"at index {result.index} — {result.detail}"
         )
         context.log.error("chain_verify_check: %s", message)
-        dynamo.market_repo().add_alert(severity="page", name="chain_verify_fault", message=message)
+        dynamo.alert("page", "chain_verify_fault", message)
     return MaterializeResult(
         metadata={
             "ok": result.ok,
@@ -1414,9 +1414,7 @@ def experience_completeness_check(
         sample = ", ".join(sorted(overdue)[:10])
         message = f"{len(overdue)} closed trades overdue for post-trade review: {sample}"
         context.log.warning("experience_completeness_check: %s", message)
-        dynamo.market_repo().add_alert(
-            severity="warn", name="experience_completeness_overdue", message=message
-        )
+        dynamo.alert("warn", "experience_completeness_overdue", message)
     return MaterializeResult(
         metadata={"closed_trades": len(closed), "reviewed": len(reviewed), "overdue": len(overdue)}
     )

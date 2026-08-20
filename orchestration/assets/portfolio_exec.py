@@ -443,7 +443,7 @@ def _execution_ready(context: OpExecutionContext, dynamo: DynamoResource) -> boo
     if s.dynamo_env not in (DynamoEnv.PAPER, DynamoEnv.LIVE):
         context.log.warning("execution: DYNAMO_ENV=%s is not PAPER — skipping", s.dynamo_env)
         return False
-    if kill_switch_engaged(s.kill_switch_path):
+    if kill_switch_engaged(s.kill_switch_file):
         context.log.error("execution: kill switch engaged — refusing all orders")
         return False
     return True
@@ -504,7 +504,7 @@ def _equity_gate(settings: Settings) -> Callable[[Any], Any]:
         return live_orders_permitted(
             settings.dynamo_env,
             approval,
-            kill_switch_engaged(settings.kill_switch_path),
+            kill_switch_engaged(settings.kill_switch_file),
             Readiness(),  # LIVE readiness comes from stored metrics; unset → refuse
             scope_target=order.symbol,
         )
@@ -740,10 +740,8 @@ def reconcile_broker_state(context: OpExecutionContext, dynamo: DynamoResource) 
     if not (s.alpaca_api_key and s.alpaca_api_secret):
         context.log.info("reconciliation: no broker configured — skipping")
         return
-    repo = dynamo.market_repo()
-
     def alert(name: str, message: str) -> None:
-        repo.add_alert(severity="page", name=name, message=message)
+        dynamo.alert("page", name, message)
 
     broker = _broker(dynamo)
     if broker is None:
@@ -794,7 +792,6 @@ def _pdt_filtered_specs(
     )
     entered_today = {sym for sym, side, day in fills if side == "buy" and day == today}
     day_trades = count_day_trades(fills)
-    repo = dynamo.market_repo()
     allowed: list[Any] = []
     for spec in specs:
         decision = pdt_exit_allowed(
@@ -812,7 +809,7 @@ def _pdt_filtered_specs(
                 f"{day_trades} day trades in window)"
             )
             context.log.warning("stops: %s", message)
-            repo.add_alert(severity="warn", name="pdt_stop_deferred", message=message)
+            dynamo.alert("warn", "pdt_stop_deferred", message)
     return allowed
 
 

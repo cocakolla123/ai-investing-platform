@@ -4,11 +4,22 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from dynamo.domain.symbols import is_crypto_symbol
+
+
+@lru_cache(maxsize=1)
+def _repo_root() -> Path:
+    """Repository root: the nearest ancestor of this file holding pyproject.toml."""
+    here = Path(__file__).resolve()
+    for candidate in here.parents:
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+    return Path.cwd().resolve()
 
 
 class DynamoEnv(StrEnum):
@@ -309,14 +320,26 @@ class Settings(BaseSettings):
     social_lookback_days: int = 14
 
     # --- Paths ---
+    # Every relative path below is resolved against ``home_dir`` (see
+    # :func:`dynamo_home`), NOT the process CWD. The kill switch is the reason:
+    # the Dagster daemon, the API server and an operator's shell run from three
+    # different working directories, and a CWD-relative "KILL_SWITCH" means
+    # three different files — i.e. an operator can "engage" a switch that the
+    # trading process never looks at.
+    dynamo_home: str = Field(default="", alias="DYNAMO_HOME")
     parquet_dir: str = Field(default="data/parquet", alias="DYNAMO_PARQUET_DIR")
     artifact_dir: str = Field(default="artifacts", alias="DYNAMO_ARTIFACT_DIR")
     kill_switch_path: str = Field(default="KILL_SWITCH", alias="DYNAMO_KILL_SWITCH_PATH")
     approvals_dir: str = Field(default="approvals", alias="DYNAMO_APPROVALS_DIR")
 
-    # --- Alerting ---
+    # --- Alerting (doc 12 §7) ---
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
+    # Severities at or above this are actually transmitted. Everything is
+    # still written to the `alerts` table regardless — this only governs the
+    # out-of-band page.
+    notify_min_severity: str = Field(default="page", alias="DYNAMO_NOTIFY_MIN_SEVERITY")
+    notify_timeout_seconds: float = 10.0
 
     @field_validator("ballast_symbol")
     @classmethod
@@ -327,6 +350,33 @@ class Settings(BaseSettings):
                 "equity/ETF symbol (crypto vol makes it cash-substitute-unfit)"
             )
         return v
+
+    @property
+    def home_dir(self) -> Path:
+        """Anchor for every relative path in this config.
+
+        ``$DYNAMO_HOME`` when set; otherwise the repository root discovered by
+        walking up from this module until a ``pyproject.toml`` appears; failing
+        that (an installed wheel with no checkout), the CWD. Never CWD when a
+        checkout is present, which is the whole point.
+        """
+        if self.dynamo_home:
+            return Path(self.dynamo_home).expanduser().resolve()
+        return _repo_root()
+
+    def anchored(self, path: str | Path) -> Path:
+        """Resolve ``path`` against :attr:`home_dir` unless it is absolute."""
+        p = Path(path).expanduser()
+        return p.resolve() if p.is_absolute() else (self.home_dir / p).resolve()
+
+    @property
+    def kill_switch_file(self) -> Path:
+        """The ONE kill-switch file. Use this, never ``kill_switch_path``."""
+        return self.anchored(self.kill_switch_path)
+
+    @property
+    def approvals_path(self) -> Path:
+        return self.anchored(self.approvals_dir)
 
     @property
     def is_live(self) -> bool:
