@@ -13,6 +13,15 @@ Checks:
 - daily-bar coverage >= 95% of the universe both at ``cfg.start`` and at
   ``cfg.start - 750d`` (the runner's returns lookback) — presence measured
   in a +/-5-session window around each date;
+- bar ADJUSTMENT (wide-campaign D5): the run's bars must not contain
+  unadjusted corporate actions. Asserted EMPIRICALLY — a single-session move
+  large enough to be an action, landing on an ex-date recorded in
+  ``corporate_actions``, is an unadjusted row and the run is refused. A
+  declared per-source policy is checked too, but the empirical test carries
+  the weight, because ``bars_1d`` records no per-row adjustment mode: the
+  ~6.0M rows written under ``Adjustment.RAW`` were indistinguishable from
+  adjusted ones by inspection, and only the price series gave them away. This
+  is the check that stops D1 recurring silently;
 - regime-critical macro series (HY OAS, curve slope) reach back to at least
   ``cfg.start - 900d`` (the runner's regime lookback) with vintages knowable
   by ``cfg.start``;
@@ -34,12 +43,17 @@ Zero LLM calls, zero writes: preflight only reads.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from sqlalchemy import Engine, func, select
+from sqlalchemy import Engine, Text, bindparam, func, select, text
+from sqlalchemy.dialects.postgresql import ARRAY
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from dynamo.persistence import schema
 from dynamo.replay.runner import (
@@ -53,6 +67,32 @@ BAR_WINDOW_SESSIONS = 5
 # The two macro series the runner's regime history actually consumes
 # (``_regime_history``: hy_oas + curve_slope).
 REQUIRED_MACRO_SERIES: tuple[str, ...] = ("BAMLH0A0HYM2", "T10Y3M")
+
+# --- Bar adjustment (D5) ---------------------------------------------------
+#
+# ``bars_1d`` carries no per-row record of the adjustment its prices were
+# fetched under, so "is this row adjusted?" cannot be answered by looking at
+# the row. It can only be answered by looking at the SERIES: an unadjusted
+# corporate action leaves a step, and ``corporate_actions`` says where the
+# steps should be. That is why the empirical check below exists and why it,
+# not the declaration, is the one that fails a run.
+
+#: Sources DECLARED to serve unadjusted prices. A symbol whose bars come only
+#: from one of these and carry no ``adj_close`` is refused outright, without
+#: needing a corporate action to prove it.
+#:
+#: Empty today, and that is a statement rather than an oversight: both live
+#: feeds adjust (Tiingo fully, in ``adj_close``; Alpaca for splits, see
+#: ``dynamo.data.alpaca_data.DAILY_BAR_ADJUSTMENT``). A declaration is only
+#: as good as the day it was written — which is exactly how D1 happened, the
+#: comment "Tiingo owns adjustment" having been true for 55 symbols and false
+#: for 11,200 — so nothing here is trusted on its own.
+UNADJUSTED_BAR_SOURCES: frozenset[str] = frozenset()
+
+#: Days of slack when matching a large move to a split ex-date. A split's
+#: step prints on the ex-date, but vendors disagree by a session about which
+#: side of the boundary a bar belongs to, so +/-1 day.
+SPLIT_MATCH_SLACK_DAYS = 1
 
 OK = "ok"
 WARNING = "warning"
@@ -121,6 +161,48 @@ class PreflightReads(Protocol):
 
     def get_run(self, run_id: str) -> Mapping[str, Any] | None: ...
 
+    def bars_for_adjustment_audit(
+        self, symbols: Sequence[str], start: date, end: date
+    ) -> pd.DataFrame: ...
+
+    def split_ex_dates(
+        self, symbols: Sequence[str], start: date, end: date
+    ) -> set[tuple[str, date]]: ...
+
+
+def _symbol_in(column: Any, symbols: Sequence[str]) -> Any:
+    """``symbol = ANY(:array)`` rather than ``IN (:a, :b, ... x10,000)``.
+
+    The wide universe is ~10,400 names. An expanded ``IN`` list of that size
+    is one bind parameter per symbol, which pushed the planner into a
+    parallel hash and blew the Postgres container's 64 MB ``/dev/shm``
+    (``DiskFull: could not resize shared memory segment ... to 189140416
+    bytes``) — measured, not hypothetical. An array is ONE parameter.
+    """
+    array = bindparam("preflight_symbols", value=list(symbols), type_=ARRAY(Text))
+    return column == func.any(array)
+
+
+@contextmanager
+def _serial_connection(engine: Engine) -> Iterator[Any]:
+    """A connection that will not plan a parallel scan.
+
+    Preflight's wide-universe reads touch ~5.8M ``bars_1d`` rows. Postgres
+    plans those in parallel and puts the workers' hash/sort in SHARED memory
+    — 188 MB of it, measured — while the dockerised server has the Docker
+    default 64 MB of ``/dev/shm``. The result is ``DiskFull: could not resize
+    shared memory segment``, i.e. preflight failing for a reason that has
+    nothing to do with the data it is checking.
+
+    Serial is the right trade here regardless of the shm limit: this runs
+    once, before a multi-hour replay, and a few extra seconds of scan buys a
+    plan whose memory is bounded by ``work_mem`` in the backend's own
+    address space.
+    """
+    with engine.connect() as cx:
+        cx.execute(text("SET max_parallel_workers_per_gather = 0"))
+        yield cx
+
 
 class EngineReads:
     """Concrete :class:`PreflightReads` over the platform database."""
@@ -141,13 +223,13 @@ class EngineReads:
         stmt = (
             select(t.c.symbol)
             .where(
-                t.c.symbol.in_(list(symbols)),
+                _symbol_in(t.c.symbol, symbols),
                 func.date(t.c.ts) >= start,
                 func.date(t.c.ts) <= end,
             )
             .distinct()
         )
-        with self._engine.connect() as cx:
+        with _serial_connection(self._engine) as cx:
             return {str(r.symbol) for r in cx.execute(stmt)}
 
     def macro_first_observation(
@@ -170,6 +252,44 @@ class EngineReads:
         from dynamo.persistence.repositories.replay import ReplayRepository
 
         return ReplayRepository(self._engine).get_run(run_id)
+
+    def bars_for_adjustment_audit(
+        self, symbols: Sequence[str], start: date, end: date
+    ) -> pd.DataFrame:
+        """``symbol, ts, close, source, adj_close`` per STORED row.
+
+        Not the canonical view: the question is what each feed stored, and a
+        frame that substituted another feed's close would answer it wrong.
+
+        Deliberately UNSORTED. A server-side ``ORDER BY symbol, ts`` over the
+        wide universe's ~5.8M rows plans a parallel sort whose tuple store
+        wanted 188 MB of shared memory and died on the container's 64 MB
+        ``/dev/shm``. The caller sorts the frame in pandas, where the memory
+        is the process's own and already accounted for.
+        """
+        import pandas as pd
+
+        t = schema.bars_1d
+        stmt = select(t.c.symbol, t.c.ts, t.c.close, t.c.source, t.c.adj_close).where(
+            _symbol_in(t.c.symbol, symbols),
+            func.date(t.c.ts) >= start,
+            func.date(t.c.ts) <= end,
+        )
+        with _serial_connection(self._engine) as cx:
+            return pd.read_sql(stmt, cx)
+
+    def split_ex_dates(
+        self, symbols: Sequence[str], start: date, end: date
+    ) -> set[tuple[str, date]]:
+        t = schema.corporate_actions
+        stmt = select(t.c.symbol, t.c.ex_date).where(
+            t.c.action_type == "split",
+            _symbol_in(t.c.symbol, symbols),
+            t.c.ex_date >= start,
+            t.c.ex_date <= end,
+        )
+        with _serial_connection(self._engine) as cx:
+            return {(str(r.symbol), cast(date, r.ex_date)) for r in cx.execute(stmt)}
 
 
 def session_window(center: date, n_sessions: int = BAR_WINDOW_SESSIONS) -> tuple[date, date]:
@@ -247,6 +367,118 @@ def _check_bar_coverage(
             f"(missing e.g. {missing}); backfill bars first",
         )
     return PreflightCheck(name, OK, detail)
+
+
+def _declared_raw_symbols(bars: pd.DataFrame) -> list[str]:
+    """Symbols served ONLY by a source declared unadjusted, with no adj_close.
+
+    "Only" matters: a symbol that also has a Tiingo row has an adjusted close
+    available through the canonical view, so the raw row is harmless.
+    """
+
+    if bars.empty or not UNADJUSTED_BAR_SOURCES:
+        return []
+    source = cast("pd.Series", bars["source"])
+    raw = source.isin(list(UNADJUSTED_BAR_SOURCES))
+    grouped = bars.assign(_raw=raw, _adj=cast("pd.Series", bars["adj_close"]).notna()).groupby(
+        "symbol"
+    )
+    flags = grouped.agg(all_raw=("_raw", "all"), any_adj=("_adj", "any"))
+    bad = cast("pd.DataFrame", flags[flags["all_raw"] & ~flags["any_adj"]])
+    return sorted(str(s) for s in bad.index)
+
+
+def _check_bar_adjustment(
+    reads: PreflightReads, symbols: list[str], cfg: ReplayConfig
+) -> PreflightCheck:
+    """D5 — refuse a run whose bars still contain unadjusted corporate actions.
+
+    An unadjusted split is not a data gap; it is a fabricated return, and it
+    is worse than a gap because the detectors are built to notice exactly
+    that shape. Before the repair, 1,166 single-session moves in this panel
+    landed on a recorded split ex-date. Nothing failed. The pilot's flagged
+    set was contaminated and the run reported a number anyway.
+    """
+    import pandas as pd
+
+    from dynamo.data.quality import EXTREME_DOWN_RETURN, EXTREME_UP_RETURN
+
+    start = cfg.start - timedelta(days=RETURNS_LOOKBACK_DAYS)
+    bars = reads.bars_for_adjustment_audit(symbols, start, cfg.end)
+    if bars.empty:
+        return PreflightCheck(
+            "bar_adjustment",
+            WARNING,
+            f"no bars for the universe over [{start}, {cfg.end}] — adjustment "
+            "could not be checked",
+        )
+
+    declared = _declared_raw_symbols(bars)
+    splits = reads.split_ex_dates(symbols, start, cfg.end)
+
+    # The EFFECTIVE close — adj_close where a feed supplies one, else close.
+    # This is the series the canonical view hands the replay, and reading the
+    # raw `close` column instead produces false alarms: Tiingo stores XLE's
+    # unadjusted $92.22 -> $45.92 across its real 2025-12-05 two-for-one, and
+    # its `adj_close` ($45.11 -> $44.92) is the continuous series the runner
+    # actually sees. Auditing a column nobody trades is not auditing.
+    frame = cast("pd.DataFrame", bars[["symbol", "ts", "close", "adj_close"]]).sort_values(
+        by=["symbol", "ts"], kind="mergesort"
+    )
+    adj = cast("pd.Series", frame["adj_close"])
+    frame["close"] = adj.where(adj.notna(), frame["close"])
+    prev = cast("pd.Series", frame.groupby("symbol")["close"].shift(1))
+    close = cast("pd.Series", frame["close"])
+    ret = close / prev.where(prev > 0.0) - 1.0
+    extreme = cast("pd.DataFrame", frame[(ret < EXTREME_DOWN_RETURN) | (ret > EXTREME_UP_RETURN)])
+    slack = [timedelta(days=d) for d in range(-SPLIT_MATCH_SLACK_DAYS, SPLIT_MATCH_SLACK_DAYS + 1)]
+    unadjusted = sorted(
+        {
+            str(sym)
+            for sym, ts in zip(extreme["symbol"], extreme["ts"], strict=True)
+            if any((str(sym), cast(date, pd.Timestamp(ts).date()) + d) in splits for d in slack)
+        }
+    )
+
+    offenders = sorted(set(unadjusted) | set(declared))
+    if offenders:
+        why = []
+        if unadjusted:
+            why.append(
+                f"{len(unadjusted)} with a large move on a recorded split "
+                f"ex-date (e.g. {unadjusted[:10]})"
+            )
+        if declared:
+            why.append(
+                f"{len(declared)} served only by a source declared unadjusted "
+                f"with no adj_close (e.g. {declared[:10]})"
+            )
+        return PreflightCheck(
+            "bar_adjustment",
+            ERROR,
+            f"{len(offenders)} of {len(symbols)} universe symbols carry "
+            f"UNADJUSTED prices over [{start}, {cfg.end}]: "
+            + "; ".join(why)
+            + ". A split reads as a crash and the detectors hunt crashes — "
+            "re-backfill on an adjusted feed (`dynamo.cli.backfill bars "
+            "--provider alpaca --force`), or drop these symbols from the "
+            "universe. Audit with `python -m dynamo.cli.repair census "
+            "--corporate-actions`",
+        )
+    if not splits:
+        return PreflightCheck(
+            "bar_adjustment",
+            WARNING,
+            f"no splits recorded in corporate_actions for this universe over "
+            f"[{start}, {cfg.end}] — there was nothing to check against, so "
+            "adjustment is UNVERIFIED (run `dynamo.cli.repair corporate-actions`)",
+        )
+    return PreflightCheck(
+        "bar_adjustment",
+        OK,
+        f"no unadjusted corporate actions: {len(symbols)} symbols checked "
+        f"against {len(splits)} recorded splits over [{start}, {cfg.end}]",
+    )
 
 
 def _check_macro(reads: PreflightReads, cfg: ReplayConfig) -> PreflightCheck:
@@ -481,6 +713,7 @@ def run_preflight(
                 "lookback",
             )
         )
+        checks.append(_check_bar_adjustment(reads, symbols, config))
     checks.append(_check_macro(reads, config))
     checks.append(_check_quant_model(config, require_shipping_bundle))
     checks.append(_check_source_run(reads, config))

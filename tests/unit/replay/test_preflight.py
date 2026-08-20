@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from dynamo.replay import preflight as pf
@@ -40,6 +41,11 @@ class FakeReads:
     )
     runs: dict[str, dict[str, Any]] = field(default_factory=dict)
     bar_queries: list[tuple[date, date]] = field(default_factory=list)
+    # Adjustment audit (D5). Healthy default: one flat series per symbol and
+    # one recorded split that leaves no step, i.e. properly adjusted data.
+    audit_bars: pd.DataFrame | None = None
+    splits: set[tuple[str, date]] | None = None
+    audit_queries: list[tuple[date, date]] = field(default_factory=list)
 
     def universe_symbols(self, as_of: date, tiers: tuple[int, ...]) -> list[str]:
         return list(self.universe)
@@ -61,6 +67,49 @@ class FakeReads:
 
     def get_run(self, run_id: str) -> Mapping[str, Any] | None:
         return self.runs.get(run_id)
+
+    def bars_for_adjustment_audit(
+        self, symbols: Sequence[str], start: date, end: date
+    ) -> pd.DataFrame:
+        self.audit_queries.append((start, end))
+        if self.audit_bars is not None:
+            return self.audit_bars
+        return adjusted_series(SYMBOLS[0])
+
+    def split_ex_dates(
+        self, symbols: Sequence[str], start: date, end: date
+    ) -> set[tuple[str, date]]:
+        return set(self.splits) if self.splits is not None else {(SYMBOLS[0], SPLIT_DAY)}
+
+
+SPLIT_DAY = date(2026, 3, 4)
+
+
+def audit_frame(symbol: str, closes: list[float], *, source: str = "alpaca",
+                adj: bool = False) -> pd.DataFrame:
+    """A stored-bar frame shaped like `bars_for_adjustment_audit`, whose
+    third session is SPLIT_DAY."""
+    stamps = [datetime.combine(SPLIT_DAY, datetime.min.time(), tzinfo=UTC)
+              + timedelta(days=i - 2) for i in range(len(closes))]
+    return pd.DataFrame(
+        {
+            "symbol": symbol,
+            "ts": stamps,
+            "close": closes,
+            "source": source,
+            "adj_close": closes if adj else [None] * len(closes),
+        }
+    )
+
+
+def adjusted_series(symbol: str) -> pd.DataFrame:
+    """The same 2-for-1 split, correctly back-adjusted: no step at all."""
+    return audit_frame(symbol, [50.0, 50.0, 50.0, 50.0])
+
+
+def unadjusted_series(symbol: str) -> pd.DataFrame:
+    """The D1 defect: the price halves on the split ex-date."""
+    return audit_frame(symbol, [100.0, 100.0, 50.0, 50.0])
 
 
 def config(**overrides: Any) -> ReplayConfig:
@@ -89,6 +138,7 @@ def test_healthy_data_passes_with_quant_model_warning() -> None:
         "universe",
         "bar_coverage_start",
         "bar_coverage_lookback",
+        "bar_adjustment",
         "macro_history",
         "quant_model",
         "source_run",
@@ -403,3 +453,133 @@ def test_session_window_spans_center() -> None:
     lo, hi = pf.session_window(date(2026, 2, 2))
     assert lo < date(2026, 2, 2) < hi
     assert (hi - lo).days <= 30
+
+
+# -- bar adjustment (D5) ----------------------------------------------------
+
+
+def test_adjusted_universe_passes_the_adjustment_check() -> None:
+    report = pf.run_preflight(FakeReads(), config())
+    check = next(c for c in report.checks if c.name == "bar_adjustment")
+    assert check.status == pf.OK
+    assert "no unadjusted corporate actions" in check.detail
+
+
+def test_an_unadjusted_split_fails_the_run() -> None:
+    """The whole point: a split that reads as a -50% crash must stop the run,
+    not quietly become the flagged set."""
+    reads = FakeReads(audit_bars=unadjusted_series(SYMBOLS[0]))
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config())
+    detail = errors_of(exc.value)["bar_adjustment"]
+    assert "UNADJUSTED" in detail
+    assert SYMBOLS[0] in detail
+    assert "re-backfill" in detail
+
+
+def test_a_large_move_with_no_recorded_split_is_not_an_adjustment_failure() -> None:
+    """A genuine -50% crash is data, not a defect. Blaming it on adjustment
+    would make the check cry wolf on exactly the events the platform is for."""
+    reads = FakeReads(audit_bars=unadjusted_series(SYMBOLS[0]), splits={("OTHER", SPLIT_DAY)})
+    report = pf.run_preflight(reads, config())
+    assert next(c for c in report.checks if c.name == "bar_adjustment").status == pf.OK
+
+
+def test_a_split_matched_within_one_session_still_fails() -> None:
+    """Vendors disagree by a session about which bar a split's step lands on."""
+    reads = FakeReads(
+        audit_bars=unadjusted_series(SYMBOLS[0]),
+        splits={(SYMBOLS[0], SPLIT_DAY - timedelta(days=1))},
+    )
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config())
+    assert "bar_adjustment" in errors_of(exc.value)
+
+
+def test_no_recorded_splits_at_all_is_a_warning_not_a_pass() -> None:
+    """corporate_actions held 0 rows for a year. With no witness the check
+    cannot conclude anything, and must say so rather than report OK."""
+    report = pf.run_preflight(FakeReads(splits=set()), config())
+    check = next(c for c in report.checks if c.name == "bar_adjustment")
+    assert check.status == pf.WARNING
+    assert "UNVERIFIED" in check.detail
+
+
+def test_a_source_declared_unadjusted_fails_without_needing_a_split(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The declared half of the check: no corporate action required."""
+    monkeypatch.setattr(pf, "UNADJUSTED_BAR_SOURCES", frozenset({"rawvendor"}))
+    reads = FakeReads(
+        audit_bars=audit_frame(SYMBOLS[0], [50.0] * 4, source="rawvendor", adj=False)
+    )
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config())
+    assert "declared unadjusted" in errors_of(exc.value)["bar_adjustment"]
+
+
+def test_a_declared_raw_source_carrying_adj_close_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pf, "UNADJUSTED_BAR_SOURCES", frozenset({"rawvendor"}))
+    reads = FakeReads(
+        audit_bars=audit_frame(SYMBOLS[0], [50.0] * 4, source="rawvendor", adj=True)
+    )
+    report = pf.run_preflight(reads, config())
+    assert next(c for c in report.checks if c.name == "bar_adjustment").status == pf.OK
+
+
+def test_a_symbol_with_a_second_adjusted_feed_is_not_flagged_as_raw(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """"Only" matters: a symbol that also has an adjusted row has an adjusted
+    close available through the canonical view."""
+    monkeypatch.setattr(pf, "UNADJUSTED_BAR_SOURCES", frozenset({"rawvendor"}))
+    frame = pd.concat(
+        [
+            audit_frame(SYMBOLS[0], [50.0] * 4, source="rawvendor", adj=False),
+            audit_frame(SYMBOLS[0], [50.0] * 4, source="tiingo", adj=True),
+        ]
+    )
+    report = pf.run_preflight(FakeReads(audit_bars=frame), config())
+    assert next(c for c in report.checks if c.name == "bar_adjustment").status == pf.OK
+
+
+def test_adjustment_audit_spans_the_returns_lookback() -> None:
+    """A split before the window still corrupts the returns the run computes,
+    so the audit reaches back as far as the runner does."""
+    reads = FakeReads()
+    pf.run_preflight(reads, config())
+    (start, end) = reads.audit_queries[0]
+    assert start == LOOKBACK
+    assert end == END
+
+
+def test_no_bars_at_all_warns_rather_than_silently_passing() -> None:
+    reads = FakeReads(audit_bars=pd.DataFrame())
+    report = pf.run_preflight(reads, config())
+    check = next(c for c in report.checks if c.name == "bar_adjustment")
+    assert check.status == pf.WARNING
+    assert "could not be checked" in check.detail
+
+
+def test_a_feed_that_stores_raw_close_beside_adj_close_is_not_a_false_alarm() -> None:
+    """The audit reads the EFFECTIVE close, the one the canonical view serves.
+
+    Tiingo stores XLE's unadjusted 92.22 -> 45.92 across its real 2025-12-05
+    two-for-one and puts the continuous series in adj_close. Reading `close`
+    flagged both XLE and XLK as unadjusted when the runner never sees that
+    column — a check that cries wolf on correct data gets switched off."""
+    frame = audit_frame(SYMBOLS[0], [100.0, 100.0, 50.0, 50.0], source="tiingo")
+    frame["adj_close"] = [50.0, 50.0, 50.0, 50.0]
+    report = pf.run_preflight(FakeReads(audit_bars=frame), config())
+    assert next(c for c in report.checks if c.name == "bar_adjustment").status == pf.OK
+
+
+def test_adj_close_that_is_itself_unadjusted_still_fails() -> None:
+    """Trusting the column is not the same as trusting the numbers in it."""
+    frame = audit_frame(SYMBOLS[0], [100.0, 100.0, 50.0, 50.0], source="tiingo")
+    frame["adj_close"] = [100.0, 100.0, 50.0, 50.0]
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(FakeReads(audit_bars=frame), config())
+    assert "bar_adjustment" in errors_of(exc.value)
