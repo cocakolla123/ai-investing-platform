@@ -13,9 +13,9 @@ No network, no database.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, cast
 
-from dagster import build_asset_context
+from dagster import MaterializeResult, build_asset_context
 from orchestration.assets.ingestion import insider_tx
 
 from dynamo.domain.models.market import InsiderTx
@@ -80,10 +80,10 @@ def _ctx() -> Any:
 def test_the_sweep_is_scoped_to_the_tracked_ciks() -> None:
     edgar = _Edgar()
     dynamo = _Dynamo(edgar, {"ACME": "0000000042", "PEER": "0000000077"})
-    result = insider_tx(_ctx(), dynamo)  # type: ignore[arg-type]
+    result = cast(MaterializeResult, insider_tx(_ctx(), dynamo))  # type: ignore[arg-type]
     assert edgar.calls[0]["ciks"] is not None
     assert sorted(edgar.calls[0]["ciks"]) == ["0000000042", "0000000077"]
-    assert result.metadata == {"rows": 1, "scoped_to_ciks": 2}
+    assert dict(result.metadata or {}) == {"rows": 1, "scoped_to_ciks": 2}
 
 
 def test_the_window_is_yesterday_through_the_partition_day() -> None:
@@ -100,9 +100,9 @@ def test_a_cik_less_database_falls_back_to_the_market_and_says_so() -> None:
     but the operator has to be told the sweep is unscoped."""
     edgar = _Edgar()
     dynamo = _Dynamo(edgar, {})
-    result = insider_tx(_ctx(), dynamo)  # type: ignore[arg-type]
+    result = cast(MaterializeResult, insider_tx(_ctx(), dynamo))  # type: ignore[arg-type]
     assert edgar.calls[0]["ciks"] is None
-    assert result.metadata["scoped_to_ciks"] == 0
+    assert dict(result.metadata or {})["scoped_to_ciks"] == 0
 
 
 def test_edgar_unconfigured_is_a_skip_not_a_failure() -> None:
@@ -110,6 +110,9 @@ def test_edgar_unconfigured_is_a_skip_not_a_failure() -> None:
         def edgar(self) -> Any:
             return None
 
-    result = insider_tx(_ctx(), _NoEdgar(_Edgar(), {}))  # type: ignore[arg-type]
-    assert result.metadata["rows"] == 0
-    assert result.metadata["skipped"] == "edgar not configured"
+    result = cast(
+        MaterializeResult, insider_tx(_ctx(), _NoEdgar(_Edgar(), {}))  # type: ignore[arg-type]
+    )
+    metadata = dict(result.metadata or {})
+    assert metadata["rows"] == 0
+    assert metadata["skipped"] == "edgar not configured"
