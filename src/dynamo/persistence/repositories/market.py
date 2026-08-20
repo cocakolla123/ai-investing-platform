@@ -130,6 +130,11 @@ def canonical_bars(frame: pd.DataFrame) -> pd.DataFrame:
     and carries an ``adj_close``, that adjusted value BECOMES ``close`` — the
     canonical close is an adjusted close, doc 02 §5.)
 
+    Rows are matched on the **session** (``ts`` floored to the UTC day), not
+    the raw timestamp, and the returned ``ts`` is that session. The feeds
+    stamp the same trading day differently and a ``(symbol, ts)`` key silently
+    failed to collide — see the comment on the normalisation below.
+
     WHY PRICE AND VOLUME COME FROM DIFFERENT FEEDS. They are not the same
     measurement problem.
 
@@ -174,13 +179,24 @@ def canonical_bars(frame: pd.DataFrame) -> pd.DataFrame:
     source = cast(pd.Series, frame["source"])
     frame["_price_rank"] = _source_rank(source, CANONICAL_PRICE_SOURCES)
     frame["_volume_rank"] = _source_rank(source, CANONICAL_VOLUME_SOURCES)
+    # Match on the SESSION, not the exact timestamp. The two feeds stamp the
+    # same trading day differently — Tiingo 00:00Z, Alpaca 04:00Z (00:00 New
+    # York) — so a (symbol, ts) key never collided and the "canonical" view
+    # emitted BOTH rows for every dual-sourced session. Measured on XLE
+    # 2026-08-12: close 61.03 @00:00Z beside 61.02 @04:00Z, volume 22,584,153
+    # beside 1,752,526. Every Tier-1 name therefore carried two bars a day
+    # whose volume alternated ~13x, and a cross-symbol pivot on ``ts`` split
+    # each session into two half-empty rows. Normalising to the session makes
+    # the merge below actually merge, and makes every symbol in the panel
+    # share one index.
+    frame["ts"] = cast(pd.Series, pd.to_datetime(frame["ts"], utc=True)).dt.floor("D")
 
     ordered = frame.sort_values(by=["symbol", "ts", "_price_rank"], kind="mergesort")
     price = cast(
         pd.DataFrame, ordered.drop_duplicates(subset=["symbol", "ts"], keep="first")
     ).copy()
 
-    # Volume is chosen independently, then grafted on by (symbol, ts).
+    # Volume is chosen independently, then grafted on by (symbol, session).
     by_volume = frame.sort_values(by=["symbol", "ts", "_volume_rank"], kind="mergesort")
     chosen = cast(
         pd.DataFrame, by_volume.drop_duplicates(subset=["symbol", "ts"], keep="first")

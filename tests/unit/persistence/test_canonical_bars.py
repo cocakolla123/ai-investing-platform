@@ -6,7 +6,7 @@ Pure-frame tests — no database. The rule lives in
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
@@ -156,3 +156,65 @@ def test_empty_frame_keeps_the_canonical_columns() -> None:
     out = canonical_bars(pd.DataFrame())
     assert out.empty
     assert list(out.columns) == list(CANONICAL_BAR_COLUMNS)
+
+
+# --- Session matching ------------------------------------------------------
+#
+# The two feeds stamp the same trading day differently: Tiingo at 00:00Z,
+# Alpaca at 04:00Z (00:00 New York). A (symbol, ts) key never collided, so the
+# "canonical" view emitted BOTH rows for every dual-sourced session.
+
+TIINGO_STAMP = datetime(2026, 8, 12, 0, 0, tzinfo=UTC)
+ALPACA_STAMP = datetime(2026, 8, 12, 4, 0, tzinfo=UTC)
+
+
+def test_the_two_feeds_stamp_of_one_session_collapses_to_one_row() -> None:
+    """Measured on XLE 2026-08-12: close 61.03 @00:00Z beside 61.02 @04:00Z,
+    volume 22,584,153 beside 1,752,526. Every Tier-1 name carried two bars a
+    day whose volume alternated ~13x — the D2 scale break, inside one
+    symbol's own series."""
+    frame = pd.DataFrame(
+        [
+            raw_row("XLE", "tiingo", close=61.03, adj_close=61.03,
+                    volume=22_584_153, ts=TIINGO_STAMP),
+            raw_row("XLE", "alpaca", close=61.02, volume=1_752_526, ts=ALPACA_STAMP),
+        ]
+    )
+    out = canonical_bars(frame)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["ts"] == pd.Timestamp("2026-08-12", tz="UTC")
+    assert row["close"] == 61.03
+    assert row["volume"] == 1_752_526
+    assert row["volume_source"] == "alpaca"
+
+
+def test_every_symbol_shares_one_session_index() -> None:
+    """A cross-symbol pivot on `ts` must not split a session into two
+    half-empty rows just because the names came from different feeds."""
+    frame = pd.DataFrame(
+        [
+            raw_row("DUAL", "tiingo", close=61.0, adj_close=61.0,
+                    volume=22_000_000, ts=TIINGO_STAMP),
+            raw_row("DUAL", "alpaca", close=61.0, volume=1_700_000, ts=ALPACA_STAMP),
+            raw_row("WIDE", "alpaca", close=5.0, volume=1_200, ts=ALPACA_STAMP),
+        ]
+    )
+    out = canonical_bars(frame)
+    pivot = out.pivot(index="ts", columns="symbol", values="close")
+    assert len(pivot) == 1
+    assert not pivot.isna().to_numpy().any()
+
+
+def test_distinct_sessions_are_still_distinct() -> None:
+    """Flooring must merge feeds, not merge days."""
+    frame = pd.DataFrame(
+        [
+            raw_row("XLE", "alpaca", close=61.0, volume=1, ts=ALPACA_STAMP),
+            raw_row("XLE", "alpaca", close=62.0, volume=2,
+                    ts=ALPACA_STAMP + timedelta(days=1)),
+        ]
+    )
+    out = canonical_bars(frame)
+    assert len(out) == 2
+    assert list(out["close"]) == [61.0, 62.0]
