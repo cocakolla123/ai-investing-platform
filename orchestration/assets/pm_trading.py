@@ -202,9 +202,16 @@ def _pm_manager(dynamo: DynamoResource, broker: Any) -> Any:
 
 
 def _pm_sticky_halt_active(dynamo: DynamoResource) -> bool:
-    """Unacknowledged divergent PM reconciliation runs block new orders (sticky)."""
-    from dynamo.persistence.repositories.execution import ReconciliationRepository
+    """Unacked divergent PM reconciliation runs, or an unacked ladder rung.
 
+    The ladder halt is portfolio-wide on purpose (doc 06 §3): the sleeve cap
+    is a fraction of the same equity the drawdown is measured against.
+    """
+    from dynamo.persistence.repositories.execution import ReconciliationRepository
+    from dynamo.persistence.repositories.risk import LadderEventRepository
+
+    if LadderEventRepository(dynamo.engine()).is_halted():
+        return True
     runs = ReconciliationRepository(dynamo.engine()).unacked_divergent_runs()
     return any(str(r.get("scope", "")).startswith("pm") for r in runs)
 

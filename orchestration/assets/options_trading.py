@@ -112,9 +112,17 @@ def _options_manager(dynamo: DynamoResource, broker: Any) -> Any:
 
 
 def _options_sticky_halt_active(dynamo: DynamoResource) -> bool:
-    """Unacknowledged divergent options reconciliation runs block new orders."""
-    from dynamo.persistence.repositories.execution import ReconciliationRepository
+    """Unacked divergent options reconciliation runs, or an unacked ladder rung.
 
+    The ladder halt is portfolio-wide on purpose (doc 06 §3): a -8% drawdown
+    is a statement about the account, not about one sleeve, and options
+    premium at risk is drawn from the same equity.
+    """
+    from dynamo.persistence.repositories.execution import ReconciliationRepository
+    from dynamo.persistence.repositories.risk import LadderEventRepository
+
+    if LadderEventRepository(dynamo.engine()).is_halted():
+        return True
     runs = ReconciliationRepository(dynamo.engine()).unacked_divergent_runs()
     return any(str(r.get("scope", "")).startswith("options") for r in runs)
 
