@@ -58,12 +58,24 @@ def separable_panel(n_symbols: int = 30, n_sessions: int = 300, seed: int = 11) 
 def smoke(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     artifact_dir = tmp_path_factory.mktemp("quant-train")
     panel = separable_panel()
+    # Explicit geometry: this fixture is about artifact production and metric
+    # sanity, not about fold-count policy. The production geometry fixes fold
+    # SIZE (2y train / 2mo test), which a 300-session synthetic panel cannot
+    # hold — and it should not have to, any more than a unit test should
+    # depend on how much history the real database happens to have.
     report = qt.train_quant_bundle(
         panel,
         version="smoke-v1",
         artifact_dir=artifact_dir,
         train_start=TRAIN_START,
         train_end=TRAIN_END,
+        wf_config=WalkForwardConfig(
+            train_sessions=120,
+            test_sessions=40,
+            purge_sessions=20,
+            embargo_sessions=10,
+            roll_sessions=40,
+        ),
     )
     return {"dir": artifact_dir, "panel": panel, "report": report}
 
@@ -230,8 +242,22 @@ def test_existing_registry_version_is_refused(monkeypatch: pytest.MonkeyPatch) -
 # -- fold geometry -----------------------------------------------------------
 
 
-def test_walkforward_uses_doc08_defaults_when_window_is_long() -> None:
-    assert qt.walkforward_for(1000) == WalkForwardConfig()
+def test_the_doc08_defaults_are_deliberately_not_used() -> None:
+    """doc-08's train-3y / test-6mo was written for a decade of history. On
+    the real 1,042-session window it yields TWO folds — precisely the
+    geometry that let campaign-v5 ship on a t-statistic computed from two
+    numbers. Fold size is fixed smaller so that fold COUNT tracks the data.
+    """
+    from dynamo.backtest.walkforward import generate_folds
+
+    sessions = pd.bdate_range("2022-01-03", periods=1042)
+    assert len(generate_folds(sessions, WalkForwardConfig())) == 2
+
+    cfg = qt.walkforward_for(1042)
+    assert cfg != WalkForwardConfig()
+    assert cfg.train_sessions == qt.TRAIN_SESSIONS
+    assert cfg.test_sessions == qt.TEST_SESSIONS
+    assert len(generate_folds(sessions, cfg)) >= 12
 
 
 def test_walkforward_scales_down_honestly_for_short_windows() -> None:

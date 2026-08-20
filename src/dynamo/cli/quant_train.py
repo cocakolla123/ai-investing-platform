@@ -55,6 +55,13 @@ from datetime import date
 from pathlib import Path
 from typing import Any, cast
 
+# Fixed walk-forward fold size, in CALENDAR sessions (walkforward_for scales
+# them to panel rows by the stride). Fixed on data-shape grounds so that fold
+# COUNT is a consequence of how much history exists rather than a dial that
+# decides whether a model passes — see walkforward_for.
+TRAIN_SESSIONS = 2 * 252  # 2 years: enough regime variety to not be surprised
+TEST_SESSIONS = 2 * 21  # 2 months: ~2 non-overlapping 20-session label windows
+
 MIN_PANEL_SESSIONS = 60
 MIN_PANEL_SYMBOLS = 20
 HORIZON_SESSIONS = 20
@@ -441,39 +448,59 @@ def walkforward_for(n_sessions: int, *, session_stride: int = 1) -> Any:
     leakage, but it spent 20 of an 89-row panel to buy 4x more separation
     than the labels need.
 
-    **Fold count.** The rank t-statistic is computed over per-fold ICs, so a
-    geometry that yields 2 folds yields a t-statistic from two numbers. Train
-    is sized to fit :data:`SHIP_MIN_FOLDS` folds where the window allows,
-    shrinking the training window rather than pretending 2 folds is enough.
-    That trades per-fold model strength for a variance estimate that means
-    something, which is the right trade for a GATE -- the shipped model
-    trains on everything regardless.
+    **Fold count is an OUTPUT, not a dial.** The rank t-statistic goes as
+    ``(mean IC / dispersion) * sqrt(n_folds)``, so fold count is a lever on
+    whether a model passes its own gate — which makes choosing it after
+    seeing a result indefensible. On the real 1,042-session window the
+    reachable range was 9 folds (t=1.58 at campaign-v6's numbers) to 25
+    (t=2.63): the same model, passing or failing on nothing but this
+    function.
 
-    Raises :class:`PanelTooSmallError` when not even one fold fits.
+    So fold SIZE is fixed and the COUNT is whatever the data supports:
+
+    - ``TRAIN_SESSIONS`` = 2 years. A 69-feature model needs regime variety;
+      one year trains it inside a single regime, which is exactly how
+      campaign-v6 scored **-0.08** on a fold covering a regime it had never
+      met. Shrinking train to buy ``sqrt(n)`` would worsen the real defect
+      while flattering the number.
+    - ``TEST_SESSIONS`` = 2 months, holding ~2 NON-overlapping 20-session
+      label windows, so a fold's IC is measured on fresh outcomes rather
+      than one recycled period.
+    - purge = the label horizon.
+
+    Adding a year of history therefore adds folds; re-slicing the same year
+    does not. At 1,042 sessions this yields **13 folds** — which scores
+    t=1.90 at campaign-v6's measured IC and dispersion, i.e. still a NO-GO.
+    That is deliberate: a geometry chosen to pass the model in hand would be
+    worth nothing.
+
+    Falls back to proportional sizing only when the window is too short to
+    hold one fixed-size fold. Raises :class:`PanelTooSmallError` when not
+    even that fits.
     """
     from dynamo.backtest.walkforward import WalkForwardConfig
-    from dynamo.research.quant.training import SHIP_MIN_FOLDS
 
     default = WalkForwardConfig()
-    needed = default.train_sessions + default.purge_sessions + default.test_sessions
-    if n_sessions >= needed and session_stride <= 1:
-        return default
-
+    # NOTE: the doc-08 defaults (train 3y, test 6mo) are deliberately NOT used
+    # even when the window is long enough to hold them. On the real
+    # 1,042-session window they yield TWO folds — the exact geometry that let
+    # campaign-v5 ship on a t-statistic computed from two numbers. A 6-month
+    # test window is too coarse to measure stability on anything under a
+    # decade of history.
     stride = max(1, int(session_stride))
     purge = max(1, -(-default.purge_sessions // stride))  # ceil, in panel rows
     embargo = max(1, -(-default.embargo_sessions // stride))
-    test = max(10, int(n_sessions * 0.15))
 
-    # folds = floor((n - train - purge - test) / roll) + 1 with roll == test,
-    # so the train window that admits `target` folds is:
-    #     train = n - purge - test * target
-    train = 0
-    for target in range(SHIP_MIN_FOLDS, 0, -1):
-        candidate = n_sessions - purge - test * target
-        if candidate >= test:  # never train on less than one test window
-            train = candidate
-            break
-    if train <= 0:
+    # Fixed fold size, in panel rows.
+    train = max(1, -(-TRAIN_SESSIONS // stride))
+    test = max(1, -(-TEST_SESSIONS // stride))
+    if n_sessions - train - purge < 0:
+        # Too short for the fixed geometry: fall back to proportional sizing
+        # so short windows still produce SOMETHING, and let the fold-count
+        # ship gate refuse it downstream rather than silently sizing to pass.
+        test = max(10, int(n_sessions * 0.15))
+        train = n_sessions - purge - test
+    if train <= 0 or test <= 0:
         raise PanelTooSmallError(
             f"{n_sessions} panel rows cannot form a single purged walk-forward "
             f"fold at stride {stride} (test {test}, purge {purge})"

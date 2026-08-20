@@ -3,8 +3,14 @@
 Every adapter GET goes through :func:`get_json`:
 
 - token-bucket pacing *before* the request (client-side rate limiting),
-- tenacity retry: exactly 1 retry with jitter on transient failures
-  (transport errors, 5xx), then a typed exception,
+- tenacity retry: by default exactly 1 retry with jitter on transient
+  failures (transport errors, 5xx), then a typed exception. ``attempts``
+  raises that for BACKFILLS, which have the opposite requirement from the
+  nightly path: a scheduled job must fail fast and page, whereas a
+  multi-hour sweep should out-wait a flaky endpoint. EDGAR's full-text
+  search 500s under sustained load -- measured 17 of 55 day-sweeps lost
+  to it at the default policy, because two attempts a fraction of a
+  second apart both land inside the same throttle window,
 - 429 → :class:`RateLimited` (logged incident, no retry storm),
 - structlog logging with provider/url context.
 """
@@ -20,6 +26,7 @@ from tenacity import (
     retry_if_exception_type,
     stop_after_attempt,
     wait_random,
+    wait_random_exponential,
 )
 
 from dynamo.data.errors import ProviderDown, RateLimited
@@ -40,13 +47,26 @@ def get_json(
     bucket: TokenBucket | None = None,
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
+    attempts: int = 2,
+    max_backoff_s: float = 30.0,
 ) -> Any:
-    """GET ``url`` and decode JSON with pacing, one jittered retry, typed errors."""
+    """GET ``url`` and decode JSON with pacing, jittered retry, typed errors.
+
+    ``attempts`` defaults to 2 (one retry, doc 01 §6) with sub-second jitter —
+    the nightly contract. Above 2 it switches to exponential backoff capped at
+    ``max_backoff_s``, because more attempts are only useful if they are
+    spread across the throttle window rather than crowded into it.
+    """
+    wait = (
+        wait_random(0.2, 1.0)
+        if attempts <= 2
+        else wait_random_exponential(multiplier=1.0, max=max_backoff_s)
+    )
 
     @retry(
         retry=retry_if_exception_type(_Transient),
-        stop=stop_after_attempt(2),  # 1 retry (doc 01 §6)
-        wait=wait_random(0.2, 1.0),  # jitter
+        stop=stop_after_attempt(max(1, attempts)),
+        wait=wait,
         reraise=True,
     )
     def _do() -> httpx.Response:

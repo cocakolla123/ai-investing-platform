@@ -72,6 +72,7 @@ class EdgarClient:
         files_base: str = FILES_BASE,
         max_pages: int = 10,
         max_insider_filings: int = 50,
+        retry_attempts: int = 2,
     ) -> None:
         self._client = client or httpx.Client(timeout=30.0)
         # 10 req/s hard limit with declared User-Agent (doc 02 §1).
@@ -83,6 +84,10 @@ class EdgarClient:
         self._files_base = files_base
         self._max_pages = max_pages
         self._max_insider_filings = max_insider_filings
+        # Backfills raise this. The full-text-search endpoint 500s under
+        # sustained sweeps and the default one-retry policy loses the whole
+        # day; a patient client recovers it. Nightly keeps the fast default.
+        self._retry_attempts = retry_attempts
 
     # -- internals ---------------------------------------------------------
 
@@ -94,6 +99,7 @@ class EdgarClient:
             bucket=self._bucket,
             params=params,
             headers=self._headers,
+            attempts=self._retry_attempts,
         )
 
     def _search_hits(self, params: dict[str, Any]) -> Iterator[dict[str, Any]]:

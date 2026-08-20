@@ -119,10 +119,25 @@ def _repo(database_url: str | None) -> tuple[Any, Any]:
     return engine, MarketDataRepository(engine)
 
 
+#: Retry budget for BACKFILL sweeps, against the nightly default of 2.
+#:
+#: EDGAR's full-text search 500s under sustained load. Measured over a
+#: multi-year Form 4 sweep at the default policy: 17 of 55 day-sweeps lost —
+#: a 31% hole. Those are not "no insider bought that day", they are days
+#: EDGAR declined to answer, and a half-populated insider table is WORSE than
+#: an empty one because the features read absence as signal.
+#:
+#: A backfill has the opposite requirement from a scheduled job: nightly must
+#: fail fast and page; a multi-hour sweep should out-wait the throttle. Above
+#: 2 attempts ``get_json`` switches to exponential backoff, so these are
+#: spread across the throttle window rather than crowded into it.
+BACKFILL_RETRY_ATTEMPTS = 6
+
+
 def _edgar(settings: Any) -> Any:
     from dynamo.data.edgar import EdgarClient
 
-    return EdgarClient(settings.edgar_user_agent)
+    return EdgarClient(settings.edgar_user_agent, retry_attempts=BACKFILL_RETRY_ATTEMPTS)
 
 
 def _finnhub(settings: Any) -> Any:
