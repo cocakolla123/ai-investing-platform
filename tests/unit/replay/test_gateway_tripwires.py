@@ -246,6 +246,90 @@ def test_similar_experiences_trip_on_same_day_or_future_rows(
     ]
 
 
+# -- surveillance reads (wide-campaign discovery layer) ----------------------
+
+
+def test_surveillance_universe_trips_on_a_future_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``valid_from`` is a knowledge time: a tier-2 membership that begins
+    after ``as_of`` did not exist yet, and reading it would hand discovery a
+    survivorship-tainted universe. This is the tripwire that fires if the
+    WHERE clause on the membership query is ever dropped."""
+    _patch_read_sql(
+        monkeypatch,
+        pd.DataFrame({"symbol": ["NEW"], "valid_from": [AFTER], "valid_to": [None]}),
+    )
+    with pytest.raises(ReplayLeakageError, match="valid_from"):
+        _gateway().surveillance_universe()
+
+
+def test_surveillance_universe_allows_an_open_ended_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``valid_to`` is an END bound, not a knowledge time — a membership that
+    runs until 2030 is perfectly knowable today, so it must not trip."""
+    _patch_read_sql(
+        monkeypatch,
+        pd.DataFrame(
+            {
+                "symbol": ["OLD", "OLD"],
+                "valid_from": [BEFORE, BEFORE],
+                "valid_to": [None, date(2030, 1, 1)],
+            }
+        ),
+    )
+    assert _gateway().surveillance_universe() == ["OLD"]
+
+
+def _bar_frame(ts: date, fetched: date) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "symbol": ["AAPL"], "ts": [pd.Timestamp(_dt(ts))], "source": ["tiingo"],
+            "open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0],
+            "volume": [10], "adj_close": [1.0], "fetched_at": [_dt(fetched)],
+        }
+    )
+
+
+def test_surveillance_bars_trip_on_a_future_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_read_sql(monkeypatch, _bar_frame(AFTER, BEFORE))
+    with pytest.raises(ReplayLeakageError, match="ts"):
+        _gateway().surveillance_bars(["AAPL"], 30)
+
+
+def test_surveillance_bars_exempt_the_backfill_ingestion_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A historical backfill ingests old bars TODAY, so ``fetched_at``
+    legitimately post-dates ``as_of``. ``ts`` carries the contract."""
+    _patch_read_sql(monkeypatch, _bar_frame(BEFORE, AFTER))
+    assert len(_gateway().surveillance_bars(["AAPL"], 30)) == 1
+
+
+def test_surveillance_bars_skip_the_query_for_an_empty_symbol_list() -> None:
+    """The wide-universe read is ``symbol = ANY(:array)``; an empty array must
+    short-circuit rather than degenerate into a whole-table scan."""
+    frame = _gateway().surveillance_bars([], 30)
+    assert frame.empty
+    assert "close" in frame.columns
+
+
+def test_the_gateway_exposes_no_surveillance_flag_reader() -> None:
+    """``surveillance_flags`` is a LIVE table carrying triage verdicts formed
+    in production. Replay discovery computes its own flags from bars and
+    writes them to ``replay_flags``; a reader here would let a replay inherit
+    — and act on — verdicts written after its ``as_of``."""
+    readers = [
+        name
+        for name in dir(HistoricalDataGateway)
+        if "flag" in name.lower() and not name.startswith("_")
+    ]
+    assert readers == []
+
+
 # -- documented exemptions ---------------------------------------------------
 
 

@@ -555,3 +555,135 @@ def test_similar_experiences_within_run_learning_scoped_to_one_run(engine, gatew
         symbol="AAPL", limit=5, include_replay_run_id="run-this"
     )
     assert sorted(e.id for e in hits) == ["wrl-1", "wrl-2"]
+
+
+# --------------------------------------------------------------------------
+# surveillance reads (wide-campaign discovery layer)
+# --------------------------------------------------------------------------
+#
+# Three seeded rows, one per way the discovery layer could see the future:
+# a tier-2 BAR dated as_of + 1, a MEMBERSHIP starting at as_of + 1, and a
+# live SURVEILLANCE FLAG written after as_of. All three must be invisible,
+# and the third must be invisible because there is no reader at all — a
+# replay that inherited production's triage verdicts would be scoring
+# 2026-03 against a decision made in 2026-08.
+
+
+def test_surveillance_universe_hides_future_tier2_memberships(engine, gateway) -> None:  # type: ignore[no-untyped-def]
+    from dynamo.domain.models.market import Tier, UniverseMembership
+
+    _repo(engine).upsert_universe_membership(
+        [
+            UniverseMembership(
+                symbol="WATCHED", tier=Tier.SURVEILLANCE, valid_from=BEFORE, reason="seed"
+            ),
+            UniverseMembership(
+                symbol="TOMORROW", tier=Tier.SURVEILLANCE, valid_from=AFTER, reason="seed"
+            ),
+            UniverseMembership(
+                symbol="DROPPED",
+                tier=Tier.SURVEILLANCE,
+                valid_from=BEFORE,
+                valid_to=BEFORE,
+                reason="seed",
+            ),
+            # The traded core is a DIFFERENT question: surveillance_universe
+            # must not quietly return it, or "what discovery promoted" stops
+            # being measurable.
+            UniverseMembership(
+                symbol="CORE", tier=Tier.CORE, valid_from=BEFORE, reason="seed"
+            ),
+        ]
+    )
+    assert gateway.surveillance_universe() == ["WATCHED"]
+    assert "CORE" in gateway.universe()
+
+
+def test_surveillance_bars_hide_future_sessions(engine, gateway) -> None:  # type: ignore[no-untyped-def]
+    from dynamo.domain.models.market import Bar
+
+    def bar(d: date) -> Bar:
+        return Bar(
+            symbol="WATCHED",
+            ts=_dt(d, 20),
+            open=1.0,
+            high=1.0,
+            low=1.0,
+            close=1.0,
+            volume=1,
+            source="tiingo",
+        )
+
+    _repo(engine).upsert_bars([bar(BEFORE), bar(AS_OF), bar(AFTER)])
+    frame = gateway.surveillance_bars(["WATCHED"], lookback_days=30)
+    assert sorted(t.date() for t in frame["ts"]) == [BEFORE, AS_OF]
+
+
+def test_surveillance_flags_written_after_as_of_are_unreachable(engine, gateway) -> None:  # type: ignore[no-untyped-def]
+    """Not "filtered out" — UNREACHABLE. The gateway offers no reader for the
+    live table, so a triage verdict production formed after ``as_of`` cannot
+    enter a replay by any route, and the discovery layer computes its own
+    flags from bars instead."""
+    from sqlalchemy import func, select
+
+    from dynamo.persistence import schema
+    from dynamo.replay.gateway import HistoricalDataGateway
+
+    with engine.begin() as cx:
+        cx.execute(
+            schema.surveillance_flags.insert(),
+            [
+                {
+                    "symbol": "WATCHED",
+                    "detector": "price_zscore",
+                    "severity": 0.9,
+                    "details": {},
+                    "ts": _dt(AFTER),
+                    "triage_verdict": "material",
+                    "triaged_at": _dt(AFTER),
+                }
+            ],
+        )
+    with engine.connect() as cx:
+        seeded = int(
+            cx.execute(
+                select(func.count()).select_from(schema.surveillance_flags)
+            ).scalar()
+            or 0
+        )
+    assert seeded == 1, "the row must really be there for this test to mean anything"
+    assert not [
+        name
+        for name in dir(HistoricalDataGateway)
+        if "flag" in name.lower() and not name.startswith("_")
+    ]
+    assert not any("flag" in str(v).lower() for v in gateway.universe())
+
+
+def test_dropping_the_where_clause_raises(engine, gateway) -> None:  # type: ignore[no-untyped-def]
+    """The runtime tripwire behind the two reads above: both go through
+    ``_read_df``, so an unbounded query raises rather than returning future
+    rows. This is what makes a WHERE-clause regression loud."""
+    from sqlalchemy import select
+
+    from dynamo.domain.models.market import Bar, Tier, UniverseMembership
+    from dynamo.persistence import schema
+    from dynamo.replay.gateway import ReplayLeakageError
+
+    repo = _repo(engine)
+    repo.upsert_universe_membership(
+        [UniverseMembership(symbol="TOMORROW", tier=Tier.SURVEILLANCE, valid_from=AFTER, reason="s")]
+    )
+    repo.upsert_bars(
+        [
+            Bar(
+                symbol="TOMORROW", ts=_dt(AFTER, 20), open=1.0, high=1.0, low=1.0,
+                close=1.0, volume=1, source="tiingo",
+            )
+        ]
+    )
+    m, b = schema.universe_membership, schema.bars_1d
+    with pytest.raises(ReplayLeakageError, match="valid_from"):
+        gateway._read_df(select(m.c.symbol, m.c.valid_from), exempt=("valid_to",))
+    with pytest.raises(ReplayLeakageError, match="ts"):
+        gateway._read_df(select(b.c.symbol, b.c.ts), exempt=("fetched_at",))

@@ -44,6 +44,14 @@ LIVE_TABLES = (
     "target_portfolios",
     "risk_verdicts",
     "agent_opinions",
+    # The two the discovery layer would destroy if it wrote anywhere but
+    # replay_flags. surveillance_flags feeds the live triage queue;
+    # universe_membership is what live triage promotes INTO and what
+    # HistoricalDataGateway.universe() reads back, so a replay write there
+    # would contaminate production AND every future replay's point-in-time
+    # history. Counting them is the whole firewall.
+    "surveillance_flags",
+    "universe_membership",
 )
 
 
@@ -332,3 +340,163 @@ def test_committee_replay_never_touches_live_tables(engine) -> None:  # type: ig
         e.id for e in result.experiences
     }
     assert exp_repo.count(source="live") == 0
+
+
+# --------------------------------------------------------------------------
+# discovery firewall (wide-campaign discovery layer)
+# --------------------------------------------------------------------------
+
+
+def _seed_surveillance(engine) -> None:  # type: ignore[no-untyped-def]
+    """A tier-2 universe with bars, plus a LIVE surveillance flag and its
+    triage verdict — the rows a replay must leave exactly as it found them."""
+    from dynamo.domain.models.market import Bar, Instrument, Tier, UniverseMembership
+    from dynamo.persistence import schema
+    from dynamo.persistence.repositories.market import MarketDataRepository
+    from tests.unit.replay.test_discovery import TIER2, panel_bars
+
+    repo = MarketDataRepository(engine)
+    sessions = nyse_sessions(END, HISTORY_SESSIONS)
+    bars = panel_bars(sessions[-200:])
+    repo.upsert_bars(
+        Bar(
+            symbol=str(r["symbol"]),
+            ts=r["ts"].to_pydatetime() if hasattr(r["ts"], "to_pydatetime") else r["ts"],
+            open=float(r["open"]),
+            high=float(r["high"]),
+            low=float(r["low"]),
+            close=float(r["close"]),
+            volume=int(r["volume"]),
+            adj_close=float(r["adj_close"]),
+            source="tiingo",
+        )
+        for r in bars.to_dict(orient="records")
+    )
+    repo.upsert_universe_membership(
+        UniverseMembership(
+            symbol=s,
+            tier=Tier.SURVEILLANCE,
+            valid_from=date(2026, 1, 2),
+            reason="seed",
+        )
+        for s in TIER2
+    )
+    repo.upsert_instruments(
+        Instrument(symbol=s, name=s, sector="Information Technology") for s in TIER2
+    )
+    with engine.begin() as cx:
+        cx.execute(
+            schema.surveillance_flags.insert(),
+            [
+                {
+                    "symbol": "LIQ",
+                    "detector": "price_zscore",
+                    "severity": 0.8,
+                    "details": {"z": 5.0},
+                    "ts": datetime(2026, 6, 1, 22, tzinfo=UTC),
+                    "triage_verdict": "material",
+                    "triaged_at": datetime(2026, 6, 1, 23, tzinfo=UTC),
+                }
+            ],
+        )
+
+
+def test_discovery_replay_never_touches_the_live_surveillance_tables(engine) -> None:  # type: ignore[no-untyped-def]
+    """The discovery firewall.
+
+    A replay running the SAME detectors the nightly sweep runs must leave
+    ``surveillance_flags`` and ``universe_membership`` byte-for-byte as it
+    found them, and land every flag it computed in ``replay_flags`` instead.
+    The failure this prevents is not a bad number in one report: a replay
+    write to ``universe_membership`` silently rewrites the point-in-time
+    universe every FUTURE replay reads back through ``gateway.universe()``.
+    """
+    from dynamo.data.universe import default_sector_etf_map
+    from dynamo.persistence.repositories.experience import ExperienceRepository
+    from dynamo.persistence.repositories.replay import ReplayRepository
+    from dynamo.replay.discovery import ReplayDiscovery, SurveillancePanel
+    from dynamo.replay.gateway import HistoricalDataGateway
+    from dynamo.replay.runner import ReplayConfig, ReplayRunner
+    from tests.unit.replay.test_discovery import SPIKE
+
+    _seed(engine)
+    _seed_surveillance(engine)
+    before = {t: _count(engine, t) for t in LIVE_TABLES}
+    assert before["surveillance_flags"] == 1
+    assert before["universe_membership"] > 0
+
+    sessions = nyse_sessions(END, HISTORY_SESSIONS)
+    window = sessions[-RUN_SESSIONS:]
+    config = ReplayConfig(
+        start=window[0],
+        end=window[-1],
+        label="discovery-firewall",
+        horizon_sessions=3,
+        discovery_mode="code",
+        discovery_promotions_per_day=5,
+        discovery_promotion_days=3,
+    )
+    run_repo = ReplayRepository(engine)
+    gw_end = HistoricalDataGateway(engine, config.end)
+    members = gw_end.surveillance_universe()
+    assert members, "the tier-2 seed must be visible at the run's end date"
+    sectors = gw_end.sectors(members)
+    etf_map = default_sector_etf_map(sectors)
+    panel = SurveillancePanel.load(
+        gw_end,
+        sorted(set(members) | set(etf_map.values())),
+        span_days=(config.end - config.start).days,
+    )
+    discovery = ReplayDiscovery(
+        panel,
+        run_id=config.run_id,
+        mode="code",
+        promotions_per_day=config.discovery_promotions_per_day,
+        promotion_days=config.discovery_promotion_days,
+        min_dollar_volume=config.discovery_min_dollar_volume,
+        min_price=config.discovery_min_price,
+        sectors=sectors,
+        sector_etf_map=etf_map,
+        flag_sink=run_repo,
+    )
+    result = ReplayRunner(
+        gateway_factory=lambda d: HistoricalDataGateway(engine, d),
+        experience_repo=ExperienceRepository(engine),
+        run_repo=run_repo,
+        config=config,
+        discovery=discovery,
+    ).run()
+    assert result.status == "completed"
+
+    # THE firewall: not one live row moved.
+    assert {t: _count(engine, t) for t in LIVE_TABLES} == before
+
+    # Discovery actually did something — a firewall over a no-op proves
+    # nothing, so assert the run promoted a name the core never held.
+    stats = discovery.summary()
+    assert stats["flags_total"] > 0
+    assert SPIKE in {p.symbol for day in discovery.days for p in day.promoted}
+    assert any(SPIKE in day.universe for day in discovery.days)
+    assert SPIKE not in UNIVERSE
+
+    # ...and every flag landed in the replay-scoped table, run-scoped.
+    rows = run_repo.flags_for(config.run_id)
+    assert len(rows) == stats["flags_total"]
+    assert {r["run_id"] for r in rows} == {config.run_id}
+    assert any(r["promoted"] for r in rows)
+    assert run_repo.flags_for("some-other-run") == []
+
+    # Re-running the same deterministic config upserts in place.
+    ReplayDiscovery(
+        panel,
+        run_id=config.run_id,
+        mode="code",
+        promotions_per_day=config.discovery_promotions_per_day,
+        promotion_days=config.discovery_promotion_days,
+        min_dollar_volume=config.discovery_min_dollar_volume,
+        min_price=config.discovery_min_price,
+        sectors=sectors,
+        sector_etf_map=etf_map,
+        flag_sink=run_repo,
+    )
+    assert {t: _count(engine, t) for t in LIVE_TABLES} == before
