@@ -126,6 +126,56 @@ def load_approval(path: str | Path) -> ApprovalArtifact:
     return ApprovalArtifact(scope=scope, expiry=expiry, signature=signature, body=body)
 
 
+MISSING_KEY_HELP = (
+    f"${APPROVAL_KEY_ENV} is not set, so no approval artifact can be verified.\n"
+    "  1. generate a key:   python -m dynamo.cli.approve keygen\n"
+    f"  2. store it OUTSIDE the repo and export it:   export {APPROVAL_KEY_ENV}=<key>\n"
+    "  3. sign the artifact: python -m dynamo.cli.approve sign --kind promotion \\\n"
+    "         --target <id> --expiry YYYY-MM-DD --approver <you>\n"
+    "See docs/runbooks/kill-switch.md and docs/design/12-operations.md."
+)
+
+
+def check_approval(
+    approval: ApprovalArtifact | None,
+    *,
+    key: bytes | None,
+    today: date,
+    scope_target: str | None = None,
+) -> GateResult:
+    """Presence + HMAC + expiry + scope check for a signed approval artifact.
+
+    This is the ONE verification routine. ``live_orders_permitted`` calls it,
+    and so does the promotion CLI (doc 08 §7 stage 7) — a promotion approval
+    and a live-trading approval are the same artifact format, the same
+    ``hmac.compare_digest`` check and the same refusal reasons.
+    """
+    if approval is None:
+        return GateResult(False, GateReason.APPROVAL_MISSING, "no approval artifact")
+    if key is None:
+        return GateResult(False, GateReason.APPROVAL_BAD_SIGNATURE, MISSING_KEY_HELP)
+    if not approval.signature:
+        return GateResult(
+            False, GateReason.APPROVAL_BAD_SIGNATURE, "artifact carries no signature field"
+        )
+    if not approval_signature_valid(approval, key):
+        return GateResult(
+            False,
+            GateReason.APPROVAL_BAD_SIGNATURE,
+            f"HMAC mismatch: the artifact was not signed by the current ${APPROVAL_KEY_ENV} "
+            "(or its body was edited after signing)",
+        )
+    if approval.expiry < today:
+        return GateResult(
+            False, GateReason.APPROVAL_EXPIRED, f"expired {approval.expiry.isoformat()}"
+        )
+    if not approval.covers(scope_target):
+        return GateResult(
+            False, GateReason.APPROVAL_OUT_OF_SCOPE, f"{scope_target!r} not in approval scope"
+        )
+    return GateResult(True, GateReason.LIVE_PERMITTED, "approval artifact verified")
+
+
 def live_orders_permitted(
     env: DynamoEnv,
     approval: ApprovalArtifact | None,
@@ -150,23 +200,13 @@ def live_orders_permitted(
     if env != DynamoEnv.LIVE:
         return GateResult(True, GateReason.PAPER_PERMITTED, f"env={env}")
 
-    if approval is None:
-        return GateResult(False, GateReason.APPROVAL_MISSING, "no approval artifact")
-
     key = approval_key if approval_key is not None else approval_key_from_env()
-    if key is None or not approval_signature_valid(approval, key):
-        return GateResult(False, GateReason.APPROVAL_BAD_SIGNATURE, "signature check failed")
-
     effective_today = today if today is not None else date.today()
-    if approval.expiry < effective_today:
-        return GateResult(
-            False, GateReason.APPROVAL_EXPIRED, f"expired {approval.expiry.isoformat()}"
-        )
-
-    if not approval.covers(scope_target):
-        return GateResult(
-            False, GateReason.APPROVAL_OUT_OF_SCOPE, f"{scope_target!r} not in approval scope"
-        )
+    checked = check_approval(
+        approval, key=key, today=effective_today, scope_target=scope_target
+    )
+    if not checked.permitted:
+        return checked
 
     if not readiness.satisfied:
         return GateResult(False, GateReason.READINESS_UNMET, "; ".join(readiness.unmet()))

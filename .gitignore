@@ -32,3 +32,8 @@ models/artifacts/
 
 # Private keys (Kalshi etc.) — never committed
 secrets/
+
+# Signed approval artifacts (approvals/README.md): operational acts with an
+# expiry, not source. The signing key ($DYNAMO_APPROVAL_KEY) never lives here.
+/approvals/*
+!/approvals/README.md

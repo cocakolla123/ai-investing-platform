@@ -401,12 +401,44 @@ def tier2_scan(context: AssetExecutionContext, dynamo: DynamoResource) -> Materi
 # quant features/scores, quality, strategies, regime — docs 04, 05, 06
 # --------------------------------------------------------------------------
 
+# Feature-frame lookback windows. These MIRROR the replay gateway's constants
+# of the same names (``dynamo.replay.gateway``) — the two builders feed the
+# SAME catalog, so a window that differs between them is a train/serve skew,
+# not a tuning knob. ``tests/unit/orchestration/test_feature_inputs_parity.py``
+# asserts each one equals the gateway's; they are duplicated rather than
+# imported so the nightly pipeline carries no dependency on the replay
+# composition root.
+FEATURE_BARS_LOOKBACK_DAYS = 420
+FEATURE_FUNDAMENTALS_LOOKBACK_DAYS = 500
+FEATURE_INSIDER_LOOKBACK_DAYS = 200
+FEATURE_MACRO_LOOKBACK_DAYS = 400
+FEATURE_NEWS_LOOKBACK_DAYS = 365
+FEATURE_SHORT_INTEREST_LOOKBACK_DAYS = 120
+FEATURE_EARNINGS_LOOKAHEAD_DAYS = 30
+
 
 def _feature_inputs(dynamo: DynamoResource, symbols: list[str], as_of: date) -> Any:
+    """The nightly ``FeatureInputs``, field-for-field with the replay gateway.
+
+    Every frame the gateway populates is populated here, over the same window
+    — anything the gateway reads and this does not is a feature that trains
+    and backtests fine and then returns NaN in production. Four features were
+    exactly that until this builder learned to read ``news`` and
+    ``short_interest`` (``news_count_60d``, ``unusual_volume_no_news``,
+    ``short_interest_pct_float``, ``days_to_cover``, ``short_interest_change``).
+
+    The bounds here are LOWER only: ``as_of`` is tonight, so "not after
+    as_of" is free. The gateway adds the upper bound because it runs at a
+    historical date. One bound is NOT free even here: short interest is
+    filtered on ``publication_date``, never ``settlement_date``. FINRA
+    disseminates a cycle about eight days after the settlement date it
+    describes, so bounding on the settlement date would hand the features
+    ~8 days of look-ahead in replay and silently disagree with training.
+    """
     from dynamo.data.universe import default_sector_etf_map
     from dynamo.research.quant.catalog import FeatureInputs
 
-    bars = dynamo.bars_window(symbols, as_of, 420)
+    bars = dynamo.bars_window(symbols, as_of, FEATURE_BARS_LOOKBACK_DAYS)
     inst = schema.instruments
     inst_df = _read_df(dynamo, select(inst.c.symbol, inst.c.sector, inst.c.cik))
     sectors = {
@@ -416,25 +448,78 @@ def _feature_inputs(dynamo: DynamoResource, symbols: list[str], as_of: date) -> 
         str(r["cik"]): str(r["symbol"]) for r in inst_df.to_dict(orient="records") if r["cik"]
     }
     x = schema.xbrl_facts
-    fundamentals = _read_df(dynamo, select(x).where(x.c.filed_at >= _since(as_of, 500)))
+    fundamentals = _read_df(
+        dynamo, select(x).where(x.c.filed_at >= _since(as_of, FEATURE_FUNDAMENTALS_LOOKBACK_DAYS))
+    )
     if not fundamentals.empty:
         fundamentals["symbol"] = fundamentals["cik"].astype(str).map(cik_to_symbol.get)
         fundamentals = fundamentals.dropna(subset=["symbol"])
     i = schema.insider_tx
-    insider = _read_df(dynamo, select(i).where(i.c.filed_at >= _since(as_of, 200)))
+    insider = _read_df(
+        dynamo, select(i).where(i.c.filed_at >= _since(as_of, FEATURE_INSIDER_LOOKBACK_DAYS))
+    )
     m = schema.macro_series
-    macro = _read_df(dynamo, select(m).where(m.c.ts >= as_of - timedelta(days=400)))
+    macro = _read_df(
+        dynamo,
+        select(m).where(m.c.ts >= as_of - timedelta(days=FEATURE_MACRO_LOOKBACK_DAYS)),
+    )
     e = schema.earnings_events
     earnings = _read_df(
         dynamo,
-        select(e.c.symbol, e.c.event_date).where(e.c.event_date >= as_of - timedelta(days=30)),
+        select(e.c.symbol, e.c.event_date).where(
+            e.c.event_date >= as_of - timedelta(days=FEATURE_EARNINGS_LOOKAHEAD_DAYS)
+        ),
+    )
+    ev = schema.earnings_estimate_vintages
+    # Append-only vintages: the whole (small) table, exactly as the gateway
+    # reads it. Estimate-revision features stay NaN until the first vintage
+    # is collected — history that was never captured is not fabricated.
+    estimates = _read_df(
+        dynamo, select(ev.c.symbol, ev.c.event_date, ev.c.fetched_at, ev.c.eps_est)
+    )
+    nw = schema.news
+    # ``news.symbols`` is an ARRAY column; the feature path wants one row per
+    # (symbol, story), so explode here exactly as the gateway does. The full
+    # year is needed even though ``news_count_60d`` reads 60 days:
+    # ``unusual_volume_no_news`` uses the year to decide whether the feed
+    # covers a symbol at all (catalog group 12).
+    news = _read_df(
+        dynamo,
+        select(nw.c.symbols, nw.c.published_at).where(
+            nw.c.published_at >= _since(as_of, FEATURE_NEWS_LOOKBACK_DAYS)
+        ),
+    )
+    if not news.empty:
+        news = news.explode("symbols").rename(columns={"symbols": "symbol"})
+        news = news.dropna(subset=["symbol"])
+    si = schema.short_interest
+    # publication_date, NOT settlement_date — see the docstring. The 120-day
+    # floor always contains the most recently published semi-monthly cycle
+    # and keeps this off the full 2.4M-row table.
+    short_interest = _read_df(
+        dynamo,
+        select(
+            si.c.symbol,
+            si.c.settlement_date,
+            si.c.publication_date,
+            si.c.shares_short,
+            si.c.previous_shares_short,
+            si.c.avg_daily_volume,
+            si.c.days_to_cover,
+        ).where(
+            si.c.publication_date >= as_of - timedelta(days=FEATURE_SHORT_INTEREST_LOOKBACK_DAYS),
+            si.c.publication_date <= as_of,
+        ),
     )
     return FeatureInputs(
         bars=bars,
         fundamentals=fundamentals if not fundamentals.empty else None,
         insider=insider if not insider.empty else None,
+        estimates=estimates if not estimates.empty else None,
         macro=macro if not macro.empty else None,
         earnings_calendar=earnings if not earnings.empty else None,
+        news=news if not news.empty else None,
+        short_interest=short_interest if not short_interest.empty else None,
         sector_map=default_sector_etf_map(sectors),
     )
 

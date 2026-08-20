@@ -81,7 +81,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--actor", required=True, help="who is running the promotion")
     run.add_argument("--family", default=None, help="strategy family for trial counting")
-    run.add_argument("--approval", default=None, help="signed approval artifact path")
+    run.add_argument(
+        "--approval",
+        default=None,
+        help=(
+            "HMAC-signed approval artifact (write one with "
+            "`python -m dynamo.cli.approve sign --kind promotion --target <id> ...`); "
+            "verified against $DYNAMO_APPROVAL_KEY by the same routine as the live gate"
+        ),
+    )
     run.add_argument("--evidence-bundle", default=None, help="evidence bundle ref")
     run.add_argument(
         "--allow-dirty",
@@ -99,8 +107,11 @@ def main(argv: list[str] | None = None) -> int:
     from datetime import UTC, datetime
     from pathlib import Path
 
+    import yaml
+
     from dynamo.backtest.promotion import PROMOTION_STAGES, run_stage
     from dynamo.domain.models.learning import PromotionRecord, RegistryStatus
+    from dynamo.execution import gate as live_gate
     from dynamo.learning.promotion import PromotionError
 
     args = _build_parser().parse_args(argv)
@@ -117,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    - {c.key} {c.op} {c.threshold!r}: {c.description}")
             if gate.requires_approval:
                 print("    - signed human-approval artifact REQUIRED (no --force)")
+                print("      write one: python -m dynamo.cli.approve sign --kind promotion \\")
+                print("          --target <id> --expiry YYYY-MM-DD --approver <you>")
         return 0
 
     if getattr(args, "allow_dirty", False):
@@ -170,31 +183,50 @@ def main(argv: list[str] | None = None) -> int:
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False, ""  # not a repo / git missing -> refuse (fail closed)
 
-    def load_approval(path: str | None) -> tuple[dict[str, Any] | None, bool]:
+    def load_promotion_approval(
+        path: str | None, target_id: str
+    ) -> tuple[dict[str, Any] | None, bool, str]:
+        """Parse + cryptographically verify the approval artifact.
+
+        Same artifact format, same ``hmac.compare_digest`` check and same
+        refusal reasons as the live gate — ``gate.check_approval`` is the one
+        verification routine (doc 08 §7 stage 7, doc 13 §4 risk #3). A file
+        that merely *contains* a ``signature:`` key does not pass; the HMAC
+        must match ``$DYNAMO_APPROVAL_KEY`` over the canonical body.
+
+        Returns ``(body, valid, detail)``; ``detail`` is the operator-facing
+        refusal text and is empty on success.
+        """
         if path is None:
-            return None, False
+            return None, False, ""
         p = Path(path)
         if not p.exists():
-            return None, False
-        text = p.read_text()
-        parsed: dict[str, Any]
+            return None, False, f"no such approval artifact: {p}"
         try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            parsed = {}
-            for line in text.splitlines():
-                if ":" in line and not line.lstrip().startswith("#"):
-                    key, _, value = line.partition(":")
-                    parsed[key.strip()] = value.strip().strip("'\"")
-        # Validity here = artifact present, targets this id, carries a
-        # signature; cryptographic verification shares the live-gate HMAC
-        # scheme and is wired by the approvals tool that writes the file.
-        valid = bool(parsed.get("target_id")) and bool(parsed.get("signature"))
-        return parsed, valid
+            artifact = live_gate.load_approval(p)
+        except (ValueError, TypeError, yaml.YAMLError) as exc:
+            return None, False, f"approval artifact {p} is unreadable: {exc}"
+        result = live_gate.check_approval(
+            artifact,
+            key=live_gate.approval_key_from_env(),
+            today=datetime.now(UTC).date(),
+            scope_target=target_id,
+        )
+        body = dict(artifact.body)
+        if not result.permitted:
+            return body, False, f"{result.reason.value}: {result.detail}"
+        return body, True, ""
 
     evidence = json.loads(Path(args.evidence).read_text())
     clean_tree, commit = git_state()
-    approval, approval_valid = load_approval(args.approval)
+    approval, approval_valid, approval_detail = load_promotion_approval(
+        args.approval, args.target
+    )
+    if args.approval is not None and not approval_valid:
+        # Loud and instructive: an unverifiable approval is a refusal, never a
+        # downgrade to "unapproved" that a later stage might paper over.
+        print(f"refused: approval artifact did not verify — {approval_detail}")
+        return 2
 
     # Registry selection: explicit --registry <json> wins (backward compat);
     # otherwise DB mode via DATABASE_URL (--registry-db forces it and refuses
