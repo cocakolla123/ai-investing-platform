@@ -294,6 +294,74 @@ def test_replay_portfolio_mode_never_constructs_an_llm_client(
     assert captured["verdict_source"] is not None
 
 
+def test_replay_discovery_flags_parse_with_off_by_default() -> None:
+    """The control arm must be what you get by default: `off`, no panel, no
+    detectors, no change to any existing run's behaviour."""
+    parser = replay_cli._build_parser()
+    args = parser.parse_args(
+        ["run", "--start", "2026-06-01", "--end", "2026-06-10", "--run-label", "x"]
+    )
+    assert args.discovery_mode == "off"
+    assert replay_cli._discovery_kwargs(args) == {"discovery_mode": "off"}
+
+    args = parser.parse_args(
+        [
+            "run",
+            "--start", "2026-06-01",
+            "--end", "2026-06-10",
+            "--run-label", "x",
+            "--discovery", "code",
+            "--discovery-min-dollar-volume", "5e6",
+            "--discovery-min-price", "3",
+            "--discovery-promotions-per-day", "40",
+            "--discovery-promotion-days", "15",
+        ]
+    )
+    assert replay_cli._discovery_kwargs(args) == {
+        "discovery_mode": "code",
+        "discovery_min_dollar_volume": 5_000_000.0,
+        "discovery_min_price": 3.0,
+        "discovery_promotions_per_day": 40,
+        "discovery_promotion_days": 15,
+    }
+
+
+def test_off_mode_builds_no_discovery_machinery() -> None:
+    """Structural: `_build_discovery` returns None before it touches the
+    engine at all, so the control arm cannot pay for — or be perturbed by —
+    a panel load."""
+    from dynamo.replay.runner import ReplayConfig
+
+    config = ReplayConfig(start=date(2026, 6, 1), end=date(2026, 6, 10), label="x")
+
+    class Exploding:
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError("discovery_mode='off' must not touch the engine")
+
+    assert replay_cli._build_discovery(Exploding(), config, Exploding()) is None
+
+
+def test_haiku_discovery_is_refused_outside_committee_mode(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The token firewall again: `_cmd_run` imports no LLM module, so it
+    CANNOT make the triage calls the haiku gate needs. Refusing loudly beats
+    degrading to the code gate while the run metadata still says 'haiku'."""
+    rc = replay_cli.main(
+        [
+            "run",
+            "--start", "2026-06-01",
+            "--end", "2026-06-10",
+            "--run-label", "x",
+            "--discovery", "haiku",
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "committee-mode only" in err
+    assert "--discovery code" in err
+
+
 def test_replay_rejects_unknown_mode() -> None:
     with pytest.raises(SystemExit):
         replay_cli._build_parser().parse_args(
