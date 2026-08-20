@@ -113,6 +113,14 @@ def _catalog_row(values: dict[str, float]) -> pd.Series:
     return pd.Series(row, dtype=float)
 
 
+# Groups computable from daily bars alone — the ones an ETF or a crypto pair
+# genuinely fills in every night. Keep in step with the catalog: a new
+# bars-only group left out here silently understates ETF/crypto coverage.
+BARS_DRIVEN_GROUPS = frozenset(
+    {"momentum", "meanrev", "volatility", "volume", "weekly"}
+)
+
+
 def _bars_only_frame(symbols: list[str]) -> pd.DataFrame:
     """Everyone has the bars-driven features and nobody has fundamentals —
     the real shape of an ETF/crypto row on any night."""
@@ -121,8 +129,7 @@ def _bars_only_frame(symbols: list[str]) -> pd.DataFrame:
     bars_driven = {
         name: 0.5
         for name, spec in FEATURE_CATALOG.items()
-        if spec.group in {"momentum", "meanrev", "volatility", "volume"}
-        and name != "rs_20d_sector"
+        if spec.group in BARS_DRIVEN_GROUPS and name != "rs_20d_sector"
     }
     return pd.DataFrame(
         {sym: _catalog_row(bars_driven) for sym in symbols}, dtype=float

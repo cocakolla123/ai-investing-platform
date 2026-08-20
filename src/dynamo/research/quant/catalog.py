@@ -57,6 +57,16 @@ RAW_GROUPS = frozenset({"macro", "calendar"})
 # is not a market breadth number and the feature stays NaN.
 BREADTH_MIN_NAMES = 10
 
+# Multi-timeframe (group 11). Weekly bars are resampled PER SYMBOL over that
+# symbol's OWN sessions (never over a union calendar) and labelled by the
+# week's Friday, so an equity's 5 sessions and a crypto pair's 7 both collapse
+# to exactly one bar per calendar week.
+WEEK_END_RULE = "W-FRI"
+WEEKLY_TIGHT_WEEKS = 8  # the "recent" leg of the range-contraction ratio
+WEEKLY_WIDE_WEEKS = 26  # the half-year leg it is measured against
+DAILY_BREAKOUT_SESSIONS = 20  # a daily breakout is a 20-session closing high
+WEEKLY_BREAKOUT_WEEKS = 26  # ...confirmed only when it is a 26-week high too
+
 GROUP_TARGETS: dict[str, int] = {
     "momentum": 8,
     "meanrev": 5,
@@ -68,6 +78,7 @@ GROUP_TARGETS: dict[str, int] = {
     "insider": 3,
     "macro": 5,
     "calendar": 3,
+    "weekly": 7,
 }
 
 
@@ -107,6 +118,37 @@ class FeatureContext:
     high: pd.DataFrame
     low: pd.DataFrame
     volume: pd.DataFrame
+    # Weekly resamples, built lazily once per (inputs, as_of) and shared by the
+    # whole multi-timeframe group — see :meth:`weekly`.
+    weekly_cache: dict[str, pd.DataFrame] = field(default_factory=dict, repr=False)
+
+    def weekly(self, kind: str) -> pd.DataFrame:
+        """Weekly panel for ``kind`` in ``price|close|high|low|volume``.
+
+        Memoized: six weekly features share one resample pass. The resample
+        itself is per-symbol (:func:`_weekly_panel`), so the result is
+        invariant to who else is in the universe — the same property
+        :func:`_apply_per_symbol` gives the daily features.
+        """
+        cached = self.weekly_cache.get(kind)
+        if cached is None:
+            source = {
+                "price": self.price,
+                "close": self.close,
+                "high": self.high,
+                "low": self.low,
+                "volume": self.volume,
+            }[kind]
+            how = {
+                "price": "last",
+                "close": "last",
+                "high": "max",
+                "low": "min",
+                "volume": "sum",
+            }[kind]
+            cached = _weekly_panel(source, how)
+            self.weekly_cache[kind] = cached
+        return cached
 
 
 FeatureFn = Callable[[FeatureContext], pd.Series]
@@ -204,6 +246,48 @@ def _shift_per_symbol(df: pd.DataFrame, periods: int) -> pd.DataFrame:
 def _diff_per_symbol(df: pd.DataFrame, periods: int = 1) -> pd.DataFrame:
     """``diff(periods)`` over each symbol's own session sequence."""
     return _apply_per_symbol(df, lambda s: s.diff(periods))
+
+
+def _weekly_panel(daily: pd.DataFrame, how: str = "last") -> pd.DataFrame:
+    """Weekly resample of a daily panel, done PER SYMBOL.
+
+    Same discipline as :func:`_apply_per_symbol`, one level up: each column is
+    resampled over its OWN non-NaN sessions, so a week is aggregated from the
+    5 sessions an equity actually traded and the 7 a crypto pair did — never
+    from the union calendar's empty weekend rows (which would make an equity's
+    weekly volume sum look identical while silently changing which daily rows
+    a ``high``/``low`` aggregate saw).
+
+    ``how`` is the within-week aggregation (``last`` for closes, ``max``/
+    ``min`` for highs/lows, ``sum`` for volume). Weeks a symbol did not trade
+    are dropped for that symbol (NaN in the union weekly index), so the
+    downstream ``_roll_per_symbol``/``_shift_per_symbol`` helpers keep counting
+    in that symbol's own weeks.
+
+    The final week is normally partial (``as_of`` is rarely a Friday). That is
+    intentional and point-in-time honest: it contains only sessions <= as_of,
+    it is identical for every symbol, and it is what "this week so far" means
+    to a human reading a weekly chart mid-week.
+    """
+    if daily.empty or len(daily.columns) == 0:
+        return _empty_panel()
+    out: dict[Hashable, pd.Series] = {}
+    for col in daily.columns:
+        own = cast(pd.Series, daily[col]).dropna()
+        if own.empty:
+            continue
+        grouped = own.resample(WEEK_END_RULE)
+        # ``sum`` of an empty week is 0.0, not NaN — min_count=1 keeps a week
+        # the symbol did not trade out of its own weekly sequence.
+        weekly = cast(
+            pd.Series,
+            grouped.sum(min_count=1) if how == "sum" else getattr(grouped, how)(),
+        )
+        out[col] = weekly.dropna()
+    if not out:
+        return _empty_panel()
+    frame = pd.DataFrame(out)
+    return cast(pd.DataFrame, frame.reindex(columns=daily.columns).sort_index())
 
 
 def _empty_panel() -> pd.DataFrame:
@@ -1096,6 +1180,95 @@ def _month_of_year(ctx: FeatureContext) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
+# Group 11 — multi-timeframe (weekly structure)
+# ---------------------------------------------------------------------------
+#
+# Every other group in this catalog reads daily bars. Weekly structure is a
+# genuinely different lens rather than a smoothed copy of the daily one: a name
+# can be choppy day to day and still be carving a clean weekly uptrend, and a
+# multi-week range contraction ("quiet accumulation") is invisible to a 20-day
+# window. The confirmation feature — a daily breakout that is ALSO a weekly
+# breakout — is standard multi-timeframe practice and was simply not
+# expressible before, because no weekly series existed anywhere in the repo.
+#
+# All six read :meth:`FeatureContext.weekly`, whose panels are resampled per
+# symbol (:func:`_weekly_panel`) and then rolled/shifted with the same
+# per-symbol helpers the daily features use, so they inherit the
+# calendar-invariance property that ``tests/unit/quant/test_calendar_invariance``
+# pins down.
+
+
+def _weekly_ret(weeks: int) -> FeatureFn:
+    """Total return over ``weeks`` of the symbol's OWN weekly bars."""
+
+    def fn(ctx: FeatureContext) -> pd.Series:
+        w = ctx.weekly("price")
+        if w.empty or len(w) <= weeks:
+            return _nan_series(ctx)
+        past = _shift_per_symbol(w, weeks).iloc[-1]
+        return _finite(w.iloc[-1] / past - 1.0).reindex(ctx.universe)
+
+    return fn
+
+
+def _weekly_dist_ma(window: int) -> FeatureFn:
+    """Distance of the latest weekly close from its ``window``-week average."""
+
+    def fn(ctx: FeatureContext) -> pd.Series:
+        w = ctx.weekly("price")
+        if w.empty or len(w) < window:
+            return _nan_series(ctx)
+        ma = _roll_per_symbol(w, window, "mean")
+        return _finite(w.iloc[-1] / ma.iloc[-1] - 1.0).reindex(ctx.universe)
+
+    return fn
+
+
+def _weekly_range_contraction(ctx: FeatureContext) -> pd.Series:
+    """How much tighter the last 8 weeks are than the last 26.
+
+    ``1 - (8-week high/low span) / (26-week high/low span)``: 0 when the recent
+    range is as wide as the half-year range, approaching 1 when the name has
+    gone quiet inside it. Higher = more contracted — the multi-week
+    consolidation shape a daily 20-day window cannot see.
+    """
+    hi, lo = ctx.weekly("high"), ctx.weekly("low")
+    if hi.empty or lo.empty or len(hi) < WEEKLY_WIDE_WEEKS:
+        return _nan_series(ctx)
+    tight_hi = _roll_per_symbol(hi, WEEKLY_TIGHT_WEEKS, "max").iloc[-1]
+    tight_lo = _roll_per_symbol(lo, WEEKLY_TIGHT_WEEKS, "min").iloc[-1]
+    wide_hi = _roll_per_symbol(hi, WEEKLY_WIDE_WEEKS, "max").iloc[-1]
+    wide_lo = _roll_per_symbol(lo, WEEKLY_WIDE_WEEKS, "min").iloc[-1]
+    tight = tight_hi / tight_lo.where(tight_lo > 0) - 1.0
+    wide = wide_hi / wide_lo.where(wide_lo > 0) - 1.0
+    return _finite(1.0 - tight / wide.where(wide > 0)).reindex(ctx.universe)
+
+
+def _weekly_confirms_daily_breakout(ctx: FeatureContext) -> pd.Series:
+    """1.0 when a 20-session daily breakout is ALSO a 26-week weekly breakout.
+
+    Both legs must agree: a 20-day high inside a six-month downtrend scores
+    0.0, exactly like a name that broke out on neither timeframe. NaN (not 0.0)
+    whenever either timeframe lacks the history to answer — an unknown
+    confirmation is never reported as a failed one.
+    """
+    p, w = ctx.price, ctx.weekly("price")
+    if p.empty or w.empty:
+        return _nan_series(ctx)
+    if len(p) < DAILY_BREAKOUT_SESSIONS or len(w) < WEEKLY_BREAKOUT_WEEKS:
+        return _nan_series(ctx)
+    daily_hi = _roll_per_symbol(p, DAILY_BREAKOUT_SESSIONS, "max").iloc[-1]
+    weekly_hi = _roll_per_symbol(w, WEEKLY_BREAKOUT_WEEKS, "max").iloc[-1]
+    last_daily, last_weekly = p.iloc[-1], w.iloc[-1]
+    known = (
+        daily_hi.notna() & weekly_hi.notna() & last_daily.notna() & last_weekly.notna()
+    )
+    both = (last_daily >= daily_hi) & (last_weekly >= weekly_hi)
+    flags = cast(pd.Series, both.astype(float).where(known))
+    return flags.reindex(ctx.universe)
+
+
+# ---------------------------------------------------------------------------
 # The catalog
 # ---------------------------------------------------------------------------
 
@@ -1164,6 +1337,24 @@ def _specs() -> list[FeatureSpec]:
         s("days_to_next_earnings", "calendar", 1, _days_to_next_earnings),
         s("days_since_last_earnings", "calendar", 365, _days_since_last_earnings),
         s("month_of_year", "calendar", 1, _month_of_year),
+        # 11 — multi-timeframe / weekly (7)
+        s("weekly_ret_4w", "weekly", 35, _weekly_ret(4)),
+        s("weekly_ret_13w", "weekly", 100, _weekly_ret(13)),
+        s("weekly_ret_26w", "weekly", 190, _weekly_ret(26)),
+        s("weekly_dist_ma10w", "weekly", 80, _weekly_dist_ma(10)),
+        s("weekly_dist_ma30w", "weekly", 220, _weekly_dist_ma(30)),
+        s(
+            "weekly_range_contraction_8w",
+            "weekly",
+            7 * WEEKLY_WIDE_WEEKS,
+            _weekly_range_contraction,
+        ),
+        s(
+            "weekly_confirms_daily_breakout",
+            "weekly",
+            7 * WEEKLY_BREAKOUT_WEEKS,
+            _weekly_confirms_daily_breakout,
+        ),
     ]
 
 
