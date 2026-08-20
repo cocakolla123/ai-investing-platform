@@ -1081,6 +1081,38 @@ replay_fills = Table(
     Column("realized_pnl", Float),  # sells only; NULL on buys
 )
 
+# Replay surveillance flags (wide-campaign discovery layer; migration 0021).
+#
+# THE FIREWALL, restated as a table. Replay discovery runs the SAME detectors
+# the nightly tier-2 sweep runs, and the obvious place to put their output is
+# ``surveillance_flags`` — which would be catastrophic. That table is live: a
+# replay writing into it would seed the production triage queue with flags
+# about 2026-03 computed in a backtest, AND poison every future replay,
+# because ``gateway.universe()`` reads ``universe_membership``, which live
+# triage promotes into off exactly those rows. One replay would silently
+# rewrite the point-in-time history every later replay depends on.
+#
+# So discovery writes here instead, run-scoped, and never touches
+# ``surveillance_flags`` or ``universe_membership``. ``promoted`` records
+# whether the run's promotion gate admitted the symbol into that day's
+# universe, so the A/B (what discovery added over the static tier list) is
+# answerable from the database afterwards.
+#
+# ``id`` is deterministic — ``{run_id}:{as_of}:{symbol}:{detector}:{n}`` —
+# so a re-run of the same config upserts in place rather than duplicating.
+replay_flags = Table(
+    "replay_flags",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("run_id", Text, nullable=False, index=True),
+    Column("as_of", Date, nullable=False),
+    Column("symbol", Text, nullable=False),
+    Column("detector", Text, nullable=False),
+    Column("severity", Float, nullable=False),
+    Column("details", JSONB, nullable=False, default={}),
+    Column("promoted", Boolean, nullable=False, default=False),
+)
+
 # Durable evaluation-period claims (plan Phase 5; migration 0013) — the
 # database-backed sibling of backtest.walkforward.EvaluationRegistry. A
 # (period, purpose) is claimed ONCE; any later claim attempt refuses, so the

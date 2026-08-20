@@ -28,6 +28,7 @@ from dynamo.persistence.schema import (
     replay_decisions,
     replay_equity,
     replay_fills,
+    replay_flags,
     replay_runs,
     replay_verdicts,
 )
@@ -204,6 +205,48 @@ class ReplayRepository:
             select(replay_fills)
             .where(replay_fills.c.run_id == run_id)
             .order_by(replay_fills.c.session, replay_fills.c.symbol)
+        )
+        with self._engine.connect() as cx:
+            return [dict(r._mapping) for r in cx.execute(stmt)]
+
+    # -- discovery flags (wide-campaign discovery layer) -------------------
+
+    def insert_flags(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        """Idempotent upsert into ``replay_flags`` — NEVER
+        ``surveillance_flags`` (the discovery firewall).
+
+        ``surveillance_flags`` is a live table feeding the nightly triage
+        queue, and live triage promotes what it finds into
+        ``universe_membership``, which is what
+        ``HistoricalDataGateway.universe()`` reads. A replay write there
+        would contaminate production AND every future replay. This method is
+        the only write path replay discovery has.
+        """
+        if not rows:
+            return 0
+        stmt = pg_insert(replay_flags).values([dict(r) for r in rows])
+        updatable = {
+            c.name: stmt.excluded[c.name]
+            for c in replay_flags.columns
+            if c.name != "id" and c.name in rows[0]
+        }
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[replay_flags.c.id], set_=updatable
+        ).returning(replay_flags.c.id)
+        with self._engine.begin() as cx:
+            written = cx.execute(stmt).all()
+        return len(written)
+
+    def flags_for(
+        self, run_id: str, as_of: date | None = None, *, promoted_only: bool = False
+    ) -> list[dict[str, Any]]:
+        stmt = select(replay_flags).where(replay_flags.c.run_id == run_id)
+        if as_of is not None:
+            stmt = stmt.where(replay_flags.c.as_of == as_of)
+        if promoted_only:
+            stmt = stmt.where(replay_flags.c.promoted.is_(True))
+        stmt = stmt.order_by(
+            replay_flags.c.as_of, replay_flags.c.symbol, replay_flags.c.detector
         )
         with self._engine.connect() as cx:
             return [dict(r._mapping) for r in cx.execute(stmt)]
