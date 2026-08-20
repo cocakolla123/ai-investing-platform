@@ -91,6 +91,16 @@ class ReplayLeakageError(RuntimeError):
     """
 
 
+def _symbol_any(column: Any, symbols: Sequence[str], name: str = "sym_filter") -> Any:
+    """``symbol = ANY(:array)`` -- ONE bind parameter, not one per symbol.
+
+    An expanded ``IN`` list of ~1,300 symbols is 1,300 bind parameters and
+    pushes the planner into a parallel hash; the same lesson the preflight
+    reads learned against ``/dev/shm``.
+    """
+    return column == func.any(bindparam(name, value=list(symbols), type_=ARRAY(Text)))
+
+
 class HistoricalDataGateway:
     """Point-in-time reads at a fixed ``as_of``; one instance per session day."""
 
@@ -227,7 +237,14 @@ class HistoricalDataGateway:
         symbols = list(symbols)
         bars = self.bars(symbols, FEATURE_BARS_LOOKBACK_DAYS)
         inst = schema.instruments
-        inst_df = self._read_df(select(inst.c.symbol, inst.c.sector, inst.c.cik))
+        # Scoped to the requested symbols. Reading all ~11,500 instruments to
+        # build a cik->symbol map that is then used to DISCARD everything
+        # outside `symbols` was harmless at 55 names and is not at 1,315.
+        inst_df = self._read_df(
+            select(inst.c.symbol, inst.c.sector, inst.c.cik).where(
+                _symbol_any(inst.c.symbol, symbols, "inst_symbols")
+            )
+        )
         sectors = {
             str(r["symbol"]): str(r["sector"])
             for r in inst_df.to_dict(orient="records")
@@ -237,11 +254,22 @@ class HistoricalDataGateway:
             str(r["cik"]): str(r["symbol"]) for r in inst_df.to_dict(orient="records") if r["cik"]
         }
         x = schema.xbrl_facts
-        fundamentals = self._read_df(
-            select(x).where(
-                x.c.filed_at >= self._since(FUNDAMENTALS_LOOKBACK_DAYS),
-                x.c.filed_at <= self._cutoff,
+        # CIK pushdown. Without it this materialised EVERY filer's facts in
+        # the window -- 3.3M rows per session once xbrl_facts reached 21.8M --
+        # and then dropped all but the requested symbols in pandas. The
+        # primary key leads on cik, so the filtered form is an index scan.
+        ciks = sorted({c for c in cik_to_symbol})
+        fundamentals = (
+            self._read_df(
+                select(x).where(
+                    x.c.cik
+                    == func.any(bindparam("fundamental_ciks", value=ciks, type_=ARRAY(Text))),
+                    x.c.filed_at >= self._since(FUNDAMENTALS_LOOKBACK_DAYS),
+                    x.c.filed_at <= self._cutoff,
+                )
             )
+            if ciks
+            else pd.DataFrame()
         )
         if not fundamentals.empty:
             fundamentals["symbol"] = fundamentals["cik"].astype(str).map(cik_to_symbol.get)
@@ -249,6 +277,7 @@ class HistoricalDataGateway:
         i = schema.insider_tx
         insider = self._read_df(
             select(i).where(
+                _symbol_any(i.c.symbol, symbols, "insider_symbols"),
                 i.c.filed_at >= self._since(INSIDER_LOOKBACK_DAYS),
                 i.c.filed_at <= self._cutoff,
             )
