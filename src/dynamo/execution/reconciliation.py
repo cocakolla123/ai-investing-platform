@@ -19,6 +19,12 @@ from dynamo.domain.ports import Broker
 GLOBAL_SCOPE = "global"
 QTY_TOLERANCE = 1e-6
 
+# Run-scope label written to ``reconciliation_runs.scope`` by the equity/crypto
+# reconciler. The PM and options reconcilers write ``pm*`` / ``options*``; the
+# equity sleeve's sticky-halt query keys off this prefix, so the three sleeves
+# never inherit each other's halts.
+EQUITY_RUN_SCOPE = "equities"
+
 
 @dataclass(frozen=True)
 class Divergence:
@@ -96,6 +102,21 @@ class HaltRegistry:
         return self._halts.pop(scope, None)
 
 
+def acknowledge_reconciliation(
+    store: ReconciliationStore, run_id: int, acked_by: str, note: str, now: datetime
+) -> None:
+    """Record the one deliberate act that clears a sticky halt (doc 09 §5).
+
+    The halt lives in the database — an unacked ``divergent`` run — so the ack
+    row *is* the clearance; no in-memory registry has to survive for it to
+    work. A blank note is refused: "who/when/why" is the whole point of the
+    audit row, and nothing ever clears a halt automatically.
+    """
+    if not note.strip():
+        raise ValueError("reconciliation ack requires a note")
+    store.record_ack(run_id, acked_by, now, note)
+
+
 class Reconciler:
     def __init__(
         self,
@@ -106,12 +127,14 @@ class Reconciler:
         *,
         cash_tolerance: float = 1.00,
         halts: HaltRegistry | None = None,
+        run_scope: str = EQUITY_RUN_SCOPE,
     ) -> None:
         self._broker = broker
         self._internal = internal
         self._store = store
         self._alert = alert
         self._cash_tolerance = cash_tolerance
+        self._run_scope = run_scope
         self.halts = halts if halts is not None else HaltRegistry()
 
     def reconcile(self, now: datetime) -> ReconciliationResult:
@@ -122,12 +145,17 @@ class Reconciler:
         divergences.extend(self._diff_cash())
 
         clean = not divergences
-        scope = GLOBAL_SCOPE if any(d.scope == GLOBAL_SCOPE for d in divergences) else (
-            "symbols" if divergences else GLOBAL_SCOPE
-        )
+        # The run scope is sleeve-prefixed so the equity sticky-halt query can
+        # tell an equity halt from a pm/options one (they share the table).
+        if clean:
+            scope = self._run_scope
+        elif any(d.scope == GLOBAL_SCOPE for d in divergences):
+            scope = f"{self._run_scope}:{GLOBAL_SCOPE}"
+        else:
+            scope = f"{self._run_scope}:symbols"
         run_id = self._store.record_run(
             now,
-            scope if not clean else GLOBAL_SCOPE,
+            scope,
             "clean" if clean else "divergent",
             [d.as_dict() for d in divergences],
         )
@@ -144,9 +172,7 @@ class Reconciler:
     def acknowledge(self, run_id: int, acked_by: str, note: str, now: datetime) -> list[str]:
         """Explicit human ack clears the halts engaged by ``run_id`` (sticky
         otherwise) and records who/when/why in ``reconciliation_acks``."""
-        if not note.strip():
-            raise ValueError("reconciliation ack requires a note")
-        self._store.record_ack(run_id, acked_by, now, note)
+        acknowledge_reconciliation(self._store, run_id, acked_by, note, now)
         cleared = [s for s, rid in self.halts.active.items() if rid == run_id]
         for scope in cleared:
             self.halts.clear(scope)

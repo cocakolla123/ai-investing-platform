@@ -35,6 +35,7 @@ from dynamo.execution.errors import (
     ExecutionError,
     IllegalTransition,
     MissingDecisionContext,
+    ReconciliationHalt,
     ReconciliationPending,
 )
 
@@ -107,6 +108,7 @@ class OrderManager:
         approval_ttl_minutes: int = 30,
         decision_price_lookup: DecisionPriceLookup | None = None,
         gate: Callable[[Order], Any] | None = None,  # returns GateResult-like
+        halt_check: Callable[[Order], bool] | None = None,  # True -> sticky halt
         min_weight_delta: float = MIN_WEIGHT_DELTA,
     ) -> None:
         self._broker = broker
@@ -117,6 +119,7 @@ class OrderManager:
         self._approval_ttl = timedelta(minutes=approval_ttl_minutes)
         self._decision_price = decision_price_lookup or (lambda _dc, _sym: None)
         self._gate = gate
+        self._halt_check = halt_check
         self._min_weight_delta = min_weight_delta
         self._reconciled = False
 
@@ -229,16 +232,22 @@ class OrderManager:
     def submit(self, coid: str) -> Order:
         """Submit a ``pending_approval`` order to the broker.
 
-        Requires startup reconciliation complete, a decision context id
-        (no order without a snapshot), an unexpired approval window, and a
-        permitting gate. A duplicate-id response is "already submitted — fetch
-        state", never an error; broker rejects are terminal; a disconnect
-        leaves the order ``submitted`` and blocks new submissions until
-        reconciliation.
+        Requires startup reconciliation complete, no sticky reconciliation
+        halt, a decision context id (no order without a snapshot), an unexpired
+        approval window, and a permitting gate. A duplicate-id response is
+        "already submitted — fetch state", never an error; broker rejects are
+        terminal; a disconnect leaves the order ``submitted`` and blocks new
+        submissions until reconciliation.
+
+        Both ``halt_check`` and ``gate`` are consulted HERE, per submission —
+        never once per job and never cached — so a kill switch or a halt that
+        appears mid-run stops every subsequent order in that run (doc 09 §7).
         """
         if not self._reconciled:
             raise ReconciliationPending("startup reconciliation has not completed")
         order = self._require(coid)
+        if self._halt_check is not None and self._halt_check(order):
+            raise ReconciliationHalt(order.symbol)
         if order.state != OrderState.PENDING_APPROVAL:
             raise IllegalTransition(coid, order.state.value, OrderState.SUBMITTED.value)
         if not order.decision_context_id:
@@ -361,6 +370,24 @@ class OrderManager:
         (idempotency guarantees zero duplicates), terminal broker states are
         mirrored, and orders the broker never received are cancelled locally.
         """
+        self.sync_orders()
+        self._reconciled = True
+
+    def sync_orders(self) -> list[Trade]:
+        """Poll every live order against broker truth; return the NEW fills.
+
+        This is the equity/crypto fill poller (the twin of the options and PM
+        sleeves' ``sync_orders``). Without it an Alpaca fill never reaches
+        ``trades``/``positions`` and periodic reconciliation correctly halts
+        the sleeve for divergence.
+
+        Idempotent by construction: the broker's cumulative ``filled_qty``
+        minus what we have already recorded is what gets written, so re-polling
+        an unchanged order records nothing. Partial fills leave the order
+        ``partially_filled`` and are topped up on the next poll; terminal
+        broker states are mirrored into the local state machine.
+        """
+        recorded: list[Trade] = []
         for order in self._orders.open_orders():
             if order.state not in (OrderState.SUBMITTED, OrderState.PARTIALLY_FILLED):
                 continue
@@ -383,7 +410,7 @@ class OrderManager:
             missing = remote_filled - local_filled
             if missing > 1e-9:
                 price = float(remote.get("filled_avg_price") or 0.0)
-                self.record_fill(coid, missing, price, self._clock.now())
+                recorded.append(self.record_fill(coid, missing, price, self._clock.now()))
                 order = self._require(coid)
 
             status = str(remote.get("status", ""))
@@ -393,7 +420,7 @@ class OrderManager:
                 self.transition(coid, OrderState.REJECTED, "broker: rejected")
             elif status == "expired" and order.state not in TERMINAL_ORDER_STATES:
                 self.transition(coid, OrderState.EXPIRED, "broker: expired")
-        self._reconciled = True
+        return recorded
 
     # --- internals ---
 
