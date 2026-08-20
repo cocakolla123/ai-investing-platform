@@ -65,7 +65,10 @@ DEFAULT_INSIDER_DAYS = 90
 DEFAULT_FILINGS_DAYS = 90
 # Finnhub's free calendar starts here; earlier windows come back empty.
 FINNHUB_CALENDAR_FLOOR = date(2026, 7, 1)
-FINNHUB_CHUNK_DAYS = 7  # keeps each response under the 1,500-event truncation
+FINNHUB_CHUNK_DAYS = 7  # keeps most responses under the truncation cap
+# Finnhub silently truncates a calendar response here — it does not paginate
+# and does not say it truncated, so the caller has to detect the boundary.
+FINNHUB_RESPONSE_CAP = 1500
 EARNINGS_LOOKAHEAD_DAYS = 120
 
 # The forms ``filing_event`` reacts to. 8-K carries the item codes; the rest
@@ -173,6 +176,26 @@ def _print_counts(label: str, counts: dict[str, int]) -> None:
     print(f"{label}: {body}")
 
 
+def _report_gaps(what: str, gaps: Sequence[date]) -> int:
+    """Exit code for a sweep that skipped days, naming every one of them.
+
+    EDGAR 500s and rate-limits transiently, and a multi-hour sweep WILL hit
+    one. Aborting throws away the hours already spent; swallowing the error
+    leaves a hole in the table that looks exactly like a quiet day. So: keep
+    going, then refuse to exit 0 and print the days to re-run.
+    """
+    if not gaps:
+        return 0
+    listed = ", ".join(d.isoformat() for d in gaps[:20])
+    more = "" if len(gaps) <= 20 else f" (+{len(gaps) - 20} more)"
+    print(
+        f"INCOMPLETE: {what} skipped {len(gaps)} day(s) after provider errors: "
+        f"{listed}{more} — re-run those windows; the upserts converge",
+        file=sys.stderr,
+    )
+    return 1
+
+
 # -- insider transactions ---------------------------------------------------
 
 
@@ -194,18 +217,26 @@ def _cmd_insider(args: argparse.Namespace) -> int:
     print(f"insider backfill {start} -> {end} over {scope}")
     _print_counts("before", table_counts(engine))
 
+    from dynamo.data.errors import DataGap, ProviderDown, RateLimited
+
     edgar = _edgar(_settings())
     started = time.monotonic()
     total = 0
     days = 0
+    gaps: list[date] = []
     for day in day_range(start, end):
         if day.weekday() >= 5:  # EDGAR does not accept filings at the weekend
             continue
-        txs = list(
-            edgar.insider_transactions_in_range(
-                day, day, ciks=None if symbols is None else ciks.values()
+        try:
+            txs = list(
+                edgar.insider_transactions_in_range(
+                    day, day, ciks=None if symbols is None else ciks.values()
+                )
             )
-        )
+        except (ProviderDown, RateLimited, DataGap) as exc:
+            gaps.append(day)
+            print(f"  {day}: SKIPPED — {type(exc).__name__}: {exc}", flush=True)
+            continue
         written = repo.upsert_insider_tx(txs) if txs else 0
         total += written
         days += 1
@@ -216,7 +247,7 @@ def _cmd_insider(args: argparse.Namespace) -> int:
         )
     print(f"insider backfill: {total} rows over {days} session days")
     _print_counts("after", table_counts(engine))
-    return 0
+    return _report_gaps("insider backfill", gaps)
 
 
 # -- filings ----------------------------------------------------------------
@@ -232,23 +263,31 @@ def _cmd_filings(args: argparse.Namespace) -> int:
 
     # The index names a symbol only when a display_name carries one; fill the
     # rest from instruments, because filing_event skips a symbol-less row.
+    from dynamo.data.errors import DataGap, ProviderDown, RateLimited
+
     by_cik = {cik.lstrip("0"): sym for sym, cik in cik_map(engine).items()}
     edgar = _edgar(_settings())
     started = time.monotonic()
     total = 0
     resolved = 0
+    gaps: list[date] = []
     for day in day_range(start, end):
         if day.weekday() >= 5:
             continue
         batch: list[Any] = []
-        for form in forms:
-            for filing in edgar.filings_in_range(form, day, day):
-                if filing.symbol is None:
-                    symbol = by_cik.get(filing.cik.lstrip("0"))
-                    if symbol is not None:
-                        resolved += 1
-                        filing = filing.model_copy(update={"symbol": symbol})
-                batch.append(filing)
+        try:
+            for form in forms:
+                for filing in edgar.filings_in_range(form, day, day):
+                    if filing.symbol is None:
+                        symbol = by_cik.get(filing.cik.lstrip("0"))
+                        if symbol is not None:
+                            resolved += 1
+                            filing = filing.model_copy(update={"symbol": symbol})
+                    batch.append(filing)
+        except (ProviderDown, RateLimited, DataGap) as exc:
+            gaps.append(day)
+            print(f"  {day}: SKIPPED — {type(exc).__name__}: {exc}", flush=True)
+            continue
         written = repo.upsert_filings(batch) if batch else 0
         total += written
         print(
@@ -258,7 +297,7 @@ def _cmd_filings(args: argparse.Namespace) -> int:
         )
     print(f"filings backfill: {total} rows ({resolved} symbols filled in from instruments)")
     _print_counts("after", table_counts(engine))
-    return 0
+    return _report_gaps("filings backfill", gaps)
 
 
 # -- earnings ---------------------------------------------------------------
@@ -279,14 +318,19 @@ def _cmd_earnings(args: argparse.Namespace) -> int:
             f"clamping --start {start}"
         )
         start = FINNHUB_CALENDAR_FLOOR
-    print(f"earnings backfill {start} -> {end} in {FINNHUB_CHUNK_DAYS}-day chunks")
+    if start > end:
+        print(f"ERROR: --start {start} is after --end {end}", file=sys.stderr)
+        return 1
+    chunk = max(int(args.chunk_days or FINNHUB_CHUNK_DAYS), 1)
+    print(f"earnings backfill {start} -> {end} in {chunk}-day chunks")
     _print_counts("before", table_counts(engine))
 
     finnhub = _finnhub(settings)
     total = 0
     vintages = 0
     with_actuals = 0
-    for lo, hi in week_chunks(start, end, FINNHUB_CHUNK_DAYS):
+    truncated: list[str] = []
+    for lo, hi in week_chunks(start, end, chunk):
         events = list(finnhub.earnings_calendar(lo, hi))
         if not events:
             print(f"  {lo}..{hi}: no events")
@@ -296,16 +340,27 @@ def _cmd_earnings(args: argparse.Namespace) -> int:
         total += repo.upsert_earnings(events)
         vintages += repo.append_estimate_vintages(events)
         print(f"  {lo}..{hi}: {len(events)} events ({actuals} with eps_act)", flush=True)
-        if len(events) >= 1500:
+        if len(events) >= FINNHUB_RESPONSE_CAP:
+            truncated.append(f"{lo}..{hi}")
             print(
-                f"    WARNING: {lo}..{hi} hit Finnhub's 1,500-event response cap — "
-                "this window is TRUNCATED; re-run with a smaller --chunk-days"
+                f"    WARNING: {lo}..{hi} hit Finnhub's {FINNHUB_RESPONSE_CAP}-event "
+                "response cap — this window is TRUNCATED"
             )
     print(
         f"earnings backfill: {total} rows, {with_actuals} carrying an EPS actual "
         f"(what earnings_surprise needs), {vintages} estimate vintages appended"
     )
     _print_counts("after", table_counts(engine))
+    if truncated:
+        # Loud and non-zero: a truncated window looks exactly like a complete
+        # one in the table, and silently missing earnings is worse than none.
+        print(
+            f"INCOMPLETE: {len(truncated)} window(s) truncated at the response "
+            f"cap ({', '.join(truncated)}) — re-run those with a smaller "
+            f"--chunk-days (current: {chunk})",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
@@ -371,6 +426,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"default: today + {EARNINGS_LOOKAHEAD_DAYS}d",
     )
+    ear.add_argument(
+        "--chunk-days",
+        type=int,
+        default=FINNHUB_CHUNK_DAYS,
+        help=f"days per request (default {FINNHUB_CHUNK_DAYS}); shrink it for "
+        f"busy reporting weeks that hit the {FINNHUB_RESPONSE_CAP}-event cap",
+    )
 
     sub.add_parser("status", help="row counts for the three tables; writes nothing")
     all_p = sub.add_parser("all", help="earnings, then filings, then insider")
@@ -399,6 +461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("forms", list(DEFAULT_FILING_FORMS)),
         ("universe_file", DEFAULT_UNIVERSE_FILE),
         ("all_symbols", False),
+        ("chunk_days", FINNHUB_CHUNK_DAYS),
     ):
         if not hasattr(args, name):
             setattr(args, name, default)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import httpx
 
@@ -167,3 +167,104 @@ def test_insider_transactions_parses_form4() -> None:
     assert tx.shares == 1500.0
     assert tx.price is not None
     assert abs(tx.price - (1000 * 10.5 + 500 * 11.5) / 1500) < 1e-9
+
+
+# --------------------------------------------------------------------------
+# history sweeps (dynamo.cli.backfill_events)
+# --------------------------------------------------------------------------
+
+EXHIBIT_FIRST_HITS = {
+    "hits": {
+        "hits": [
+            {  # the exhibit sorts first; the poller would store EX-99.1
+                "_id": "0000320193-26-000003:ex99-1.htm",
+                "_source": {
+                    "adsh": "0000320193-26-000003",
+                    "ciks": ["0000320193"],
+                    "file_date": "2026-07-30",
+                    "file_type": "EX-99.1",
+                    "root_forms": ["8-K"],
+                    "items": ["2.02", "9.01"],
+                    "display_names": ["Acme Corp  (ACME)  (CIK 0000320193)"],
+                },
+            },
+            {  # same accession, primary document
+                "_id": "0000320193-26-000003:acme8k.htm",
+                "_source": {
+                    "adsh": "0000320193-26-000003",
+                    "ciks": ["0000320193"],
+                    "file_date": "2026-07-30",
+                    "file_type": "8-K",
+                    "root_forms": ["8-K"],
+                    "items": ["2.02", "9.01"],
+                    "display_names": ["Acme Corp  (ACME)  (CIK 0000320193)"],
+                },
+            },
+        ]
+    }
+}
+
+
+def test_filings_in_range_keeps_the_root_form_not_the_exhibit() -> None:
+    """An 8-K whose exhibit sorted first is still an 8-K. The poller reads
+    ``file_type`` and would file this under EX-99.1, where ``filing_event``
+    never looks."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=EXHIBIT_FIRST_HITS)
+
+    day = date(2026, 7, 30)
+    filings = list(make_client(httpx.MockTransport(handler)).filings_in_range("8-K", day, day))
+    assert len(filings) == 1  # one row per accession, not per document
+    assert filings[0].form_type == "8-K"
+    assert filings[0].items == ("2.02", "9.01")
+    assert filings[0].symbol == "ACME"
+
+
+def test_filings_in_range_passes_the_form_and_the_day_window() -> None:
+    seen: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"hits": {"hits": []}})
+
+    day = date(2026, 7, 30)
+    list(make_client(httpx.MockTransport(handler)).filings_in_range("SC 13D", day, day))
+    assert seen[0]["forms"] == "SC 13D"
+    assert seen[0]["startdt"] == "2026-07-30"
+    assert seen[0]["enddt"] == "2026-07-30"
+
+
+def test_insider_range_downloads_only_the_requested_ciks() -> None:
+    """The cik filter has to bite BEFORE the ownership XML is fetched — that
+    is the entire cost of a Form 4 backfill (~1,000 documents a day)."""
+    fetched: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "form4.xml" in url:
+            fetched.append(url)
+            return httpx.Response(200, text=FORM4_XML)
+        return httpx.Response(200, json=FORM4_HITS)
+
+    day = date(2026, 7, 31)
+    client = make_client(httpx.MockTransport(handler))
+    assert list(client.insider_transactions_in_range(day, day, ciks=["0000000999"])) == []
+    assert fetched == []  # nothing downloaded for a CIK outside the universe
+
+    txs = list(client.insider_transactions_in_range(day, day, ciks=["0000320193"]))
+    assert len(txs) == 1 and txs[0].symbol == "ACME"
+    assert len(fetched) == 1
+
+
+def test_insider_range_without_a_cik_filter_takes_everything() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "form4.xml" in str(request.url):
+            return httpx.Response(200, text=FORM4_XML)
+        return httpx.Response(200, json=FORM4_HITS)
+
+    day = date(2026, 7, 31)
+    txs = list(
+        make_client(httpx.MockTransport(handler)).insider_transactions_in_range(day, day)
+    )
+    assert len(txs) == 1

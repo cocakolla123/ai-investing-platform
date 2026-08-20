@@ -28,6 +28,7 @@ TABLES = [
     schema.xbrl_facts,
     schema.transcripts,
     schema.earnings_estimate_vintages,
+    schema.earnings_events,
 ]
 
 
@@ -303,6 +304,28 @@ def test_upsert_transcripts_dedupes_in_batch_keep_last(
         rows = conn.execute(select(schema.transcripts)).all()
     assert len(rows) == 1
     assert rows[0].content == "revised"
+
+
+def test_upsert_earnings_dedupes_in_batch_keep_last(
+    repo: MarketDataRepository, engine: Engine
+) -> None:
+    """Finnhub repeats a (symbol, event_date) inside ONE calendar response —
+    a company reporting two fiscal quarters the same day, and plain duplicate
+    entries in the historical windows. That made the history sweep die on
+    CardinalityViolation instead of converging."""
+    from dynamo.domain.models.market import EarningsEvent
+
+    events = [
+        EarningsEvent(symbol="ACME", event_date=date(2026, 8, 6), period="2026Q2",
+                      eps_est=1.0, eps_act=None),
+        EarningsEvent(symbol="ACME", event_date=date(2026, 8, 6), period="2026Q2",
+                      eps_est=1.0, eps_act=1.4),
+    ]
+    assert repo.upsert_earnings(events) == 1
+    with engine.connect() as conn:
+        rows = conn.execute(select(schema.earnings_events)).all()
+    assert len(rows) == 1
+    assert rows[0].eps_act == 1.4  # keep-last: the row-by-row upsert end state
 
 
 def test_append_estimate_vintages_appends_only_on_change(
