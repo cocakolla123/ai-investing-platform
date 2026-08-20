@@ -70,10 +70,30 @@ def _sev(value: float) -> float:
 
 
 def _per_symbol(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """``symbol -> its bars, ascending by ts`` — the shape every bar detector
+    reads.
+
+    HOIST THE RESULT, do not let each detector recompute it. All five bar
+    detectors used to call this themselves, so ``run_detectors`` paid a full
+    groupby + per-group sort **five times** over the same frame, every
+    session. On the wide universe that is the dominant cost of a discovery
+    day (measured 3-4x). Every bar detector now takes an optional
+    ``per_symbol`` mapping and ``run_detectors`` computes it ONCE; passing
+    it must not change a single flag, which is what
+    ``tests/unit/data/test_detectors_per_symbol.py`` asserts against a
+    golden run.
+    """
     return {
         str(symbol): grp.sort_values("ts").reset_index(drop=True)
         for symbol, grp in bars.groupby("symbol")
     }
+
+
+def _frames(
+    bars: pd.DataFrame, per_symbol: Mapping[str, pd.DataFrame] | None
+) -> Mapping[str, pd.DataFrame]:
+    """The hoisted grouping when the caller supplies one, else group here."""
+    return _per_symbol(bars) if per_symbol is None else per_symbol
 
 
 # --- price_zscore eligibility guards --------------------------------------
@@ -157,6 +177,7 @@ def price_zscore(
     min_abs_return: float = PRICE_ZSCORE_MIN_ABS_RETURN,
     min_dollar_volume: float = PRICE_ZSCORE_MIN_DOLLAR_VOLUME,
     max_price_ratio: float = PRICE_ZSCORE_MAX_PRICE_RATIO,
+    per_symbol: Mapping[str, pd.DataFrame] | None = None,
 ) -> list[SurveillanceFlag]:
     """|1-day return| > k * sigma(60d), gated for tradability (doc 02 §2).
 
@@ -172,7 +193,7 @@ def price_zscore(
     constants above for what each threshold is worth on measured data.
     """
     flags: list[SurveillanceFlag] = []
-    for symbol, grp in _per_symbol(bars).items():
+    for symbol, grp in _frames(bars, per_symbol).items():
         returns = grp["close"].pct_change().dropna()
         if len(returns) < window // 2 + 1:
             continue
@@ -247,10 +268,11 @@ def volume_spike(
     as_of: datetime,
     multiple: float = 5.0,
     window: int = 60,
+    per_symbol: Mapping[str, pd.DataFrame] | None = None,
 ) -> list[SurveillanceFlag]:
     """Dollar volume > m x 60d median (doc 02 §2, default m=5)."""
     flags: list[SurveillanceFlag] = []
-    for symbol, grp in _per_symbol(bars).items():
+    for symbol, grp in _frames(bars, per_symbol).items():
         dollar = grp["close"] * grp["volume"]
         if len(dollar) < window // 2 + 1:
             continue
@@ -279,13 +301,14 @@ def rel_strength(
     sector_etf_map: Mapping[str, str],
     threshold: float = 0.10,
     window: int = 20,
+    per_symbol: Mapping[str, pd.DataFrame] | None = None,
 ) -> list[SurveillanceFlag]:
     """|20d return - sector-ETF 20d return| > threshold (doc 02 §2).
 
     ``sector_etf_map`` maps each symbol to its sector ETF; ETF bars must be
     present in ``bars`` too.
     """
-    frames = _per_symbol(bars)
+    frames = _frames(bars, per_symbol)
 
     def _window_return(symbol: str) -> float | None:
         grp = frames.get(symbol)
@@ -328,10 +351,11 @@ def range_break(
     lookback: int = 252,
     volume_multiple: float = 1.5,
     volume_window: int = 60,
+    per_symbol: Mapping[str, pd.DataFrame] | None = None,
 ) -> list[SurveillanceFlag]:
     """52-week high/low breach with volume confirmation (doc 02 §2)."""
     flags: list[SurveillanceFlag] = []
-    for symbol, grp in _per_symbol(bars).items():
+    for symbol, grp in _frames(bars, per_symbol).items():
         if len(grp) < volume_window // 2 + 2:
             continue
         close = float(grp["close"].iloc[-1])
@@ -380,6 +404,7 @@ def range_bound(
     min_dollar_volume: float = RANGE_BOUND_MIN_DOLLAR_VOLUME,
     max_spread_bps: float = RANGE_BOUND_MAX_SPREAD_BPS,
     spreads_bps: Mapping[str, float] | None = None,
+    per_symbol: Mapping[str, pd.DataFrame] | None = None,
 ) -> list[SurveillanceFlag]:
     """Established trading range, price currently near the LOW of it.
 
@@ -424,7 +449,7 @@ def range_bound(
     """
     flags: list[SurveillanceFlag] = []
     min_sessions = max(vr_window + vr_lag + 1, touch_window + band_window, range_window)
-    for symbol, grp in _per_symbol(bars).items():
+    for symbol, grp in _frames(bars, per_symbol).items():
         if len(grp) < min_sessions:
             continue
         closes = np.asarray(grp["close"], dtype=float)
@@ -654,6 +679,12 @@ class DetectorInputs:
 
     bars: pd.DataFrame
     as_of: datetime
+    # Pre-grouped bars (``symbol -> its frame, ascending by ts``). Supplying
+    # this skips the groupby entirely — ``bars`` is then never read by the
+    # bar detectors, so a caller that already holds the per-symbol arrays
+    # (``dynamo.replay.discovery.SurveillancePanel``) may pass an empty
+    # frame. ``None`` = group from ``bars`` here, the live nightly path.
+    per_symbol: Mapping[str, pd.DataFrame] | None = None
     sector_etf_map: Mapping[str, str] = field(default_factory=dict)
     # symbol -> quoted spread in bps, for range_bound's tradability guard.
     # Empty until a quote feed exists; the guard is then simply not applied.
@@ -665,18 +696,30 @@ class DetectorInputs:
 
 
 def run_detectors(inputs: DetectorInputs) -> list[SurveillanceFlag]:
-    """Run the full doc 02 §2 catalog and assemble the nightly flag set."""
+    """Run the full doc 02 §2 catalog and assemble the nightly flag set.
+
+    The per-symbol grouping is computed ONCE here and threaded into all five
+    bar detectors (see :func:`_per_symbol`); a caller holding it already
+    passes it on ``inputs.per_symbol``. Flag output is identical either way.
+    """
     flags: list[SurveillanceFlag] = []
-    if not inputs.bars.empty:
-        flags += price_zscore(inputs.bars, as_of=inputs.as_of)
-        flags += volume_spike(inputs.bars, as_of=inputs.as_of)
-        flags += range_break(inputs.bars, as_of=inputs.as_of)
+    frames = _frames(inputs.bars, inputs.per_symbol)
+    if frames:
+        flags += price_zscore(inputs.bars, as_of=inputs.as_of, per_symbol=frames)
+        flags += volume_spike(inputs.bars, as_of=inputs.as_of, per_symbol=frames)
+        flags += range_break(inputs.bars, as_of=inputs.as_of, per_symbol=frames)
         flags += range_bound(
-            inputs.bars, as_of=inputs.as_of, spreads_bps=inputs.spreads_bps or None
+            inputs.bars,
+            as_of=inputs.as_of,
+            spreads_bps=inputs.spreads_bps or None,
+            per_symbol=frames,
         )
         if inputs.sector_etf_map:
             flags += rel_strength(
-                inputs.bars, as_of=inputs.as_of, sector_etf_map=inputs.sector_etf_map
+                inputs.bars,
+                as_of=inputs.as_of,
+                sector_etf_map=inputs.sector_etf_map,
+                per_symbol=frames,
             )
     flags += earnings_surprise(inputs.earnings, as_of=inputs.as_of)
     flags += filing_event(inputs.filings, as_of=inputs.as_of)
