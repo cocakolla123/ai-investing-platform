@@ -108,8 +108,10 @@ def test_feature_inputs_bound_every_frame(engine, gateway) -> None:  # type: ign
         InsiderTx,
         Instrument,
         MacroPoint,
+        NewsItem,
         XbrlFact,
     )
+    from dynamo.persistence import schema
 
     repo = _repo(engine)
     repo.upsert_instruments(
@@ -172,12 +174,48 @@ def test_feature_inputs_bound_every_frame(engine, gateway) -> None:  # type: ign
         fetched_at=_dt(AFTER),
     )
 
+    # News: the attention features read published_at, exploded per symbol.
+    repo.upsert_news(
+        [
+            NewsItem(
+                id="n-1", symbols=("AAPL",), headline="early", source="test",
+                published_at=_dt(BEFORE),
+            ),
+            NewsItem(
+                id="n-2", symbols=("AAPL",), headline="future", source="test",
+                published_at=_dt(AFTER),
+            ),
+        ],
+        fetched_at=_dt(BEFORE),
+    )
+    # Short interest: the knowledge axis is publication_date, NOT the
+    # settlement date. The second cycle settled BEFORE as_of and is still
+    # invisible, because FINRA had not disseminated it yet — the whole point
+    # of storing both dates (dynamo.data.finra).
+    repo.upsert_rows(
+        schema.short_interest,
+        [
+            {
+                "symbol": "AAPL", "settlement_date": BEFORE - timedelta(days=15),
+                "publication_date": BEFORE, "shares_short": 1_000.0,
+            },
+            {
+                "symbol": "AAPL", "settlement_date": BEFORE,
+                "publication_date": AFTER, "shares_short": 9_999.0,
+            },
+        ],
+    )
+
     inputs = gateway.feature_inputs(["AAPL", "MSFT"])
     assert list(inputs.fundamentals["value"]) == [1.0]
     assert list(inputs.insider["accession_no"]) == ["a-1"]
     assert list(inputs.macro["value"]) == [15.0]
     assert list(inputs.earnings_calendar["symbol"]) == ["AAPL"]
     assert list(inputs.estimates["eps_est"]) == [1.10]  # PIT: 9.99 invisible
+    assert list(inputs.news["symbol"]) == ["AAPL"]
+    assert len(inputs.news) == 1  # the AFTER story is invisible
+    # A cycle that settled before as_of but publishes after it stays hidden.
+    assert list(inputs.short_interest["shares_short"]) == [1_000.0]
 
 
 def test_fundamentals_read_hides_future_filings(engine, gateway) -> None:  # type: ignore[no-untyped-def]
