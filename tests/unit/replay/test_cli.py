@@ -17,6 +17,40 @@ from dynamo.cli import replay as replay_cli
 # the backend tests build real Settings instances after patching the module.
 from dynamo.config.settings import Settings as RealSettings
 
+
+def isolated_settings(**overrides: Any) -> RealSettings:
+    """``Settings`` built from explicit kwargs only — no ambient environment.
+
+    Two separate leaks have to be closed, and they need different tools:
+
+    - The repo's ``.env`` sets ``RESEARCH_BACKEND=claude_code`` (ADR-0014, so
+      the nightly pipeline cannot silently bill the metered API). ``Settings``
+      declares ``env_file=".env"``, so a bare ``Settings()`` run from inside
+      the repo picks that up. ``_env_file=None`` drops the dotenv source.
+    - An *exported* ``RESEARCH_BACKEND`` is read from ``os.environ`` by the
+      env source regardless of ``_env_file``. Only an explicit init kwarg
+      outranks it (init > env > dotenv in pydantic-settings' precedence).
+
+    So a test asserting on a *default* passes that default explicitly. The
+    value under test stays visible at the call site instead of depending on
+    whatever the developer happens to have exported.
+    """
+    kwargs: dict[str, Any] = {"RESEARCH_BACKEND": "api"}
+    kwargs.update(overrides)
+    return RealSettings(_env_file=None, **kwargs)  # type: ignore[call-arg]
+
+
+@pytest.fixture
+def shipped_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the ``Settings()`` the CLI builds for itself to the shipped defaults.
+
+    The estimate/committee commands construct ``Settings()`` internally, so
+    there is no argument to override — the environment is the only seam.
+    Tests that assert on default-backend behaviour depend on this.
+    """
+    monkeypatch.setattr("dynamo.config.settings.Settings", isolated_settings)
+
+
 # --------------------------------------------------------------------------
 # replay CLI
 # --------------------------------------------------------------------------
@@ -91,7 +125,7 @@ def test_replay_committee_refuses_without_api_key(
 
 
 def test_estimate_prints_projection_without_any_api_call(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], shipped_defaults: None
 ) -> None:
     """The estimator is pure math over on-disk prompt sizes + the pricing
     table — no client is constructed, no request object even built."""
@@ -105,7 +139,9 @@ def test_estimate_prints_projection_without_any_api_call(
     assert "$" in out
 
 
-def test_estimate_scales_with_deep_dive_cap(capsys: pytest.CaptureFixture[str]) -> None:
+def test_estimate_scales_with_deep_dive_cap(
+    capsys: pytest.CaptureFixture[str], shipped_defaults: None
+) -> None:
     def total_for(cap: str) -> float:
         rc = replay_cli.main(
             [
@@ -1178,7 +1214,7 @@ def test_replay_committee_preflight_runs_before_any_client(
 
 
 def test_estimate_surfaces_model_knowledge_gate_verdict(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], shipped_defaults: None
 ) -> None:
     """A June-2026 window sits inside opus-5's documented training window:
     the estimate surfaces BLOCKED (zero API calls, zero spend). A window
@@ -1198,7 +1234,7 @@ def test_estimate_surfaces_model_knowledge_gate_verdict(
 
 
 def test_estimate_macro_digest_overhead_included_unless_disabled(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], shipped_defaults: None
 ) -> None:
     def total(extra: list[str]) -> float:
         rc = replay_cli.main(
@@ -1355,7 +1391,7 @@ def _backend_settings(tmp_path: Any, **overrides: Any) -> Any:
         "CLAUDE_CODE_BINARY": str(binary),
     }
     kwargs.update(overrides)
-    return RealSettings(**kwargs)
+    return isolated_settings(**kwargs)
 
 
 def _committee_harness(
@@ -1505,7 +1541,7 @@ def test_committee_api_backend_default_regression(
 def test_committee_claude_code_refuses_without_binary(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Any
 ) -> None:
-    settings = RealSettings(
+    settings = isolated_settings(
         ANTHROPIC_API_KEY="",
         RESEARCH_BACKEND="claude_code",
         CLAUDE_CODE_BINARY=str(tmp_path / "no-such-claude"),
@@ -1556,7 +1592,7 @@ def test_estimate_claude_code_prints_flat_rate_and_fable_cutoff(
     """claude_code estimate: backend named, NO dollar projection, the gate
     resolves the claude_code tiers' cutoffs — a March-2026 start clears
     fable/sonnet (cutoffs 2026-01-31 + 30d margin) and reads ALLOWED."""
-    settings = RealSettings(ANTHROPIC_API_KEY="", RESEARCH_BACKEND="claude_code")
+    settings = isolated_settings(ANTHROPIC_API_KEY="", RESEARCH_BACKEND="claude_code")
     monkeypatch.setattr("dynamo.config.settings.Settings", lambda: settings)
     rc = replay_cli.main(["estimate", "--start", "2026-03-16", "--end", "2026-03-27"])
     assert rc == 0
@@ -1578,7 +1614,7 @@ def test_estimate_claude_code_prints_flat_rate_and_fable_cutoff(
 def test_estimate_backend_flag_overrides_settings(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    settings = RealSettings(ANTHROPIC_API_KEY="", RESEARCH_BACKEND="api")
+    settings = isolated_settings(ANTHROPIC_API_KEY="", RESEARCH_BACKEND="api")
     monkeypatch.setattr("dynamo.config.settings.Settings", lambda: settings)
     rc = replay_cli.main(
         [
