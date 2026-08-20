@@ -268,6 +268,47 @@ def test_liquidity_and_price_filters_remove_untradable_names(
     assert filtered.filtered_out == 2
 
 
+def test_tradability_is_judged_on_pre_as_of_bars_only() -> None:
+    """The leak ``_assert_bounded`` structurally CANNOT catch.
+
+    That tripwire checks bar dates. The tradability filter is a second,
+    independent way the future can reach into a replay day: if the liquidity
+    and price test were computed over the whole panel instead of the slice,
+    a name that is untradable on day D and only becomes liquid weeks later
+    would enter the candidate pool on D. Every bar would still be correctly
+    dated, so the tripwire would pass and the flags would look legitimate.
+
+    So: a name that is a 40-cent, 200-share stock through D and a $50,
+    million-share stock afterwards must be filtered AT D, and admitted only
+    once the liquidity is genuinely in its past.
+    """
+    cutoff = date(2026, 6, 30)
+    days = pd.bdate_range("2026-01-01", "2026-12-31")
+    late_bloomer = pd.DataFrame(
+        {
+            "ts": days,
+            "close": [0.40 if d.date() <= cutoff else 50.0 for d in days],
+            "volume": [200 if d.date() <= cutoff else 1_000_000 for d in days],
+            "volume_source": "consolidated",
+        }
+    )
+    panel = SurveillancePanel({"LATE": late_bloomer}, days[-1].date())
+
+    at_cutoff = panel.slice(cutoff, min_dollar_volume=1_000_000.0, min_price=1.0)
+    assert "LATE" not in at_cutoff.symbols, (
+        "a name whose liquidity arrives after as_of must be untradable at as_of"
+    )
+    assert at_cutoff.filtered_out == 1
+
+    # Not vacuous: the same filter admits it once the volume is in its past.
+    # LIQUIDITY_WINDOW_SESSIONS trailing sessions must clear the floor, so
+    # step well past the cutoff rather than one day past it.
+    later = panel.slice(
+        cutoff + timedelta(days=180), min_dollar_volume=1_000_000.0, min_price=1.0
+    )
+    assert "LATE" in later.symbols
+
+
 # --------------------------------------------------------------------------
 # gates
 # --------------------------------------------------------------------------
