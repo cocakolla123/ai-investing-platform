@@ -35,7 +35,16 @@ Checks:
   downside AUC (0.519 vs 0.721) — powered a full 74-day campaign;
 - portfolio-mode source run (backtest-campaign Phase 3): ``source_run_id``
   set -> the run must exist, be committee-mode, cover the window, and carry
-  compatible ``universe_tiers`` (compared via its stored ``config_json``).
+  compatible ``universe_tiers`` (compared via its stored ``config_json``);
+- discovery (wide campaign), only when ``discovery_mode != 'off'``: tier-2
+  membership is non-empty at ``cfg.start``, and enough of it has bars at the
+  START of the detectors' 420-day lookback. Discovery over an empty or
+  history-less tier 2 reports zero promotions and looks identical to a run
+  that genuinely found nothing. The adjustment audit is ALSO widened to the
+  surveillance universe when discovery is on — an unadjusted split reads as a
+  crash and the detectors hunt crashes, so auditing only the traded core
+  while sweeping 11,500 names leaves the flagged set contaminated in exactly
+  the population promotions are drawn from.
 
 Zero LLM calls, zero writes: preflight only reads.
 """
@@ -56,6 +65,8 @@ if TYPE_CHECKING:
     import pandas as pd
 
 from dynamo.persistence import schema
+from dynamo.replay.discovery import DISCOVERY_LOOKBACK_DAYS
+from dynamo.replay.gateway import SURVEILLANCE_TIER
 from dynamo.replay.runner import (
     REGIME_MACRO_LOOKBACK_DAYS,
     RETURNS_LOOKBACK_DAYS,
@@ -144,6 +155,16 @@ class PreflightError(RuntimeError):
             "replay preflight failed "
             f"({len(report.errors)} error(s)):\n  " + "\n  ".join(lines)
         )
+
+
+#: Bar coverage the SURVEILLANCE universe needs before discovery is honest.
+#: Deliberately far below :data:`BAR_COVERAGE_MIN`: tier 2 is ~11,500 names
+#: assembled from a whole-market symbol list, and a real fraction of it is
+#: illiquid enough to have gaps. Discovery does not TRADE those names, it
+#: scans them, and a name with no bars simply never flags. What must not
+#: happen is discovery running against a universe that is mostly empty and
+#: reporting "0 promotions" as a finding rather than as a data failure.
+SURVEILLANCE_COVERAGE_MIN = 0.60
 
 
 class PreflightReads(Protocol):
@@ -481,6 +502,74 @@ def _check_bar_adjustment(
     )
 
 
+def _check_surveillance_universe(
+    reads: PreflightReads, cfg: ReplayConfig
+) -> tuple[PreflightCheck, list[str]]:
+    """Discovery has a universe to scan at ``cfg.start`` (wide campaign).
+
+    Without this, ``--discovery code`` over a database whose tier-2 seed was
+    never backdated runs 115 sessions of detectors over zero symbols, reports
+    zero promotions, and looks exactly like a run where discovery genuinely
+    found nothing. That is the same class of silent failure the universe and
+    bar-coverage checks already exist to prevent, one tier over.
+    """
+    symbols = reads.universe_symbols(cfg.start, (SURVEILLANCE_TIER,))
+    if not symbols:
+        return (
+            PreflightCheck(
+                "discovery_universe",
+                ERROR,
+                f"discovery_mode={cfg.discovery_mode!r} but tier-2 membership is "
+                f"EMPTY at {cfg.start} — the detectors would sweep nothing for "
+                "the whole run and report zero promotions as a finding. Run "
+                "`dynamo.cli.backfill universe-wide --backdate-from-bars` to "
+                "backdate the surveillance seed",
+            ),
+            [],
+        )
+    return (
+        PreflightCheck(
+            "discovery_universe",
+            OK,
+            f"{len(symbols)} tier-2 symbols active at {cfg.start}",
+        ),
+        symbols,
+    )
+
+
+def _check_surveillance_coverage(
+    reads: PreflightReads, symbols: list[str], cfg: ReplayConfig
+) -> PreflightCheck:
+    """Enough of the surveillance universe has bars at the START of the
+    detector lookback, not just at ``cfg.start``.
+
+    The window that matters is ``start - 420d``: ``range_break`` reads 252
+    prior sessions and ``range_bound`` refuses to fire below 131. A universe
+    with bars only from ``cfg.start`` onward produces a run whose first
+    months are structurally incapable of flagging, silently.
+    """
+    center = cfg.start - timedelta(days=DISCOVERY_LOOKBACK_DAYS)
+    lo, hi = session_window(center)
+    present = reads.symbols_with_bars(symbols, lo, hi)
+    covered = sum(1 for s in symbols if s in present)
+    coverage = covered / len(symbols) if symbols else 0.0
+    detail = (
+        f"{covered}/{len(symbols)} tier-2 symbols ({coverage:.1%}) have bars "
+        f"within [{lo}, {hi}] — the start of the detectors' "
+        f"{DISCOVERY_LOOKBACK_DAYS}d lookback"
+    )
+    if coverage < SURVEILLANCE_COVERAGE_MIN:
+        return PreflightCheck(
+            "discovery_bar_coverage",
+            ERROR,
+            f"{detail} — below the {SURVEILLANCE_COVERAGE_MIN:.0%} floor. "
+            "range_break needs 252 prior sessions and range_bound will not "
+            "fire below 131, so the run's early months could not flag at all. "
+            "Backfill bars for the wide universe first",
+        )
+    return PreflightCheck("discovery_bar_coverage", OK, detail)
+
+
 def _check_macro(reads: PreflightReads, cfg: ReplayConfig) -> PreflightCheck:
     required_reach = cfg.start - timedelta(days=REGIME_MACRO_LOOKBACK_DAYS)
     first = reads.macro_first_observation(REQUIRED_MACRO_SERIES, cfg.start)
@@ -703,6 +792,19 @@ def run_preflight(
 
     universe_check, symbols = _check_universe(reads, config)
     checks.append(universe_check)
+    # Discovery widens what the run trades, so it widens what has to be
+    # checked: the adjustment audit below runs over the TRADED core plus the
+    # surveillance universe when discovery is on. An unadjusted split reads
+    # as a crash and the detectors hunt crashes — auditing only the 55-name
+    # core while sweeping 11,500 would leave the flagged set contaminated in
+    # exactly the population discovery draws its promotions from.
+    audited = list(symbols)
+    if config.discovery_mode != "off":
+        surveillance_check, tier2 = _check_surveillance_universe(reads, config)
+        checks.append(surveillance_check)
+        if tier2:
+            checks.append(_check_surveillance_coverage(reads, tier2, config))
+            audited = sorted(set(audited) | set(tier2))
     if symbols:
         checks.append(_check_bar_coverage(reads, symbols, config.start, "start"))
         checks.append(
@@ -713,7 +815,7 @@ def run_preflight(
                 "lookback",
             )
         )
-        checks.append(_check_bar_adjustment(reads, symbols, config))
+        checks.append(_check_bar_adjustment(reads, audited, config))
     checks.append(_check_macro(reads, config))
     checks.append(_check_quant_model(config, require_shipping_bundle))
     checks.append(_check_source_run(reads, config))

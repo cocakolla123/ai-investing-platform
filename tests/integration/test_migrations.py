@@ -20,30 +20,45 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
-def test_revision_chain_is_linear_through_0020() -> None:
+def test_revision_chain_is_linear_through_the_head() -> None:
+    """One chain, 0001 -> ... -> head, every step numerically adjacent.
+
+    Stated generically rather than pinned to a revision number. Two agents
+    landing a migration in the same session is exactly how a branched history
+    happens, and a test that has to be RENAMED to notice is a test that gets
+    renamed without being read.
+    """
     modules = {m.revision: m for m in (_load(p) for p in sorted(VERSIONS.glob("0*.py")))}
-    assert "0020" in modules, "0020_short_interest migration missing"
-    # Single linear chain 0001 -> ... -> head.
     down = {rev: m.down_revision for rev, m in modules.items()}
     assert down["0001"] is None
     heads = set(down) - {d for d in down.values() if d is not None}
-    assert heads == {"0020"}, f"expected 0020 as the single head, got {heads}"
-    assert down["0005"] == "0004"
-    assert down["0006"] == "0005"
-    assert down["0007"] == "0006"
-    assert down["0008"] == "0007"
-    assert down["0009"] == "0008"
-    assert down["0010"] == "0009"
-    assert down["0011"] == "0010"
-    assert down["0012"] == "0011"
-    assert down["0013"] == "0012"
-    assert down["0014"] == "0013"
-    assert down["0015"] == "0014"
-    assert down["0016"] == "0015"
-    assert down["0017"] == "0016"
-    assert down["0018"] == "0017"
-    assert down["0019"] == "0018"
-    assert down["0020"] == "0019"
+    assert len(heads) == 1, f"expected a single head, got {sorted(heads)}"
+    assert heads == {max(modules)}, "the head is not the highest revision"
+    parents = [d for d in down.values() if d is not None]
+    assert len(parents) == len(set(parents)), "two revisions claim the same parent"
+    for rev in sorted(modules):
+        if rev != "0001":
+            assert down[rev] == f"{int(rev) - 1:04d}"
+
+
+def test_0021_targets_the_replay_flags_table() -> None:
+    """The discovery firewall as a schema fact: replay-scoped rows with a
+    deterministic id, so a run can record what its detectors found without
+    ever writing the live ``surveillance_flags`` table that feeds production
+    triage — and, through triage's promotions, every future replay's
+    point-in-time universe."""
+    from dynamo.persistence import schema
+
+    assert "replay_flags" in schema.metadata.tables
+    table = schema.metadata.tables["replay_flags"]
+    assert [c.name for c in table.primary_key.columns] == ["id"]
+    assert table.c.run_id.index
+    for col in ("run_id", "as_of", "symbol", "detector", "severity", "promoted"):
+        assert not table.c[col].nullable
+
+    module = _load(VERSIONS / "0021_replay_flags.py")
+    assert module.TABLE == "replay_flags"
+    assert module.revision == "0021" and module.down_revision == "0020"
 
 
 def test_0020_targets_short_interest_with_both_dates() -> None:

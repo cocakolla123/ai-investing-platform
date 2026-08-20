@@ -672,7 +672,11 @@ def test_dropping_the_where_clause_raises(engine, gateway) -> None:  # type: ign
 
     repo = _repo(engine)
     repo.upsert_universe_membership(
-        [UniverseMembership(symbol="TOMORROW", tier=Tier.SURVEILLANCE, valid_from=AFTER, reason="s")]
+        [
+            UniverseMembership(
+                symbol="TOMORROW", tier=Tier.SURVEILLANCE, valid_from=AFTER, reason="s"
+            )
+        ]
     )
     repo.upsert_bars(
         [

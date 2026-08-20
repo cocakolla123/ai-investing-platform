@@ -14,6 +14,8 @@ import pandas as pd
 import pytest
 
 from dynamo.replay import preflight as pf
+from dynamo.replay.discovery import DISCOVERY_LOOKBACK_DAYS
+from dynamo.replay.gateway import SURVEILLANCE_TIER
 from dynamo.replay.runner import (
     REGIME_MACRO_LOOKBACK_DAYS,
     RETURNS_LOOKBACK_DAYS,
@@ -26,6 +28,10 @@ LOOKBACK = START - timedelta(days=RETURNS_LOOKBACK_DAYS)
 MACRO_REACH = START - timedelta(days=REGIME_MACRO_LOOKBACK_DAYS)
 
 SYMBOLS = [f"S{i:02d}" for i in range(20)]
+# The tier-2 surveillance universe, disjoint from the traded core so a check
+# reading the wrong tier is visible rather than coincidentally right.
+TIER2_SYMBOLS = [f"W{i:02d}" for i in range(50)]
+DISCOVERY_REACH = START - timedelta(days=DISCOVERY_LOOKBACK_DAYS)
 
 
 @dataclass
@@ -33,6 +39,10 @@ class FakeReads:
     """In-memory PreflightReads: healthy by default, degradable per test."""
 
     universe: list[str] = field(default_factory=lambda: list(SYMBOLS))
+    # Tier-2 surveillance universe, queried only when discovery is on.
+    surveillance: list[str] = field(default_factory=lambda: list(TIER2_SYMBOLS))
+    tier_queries: list[tuple[int, ...]] = field(default_factory=list)
+    audit_symbols: list[list[str]] = field(default_factory=list)
     bars_missing_at: dict[date, set[str]] = field(default_factory=dict)
     macro_first: dict[str, date | None] = field(
         default_factory=lambda: {
@@ -48,6 +58,9 @@ class FakeReads:
     audit_queries: list[tuple[date, date]] = field(default_factory=list)
 
     def universe_symbols(self, as_of: date, tiers: tuple[int, ...]) -> list[str]:
+        self.tier_queries.append(tuple(tiers))
+        if tuple(tiers) == (SURVEILLANCE_TIER,):
+            return list(self.surveillance)
         return list(self.universe)
 
     def symbols_with_bars(
@@ -72,6 +85,7 @@ class FakeReads:
         self, symbols: Sequence[str], start: date, end: date
     ) -> pd.DataFrame:
         self.audit_queries.append((start, end))
+        self.audit_symbols.append(list(symbols))
         if self.audit_bars is not None:
             return self.audit_bars
         return adjusted_series(SYMBOLS[0])
@@ -583,3 +597,75 @@ def test_adj_close_that_is_itself_unadjusted_still_fails() -> None:
     with pytest.raises(pf.PreflightError) as exc:
         pf.run_preflight(FakeReads(audit_bars=frame), config())
     assert "bar_adjustment" in errors_of(exc.value)
+
+
+# -- discovery (wide-campaign discovery layer) ------------------------------
+
+
+def _discovery_config(**overrides: Any) -> ReplayConfig:
+    return config(**{"discovery_mode": "code", **overrides})
+
+
+def test_discovery_off_asks_nothing_about_tier_2() -> None:
+    """The control arm must not acquire new ways to fail."""
+    reads = FakeReads()
+    report = pf.run_preflight(reads, _discovery_config(discovery_mode="off"))
+    names = [c.name for c in report.checks]
+    assert "discovery_universe" not in names
+    assert "discovery_bar_coverage" not in names
+    assert (SURVEILLANCE_TIER,) not in reads.tier_queries
+
+
+def test_discovery_on_checks_the_surveillance_universe() -> None:
+    reads = FakeReads()
+    report = pf.run_preflight(reads, _discovery_config())
+    checks = {c.name: c for c in report.checks}
+    assert checks["discovery_universe"].status == pf.OK
+    assert str(len(TIER2_SYMBOLS)) in checks["discovery_universe"].detail
+    assert checks["discovery_bar_coverage"].status == pf.OK
+    assert (SURVEILLANCE_TIER,) in reads.tier_queries
+
+
+def test_an_empty_tier_2_refuses_the_run() -> None:
+    """The silent failure this prevents: 115 sessions of detectors over zero
+    symbols, reporting zero promotions as though discovery found nothing."""
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(FakeReads(surveillance=[]), _discovery_config())
+    detail = errors_of(exc.value)["discovery_universe"]
+    assert "EMPTY" in detail
+    assert "backdate" in detail
+
+
+def test_tier_2_without_lookback_history_refuses_the_run() -> None:
+    """Coverage is measured at start - 420d, not at start: range_break reads
+    252 prior sessions and range_bound will not fire below 131, so a universe
+    with bars only from the start date cannot flag for months."""
+    reads = FakeReads(bars_missing_at={DISCOVERY_REACH: set(TIER2_SYMBOLS[:40])})
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, _discovery_config())
+    detail = errors_of(exc.value)["discovery_bar_coverage"]
+    assert "10/50" in detail
+    assert f"{DISCOVERY_LOOKBACK_DAYS}d lookback" in detail
+
+
+def test_a_partly_covered_tier_2_still_passes() -> None:
+    """Tier 2 is a whole-market list; a real fraction of it is illiquid enough
+    to have gaps, and discovery scans those names rather than trading them.
+    The floor is deliberately well below the traded core's 95%."""
+    thin = set(TIER2_SYMBOLS[: int(len(TIER2_SYMBOLS) * 0.3)])
+    reads = FakeReads(bars_missing_at={DISCOVERY_REACH: thin})
+    report = pf.run_preflight(reads, _discovery_config())
+    assert report.passed
+
+
+def test_the_adjustment_audit_widens_to_the_surveillance_universe() -> None:
+    """An unadjusted split reads as a crash and the detectors hunt crashes.
+    Auditing only the 55-name core while sweeping 11,500 would leave the
+    flagged set contaminated in exactly the population promotions come from."""
+    narrow = FakeReads()
+    pf.run_preflight(narrow, config())
+    assert set(narrow.audit_symbols[0]) == set(SYMBOLS)
+
+    wide = FakeReads()
+    pf.run_preflight(wide, _discovery_config())
+    assert set(wide.audit_symbols[0]) == set(SYMBOLS) | set(TIER2_SYMBOLS)
