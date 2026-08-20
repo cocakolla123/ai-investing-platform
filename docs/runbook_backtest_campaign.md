@@ -1,5 +1,13 @@
 # Backtest Campaign Runbook — 6-Month Quant Campaign + Clean-Window Committee Replay
 
+> **SUPERSEDED (2026-08-20) by [`runbook_wide_campaign.md`](runbook_wide_campaign.md).**
+> Do not execute this runbook. It targets the **55-symbol** universe with **no discovery
+> layer**, which was the whole defect the control run `replay-e5a49317bbee` exposed
+> (see `campaign_findings_and_fix_plan.md`). Three of its premises are now false:
+> the universe is 11,505 instruments, not 55; discovery runs inside replay; and the arbiter
+> is Sonnet-5, so the clean window opens **2026-03-03**, not 2026-07-01.
+> Kept for provenance — the control run's config is reproducible from it.
+
 **Status:** Phase 6 deliverable (final). Phases 0–5 are merged (crypto sleeve, backfill CLI,
 preflight, quant training, portfolio mode + realism, anti-leakage, persistence/reporting).
 Free backfills in step 2 were **executed 2026-08-17** — results recorded inline.
