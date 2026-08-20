@@ -586,6 +586,27 @@ class MarketDataRepository:
             result = conn.execute(stmt)
         return _reported_rowcount(result.rowcount, len(rows))
 
+    def seed_instrument_industries(self, industries: Mapping[str, str]) -> int:
+        """Upsert ``instruments.industry`` (mirrors :meth:`seed_instrument_sectors`).
+
+        Additive in the same way: only ``industry`` is written, so the CIK,
+        sector and industry seeds compose in any order.
+        """
+        if not industries:
+            return 0
+        t = schema.instruments
+        rows = [
+            {"symbol": symbol, "name": symbol, "industry": industry}
+            for symbol, industry in sorted(industries.items())
+        ]
+        stmt = pg_insert(t).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["symbol"], set_={"industry": stmt.excluded.industry}
+        )
+        with self._engine.begin() as conn:
+            result = conn.execute(stmt)
+        return _reported_rowcount(result.rowcount, len(rows))
+
     def close_membership(
         self,
         symbol: str,
