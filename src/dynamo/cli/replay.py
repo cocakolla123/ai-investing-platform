@@ -254,6 +254,55 @@ def _build_parser() -> argparse.ArgumentParser:
         default=5,
         help="max staleness of persisted quant scores before the bundle rescoring (default 5)",
     )
+    # --- discovery layer (wide-campaign design) ---------------------------
+    # Every one of these is part of config_hash, so each setting is its own
+    # reproducible run id — which is the point: `--discovery code` vs
+    # `--discovery off` over the same window is the A/B the campaign exists
+    # to measure, and the two arms must never be able to collide.
+    run.add_argument(
+        "--discovery",
+        choices=("off", "code", "haiku"),
+        default="off",
+        dest="discovery_mode",
+        help=(
+            "'off' = today's static tier list (the control arm, builds no "
+            "discovery machinery at all); 'code' = detector sweep + "
+            "deterministic severity-ranked promotion, $0 and zero LLM calls; "
+            "'haiku' = the live triage decision replayed against "
+            "claude-haiku-4-5 (COMMITTEE MODE ONLY — quant and portfolio "
+            "runs must never reach an LLM)"
+        ),
+    )
+    run.add_argument(
+        "--discovery-min-dollar-volume",
+        type=float,
+        default=None,
+        help=(
+            "pre-filter: minimum CONSOLIDATED-EQUIVALENT median daily dollar "
+            "volume a tier-2 name needs before the detectors see it (default "
+            "1e6; 0 = off). The free feed is IEX-only for ~11,200 of ~11,500 "
+            "names at ~2-3%% of the tape, so filtering on OBSERVED volume "
+            "would keep essentially nothing"
+        ),
+    )
+    run.add_argument(
+        "--discovery-min-price",
+        type=float,
+        default=None,
+        help="pre-filter: minimum last close (default 1.0; 0 = off)",
+    )
+    run.add_argument(
+        "--discovery-promotions-per-day",
+        type=int,
+        default=None,
+        help="cap on promotions per session (default 60)",
+    )
+    run.add_argument(
+        "--discovery-promotion-days",
+        type=int,
+        default=None,
+        help="sessions a promoted name stays in universe_D (default 30)",
+    )
     run.add_argument(
         "--code-version",
         default="",
@@ -449,6 +498,98 @@ def _selection_kwargs(args: argparse.Namespace, settings: Any) -> dict[str, Any]
     }
 
 
+def _discovery_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    """``ReplayConfig`` discovery fields — the CLI flag when given, else the
+    model default. All in ``config_hash`` (see the flag help)."""
+    defaults: dict[str, Any] = {}
+    mapping = {
+        "discovery_min_dollar_volume": "discovery_min_dollar_volume",
+        "discovery_min_price": "discovery_min_price",
+        "discovery_promotions_per_day": "discovery_promotions_per_day",
+        "discovery_promotion_days": "discovery_promotion_days",
+    }
+    out: dict[str, Any] = {"discovery_mode": getattr(args, "discovery_mode", "off")}
+    for field, flag in mapping.items():
+        value = getattr(args, flag, None)
+        if value is not None:
+            out[field] = value
+    return {**defaults, **out}
+
+
+def _build_discovery(engine: Any, config: Any, repo: Any, model: Any = None) -> Any:
+    """The composition root for discovery: ``None`` when the mode is 'off'.
+
+    Everything the driver needs is resolved here and nowhere else — the
+    runner and the committee driver take a structural port and never learn
+    whether discovery exists.
+
+    Two gateways are built, both at fixed dates and both point-in-time:
+
+    - ``cfg.start`` and ``cfg.end`` each contribute their tier-2 membership,
+      so a name that was a member at the start and left before the end still
+      has bars in the panel (the per-DAY membership check inside
+      ``ReplayDiscovery.run_day`` is what decides eligibility);
+    - the panel loads through the ``cfg.end`` gateway, in ONE query covering
+      the window plus the detectors' 420-day lookback. Loading once is the
+      whole point (measured 9s / 3.09M rows per read); the per-day
+      point-in-time bound is ``SurveillancePanel.slice``, not this read.
+    """
+    from dynamo.data.universe import default_sector_etf_map
+    from dynamo.replay.discovery import (
+        DISCOVERY_LOOKBACK_DAYS,
+        ReplayDiscovery,
+        SurveillancePanel,
+    )
+    from dynamo.replay.gateway import HistoricalDataGateway
+
+    if config.discovery_mode == "off":
+        return None
+
+    gw_start = HistoricalDataGateway(engine, config.start)
+    gw_end = HistoricalDataGateway(engine, config.end)
+    members = sorted(
+        set(gw_start.surveillance_universe()) | set(gw_end.surveillance_universe())
+    )
+    sectors = gw_end.sectors(members)
+    sector_etf_map = default_sector_etf_map(sectors)
+    # The sector ETFs must be IN the panel or rel_strength has no benchmark
+    # to compute an excess return against and silently never fires.
+    symbols = sorted(set(members) | set(sector_etf_map.values()))
+    span_days = (config.end - config.start).days
+    print(
+        f"discovery: loading the surveillance panel for {len(symbols)} symbols "
+        f"over [{config.start} - {DISCOVERY_LOOKBACK_DAYS}d, {config.end}] "
+        "(one query)"
+    )
+    panel = SurveillancePanel.load(gw_end, symbols, span_days=span_days)
+    print(f"discovery: panel holds {len(panel)} symbols with bars")
+
+    prompt_text, schema = "", {}
+    if config.discovery_mode == "haiku":
+        from dynamo.llm.schemas import TRIAGE_SCHEMA
+        from dynamo.research.prompt_loader import load_prompt
+
+        prompt_text = load_prompt("triage").system
+        schema = TRIAGE_SCHEMA
+
+    return ReplayDiscovery(
+        panel,
+        run_id=config.run_id,
+        mode=config.discovery_mode,
+        promotions_per_day=config.discovery_promotions_per_day,
+        promotion_days=config.discovery_promotion_days,
+        min_dollar_volume=config.discovery_min_dollar_volume,
+        min_price=config.discovery_min_price,
+        cooldown_sessions=config.shortlist_cooldown_sessions,
+        sectors=sectors,
+        sector_etf_map=sector_etf_map,
+        model=model,
+        system_prompt=prompt_text,
+        schema=schema,
+        flag_sink=repo,
+    )
+
+
 def _preflight_extras(
     engine: Any,
     config: Any,
@@ -493,6 +634,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # committee run's PERSISTED verdicts (ReplayRepository.verdicts_for).
     if args.mode == "committee":
         return _cmd_run_committee(args)
+    if getattr(args, "discovery_mode", "off") == "haiku":
+        # The token firewall is structural, not a promise: this function
+        # imports no LLM module, so it CANNOT make the triage calls the
+        # haiku gate needs. Refuse loudly rather than silently degrade to
+        # the code gate and label the run as though it used a model.
+        print(
+            "--discovery haiku is committee-mode only: quant and portfolio "
+            "runs make ZERO LLM calls by construction. Use --discovery code "
+            "for the free deterministic arm, or --mode committee.",
+            file=sys.stderr,
+        )
+        return 2
     from dynamo.config.settings import Settings
     from dynamo.persistence.repositories.experience import ExperienceRepository
     from dynamo.persistence.repositories.replay import ReplayRepository
@@ -518,6 +671,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         generate_macro_digest=not args.no_macro_digest,
         within_run_learning=not args.no_within_run_learning,
         ballast_symbol=args.ballast,
+        **_discovery_kwargs(args),
         code_version=args.code_version,
     )
     extras = _preflight_extras(
@@ -529,6 +683,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if extras is None:
         return 1
     replay_repo = ReplayRepository(engine)
+    discovery = _build_discovery(engine, config, replay_repo)
     runner = ReplayRunner(
         gateway_factory=lambda d: HistoricalDataGateway(engine, d),
         experience_repo=ExperienceRepository(engine),
@@ -537,6 +692,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         run_config_extras=extras,
         bundle_factory=_bundle_factory(engine),
         verdict_source=replay_repo.verdicts_for if args.mode == "portfolio" else None,
+        discovery=discovery,
     )
     print(f"replay {config.run_id} ({config.start} -> {config.end}, mode={config.mode})")
     result = runner.run(progress=print)
@@ -559,6 +715,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
             f"equity:       {start_eq:,.2f} -> {end_eq:,.2f} "
             f"({(end_eq / start_eq - 1.0) * 100.0:+.2f}%)",
             f"max drawdown: {max_dd * 100.0:.2f}%",
+        ]
+    if discovery is not None:
+        stats = discovery.summary()
+        summary += [
+            f"discovery:    mode={stats['mode']} "
+            f"flags={stats['flags_total']} ({stats['flags_per_session']}/session)",
+            f"promotions:   {stats['promotions_total']} "
+            f"({stats['distinct_promoted']} distinct names), "
+            f"mean universe {stats['mean_universe']}",
         ]
     print("\n".join(summary))
     return 0
@@ -684,6 +849,7 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         quant_model_version=args.quant_model_version,
         generate_macro_digest=not args.no_macro_digest,
         within_run_learning=not args.no_within_run_learning,
+        **_discovery_kwargs(args),
         code_version=args.code_version,
     )
     extras = _preflight_extras(
@@ -728,9 +894,19 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         settings.claude_monthly_budget_usd,
     )
     try:
+        research_model = make_model(meter)
+        # The haiku gate calls the SAME client the committee spends through,
+        # so its triage calls are metered against the same run cap — a
+        # discovery arm cannot quietly spend outside the budget.
+        discovery = _build_discovery(
+            engine,
+            config,
+            run_repo,
+            model=research_model if config.discovery_mode == "haiku" else None,
+        )
         replay = CommitteeReplay(
             gateway_factory=lambda d: HistoricalDataGateway(engine, d),
-            research_model=make_model(meter),
+            research_model=research_model,
             budget=budget,
             run_repo=run_repo,
             experience_repo=ExperienceRepository(engine),
@@ -743,6 +919,7 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
             cutoff_margin_days=settings.replay_cutoff_margin_days,
             resume_skip_days=done_days,
             prior_dives=prior_dives,
+            discovery=discovery,
         )
     except ModelKnowledgeError as exc:
         print(f"model knowledge gate BLOCKED the run ($0 spent):\n  {exc}")
@@ -766,17 +943,24 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
             "fill them in."
         )
     result = replay.run(progress=print)
-    print(
-        "\n".join(
-            [
-                f"run:          {result.run_id} [{result.status}]",
-                f"sessions:     {len(result.sessions)}",
-                f"deep dives:   {len(result.deep_dives)} (-> replay_verdicts)",
-                f"experiences:  {len(result.experiences)} resolved (source='replay')",
-                f"spend:        ${result.spent_usd:.2f} of ${result.cap_usd:.2f} cap",
-            ]
-        )
-    )
+    lines = [
+        f"run:          {result.run_id} [{result.status}]",
+        f"sessions:     {len(result.sessions)}",
+        f"deep dives:   {len(result.deep_dives)} (-> replay_verdicts)",
+        f"experiences:  {len(result.experiences)} resolved (source='replay')",
+        f"spend:        ${result.spent_usd:.2f} of ${result.cap_usd:.2f} cap",
+    ]
+    if discovery is not None:
+        stats = discovery.summary()
+        lines += [
+            f"discovery:    mode={stats['mode']} "
+            f"flags={stats['flags_total']} ({stats['flags_per_session']}/session), "
+            f"triage calls {stats['llm_calls']}",
+            f"promotions:   {stats['promotions_total']} "
+            f"({stats['distinct_promoted']} distinct names), "
+            f"mean universe {stats['mean_universe']}",
+        ]
+    print("\n".join(lines))
     return 0 if result.status == "completed" else 3
 
 

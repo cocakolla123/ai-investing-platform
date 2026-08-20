@@ -66,6 +66,7 @@ from dynamo.domain.ports import ResearchModel
 from dynamo.learning.experience import TradeFacts, build_experience
 from dynamo.replay.budget import ReplayBudget, estimate_batch_cost
 from dynamo.replay.runner import (
+    DiscoveryDriver,
     ExperienceSink,
     ReplayConfig,
     _day_prices,
@@ -257,6 +258,7 @@ def committee_shortlist(
     day: date,
     bundle: ModelBundle | None = None,
     history: SessionHistory = (),
+    discovery: DiscoveryDriver | None = None,
 ) -> tuple[dict[str, QuantScore], list[str]]:
     """(all quant scores, deep-dive shortlist) for day D.
 
@@ -280,8 +282,18 @@ def committee_shortlist(
     seeds it from persisted ``replay_verdicts``, so a resumed run's cooldown
     is continuous. Deterministic throughout: same config + same data => same
     slate.
+
+    ``discovery`` (wide-campaign discovery layer, ``None`` when
+    ``discovery_mode='off'``) widens the universe BEFORE scoring: the day's
+    detector sweep promotes names outside the traded core, and quant scoring
+    — the expensive stage, ~4s + 0.135s per symbol — runs over core PLUS
+    promotions, never over all of tier 2. That scoping is the entire reason
+    discovery is affordable; without it the feature build alone is ~50 hours
+    for a 115-session window.
     """
     universe = gw.universe(config.universe_tiers)
+    if discovery is not None:
+        universe = discovery.universe_for(gw, day, universe)
     scores = quant_scores_for(
         gw, universe, day, config.quant_score_max_age_days, bundle=bundle
     )
@@ -591,9 +603,15 @@ class CommitteeReplay:
         cutoff_margin_days: int = DEFAULT_CUTOFF_MARGIN_DAYS,
         resume_skip_days: Collection[date] = (),
         prior_dives: Mapping[date, Sequence[str]] | None = None,
+        discovery: DiscoveryDriver | None = None,
     ) -> None:
         if config.mode != "committee":
             raise ValueError(f"CommitteeReplay requires mode='committee', got {config.mode!r}")
+        if discovery is not None and config.discovery_mode == "off":
+            raise ValueError(
+                "a discovery driver was injected but discovery_mode is 'off' — "
+                "the control arm must build no discovery machinery at all"
+            )
         # Model knowledge gate (Phase 4): resolve every tier model's
         # documented training-data cutoff BEFORE anything can spend. A
         # blocked window refuses unless explicitly acknowledged; either way
@@ -621,6 +639,7 @@ class CommitteeReplay:
 
             schemas = SCHEMAS
         self._gateway_factory = gateway_factory
+        self._discovery = discovery
         self._model = research_model
         self._budget = budget
         self._runs = run_repo
@@ -718,7 +737,12 @@ class CommitteeReplay:
                     for session in sessions[:day_index]
                 )
                 scores, shortlist = committee_shortlist(
-                    gw, cfg, day, bundle=self._bundle, history=history
+                    gw,
+                    cfg,
+                    day,
+                    bundle=self._bundle,
+                    history=history,
+                    discovery=self._discovery,
                 )
                 if not shortlist:
                     if progress is not None:

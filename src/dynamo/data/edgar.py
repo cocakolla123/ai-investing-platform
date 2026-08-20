@@ -152,6 +152,109 @@ class EdgarClient:
                 items=tuple(str(i) for i in source.get("items", [])),
             )
 
+    # -- history sweeps (dynamo.cli.backfill_events) -----------------------
+    #
+    # The two methods below exist because the poller's shape does not survive
+    # a backfill:
+    #
+    # * ``recent_filings`` takes the FIRST document of each accession, so an
+    #   8-K whose exhibit sorted first is stored with ``form_type='EX-99.1'``
+    #   and ``filing_event`` never sees it. Over a 30-minute poll that is
+    #   noise; over months of history it is most of the table. The sweeps read
+    #   ``root_forms`` (the FORM the document belongs to) instead.
+    # * ``insider_transactions`` fetches the ownership XML for every Form 4 in
+    #   the window, capped at ``max_insider_filings``. Market-wide that is
+    #   ~1,000 filings a day; ``ciks`` restricts the fetch to the universe
+    #   being backfilled BEFORE any XML is downloaded, which is the difference
+    #   between a 20-minute run and a 3-hour one.
+    #
+    # Both take an explicit ``[start, end]`` day range so the caller can chunk
+    # (the full-text index caps pagination at ``max_pages`` * 100 hits, and a
+    # single day of Form 4s already runs close to 1,000).
+
+    def _range_params(self, form: str, start: date, end: date) -> dict[str, Any]:
+        return {
+            "q": '""',
+            "forms": form,
+            "dateRange": "custom",
+            "startdt": start.isoformat(),
+            "enddt": end.isoformat(),
+        }
+
+    def filings_in_range(
+        self, form: str, start: date, end: date
+    ) -> Iterator[Filing]:
+        """Filings of ONE root form filed in ``[start, end]``, one per accession.
+
+        ``form_type`` comes from ``root_forms`` so an 8-K stays an 8-K
+        whichever of its documents the index returned first, and ``items``
+        carries the 8-K item codes ``filing_event`` keys on.
+        """
+        seen: set[str] = set()
+        for hit in self._search_hits(self._range_params(form, start, end)):
+            source = hit.get("_source", {})
+            adsh = source.get("adsh")
+            ciks = source.get("ciks") or []
+            file_date = source.get("file_date")
+            if not adsh or not ciks or not file_date or adsh in seen:
+                continue
+            seen.add(adsh)
+            root = (source.get("root_forms") or [""])[0] or source.get("file_type") or form
+            cik = str(int(ciks[0]))
+            accession_nodash = adsh.replace("-", "")
+            yield Filing(
+                accession_no=adsh,
+                cik=cik,
+                symbol=self._hit_symbol(source),
+                form_type=str(root),
+                filed_at=_to_dt(file_date),
+                period=None,
+                url=f"{self._archives_base}/{cik}/{accession_nodash}/{adsh}-index.htm",
+                items=tuple(str(i) for i in source.get("items", [])),
+            )
+
+    def insider_transactions_in_range(
+        self,
+        start: date,
+        end: date,
+        *,
+        ciks: Iterable[str] | None = None,
+    ) -> Iterator[InsiderTx]:
+        """Form 4 non-derivative transactions filed in ``[start, end]``.
+
+        ``ciks`` (unpadded, as EDGAR's index reports them after ``int()``)
+        restricts which filings are downloaded at all: a hit is fetched only
+        when one of its CIKs — issuer or reporting owner — is in the set.
+        ``None`` means every filing in the window, which is what the nightly
+        asset wants and what a backfill almost never does.
+
+        No ``max_insider_filings`` cap here: the caller chunks by day and is
+        the one that decides how much history it is willing to pay for.
+        """
+        wanted = None if ciks is None else {str(c).lstrip("0") for c in ciks}
+        for hit in self._search_hits(self._range_params("4", start, end)):
+            source = hit.get("_source", {})
+            adsh = source.get("adsh")
+            hit_ciks = source.get("ciks") or []
+            doc_id = hit.get("_id", "")
+            filename = doc_id.split(":", 1)[1] if ":" in doc_id else ""
+            if not adsh or not hit_ciks or not filename.endswith(".xml"):
+                continue
+            if wanted is not None and not any(
+                str(c).lstrip("0") in wanted for c in hit_ciks
+            ):
+                continue
+            cik = str(int(hit_ciks[0]))
+            url = f"{self._archives_base}/{cik}/{adsh.replace('-', '')}/{filename}"
+            self._bucket.acquire()
+            try:
+                resp = self._client.get(url, headers=self._headers)
+                resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                log.warning("edgar_form4_fetch_failed", url=url, error=str(exc))
+                continue
+            yield from self._parse_form4(adsh, resp.text, source.get("file_date"))
+
     def company_facts(self, cik: str) -> Iterable[XbrlFact]:
         """XBRL us-gaap facts, keyed by ``filed`` — never restated backwards."""
         padded = f"{int(cik):010d}"

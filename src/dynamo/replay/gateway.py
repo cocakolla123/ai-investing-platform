@@ -25,7 +25,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, Text, bindparam, func, select
+from sqlalchemy.dialects.postgresql import ARRAY
 
 from dynamo.domain.models.learning import DecisionExperience, JournalEntry, JournalKind
 from dynamo.domain.models.market import Instrument, NewsItem
@@ -53,6 +54,9 @@ FEATURE_NEWS_LOOKBACK_DAYS = 365
 FEATURE_SHORT_INTEREST_LOOKBACK_DAYS = 120
 EARNINGS_LOOKAHEAD_DAYS = 30
 TRANSCRIPT_LOOKBACK_DAYS = 30  # live dossier window parity (assets/research.py)
+#: The surveillance universe's tier. Tier 2 is the wide watch list the
+#: detectors sweep; tier 1/3 are the traded core and its promotions.
+SURVEILLANCE_TIER = 2
 
 # Timestamp-like columns the runtime tripwire sweeps in every frame that
 # passes through :meth:`HistoricalDataGateway._read_df` (backtest-campaign
@@ -71,6 +75,11 @@ _TS_LIKE_COLUMNS = (
     # the settlement date it describes (see dynamo.data.finra).
     "publication_date",
     "event_date",
+    # universe_membership: when the platform ADDED a symbol to a tier. A
+    # membership starting after as_of was not knowable at as_of — reading it
+    # would hand replay a survivorship-tainted universe (the wide-campaign
+    # discovery layer reads this column through ``surveillance_universe``).
+    "valid_from",
 )
 
 
@@ -115,6 +124,79 @@ class HistoricalDataGateway:
             self.as_of,
         )
         return self._check_frame(frame, source="bars")
+
+    # -- surveillance (wide-campaign discovery layer) ----------------------
+
+    def surveillance_universe(self) -> list[str]:
+        """Tier-2 membership symbols active at ``as_of``, sorted.
+
+        Same survivorship contract as :meth:`universe` (``valid_from <=
+        as_of <= valid_to``) but read through :meth:`_read_df`, so the
+        runtime tripwire sweeps ``valid_from`` and a regressed WHERE clause
+        raises :class:`ReplayLeakageError` instead of quietly handing
+        discovery a universe that did not exist yet.
+
+        Tier 2 is the WIDE list — ~11,500 names — that the detectors sweep.
+        It is deliberately separate from :meth:`universe`, which serves the
+        traded core (tiers 1/3): discovery's whole job is to find names
+        outside the traded list, and a method that returned both would make
+        the promotion measurement meaningless.
+        """
+        m = schema.universe_membership
+        frame = self._read_df(
+            select(m.c.symbol, m.c.valid_from, m.c.valid_to).where(
+                m.c.tier == SURVEILLANCE_TIER,
+                m.c.valid_from <= self.as_of,
+                (m.c.valid_to.is_(None)) | (m.c.valid_to >= self.as_of),
+            ),
+            # valid_to is an END bound, not a knowledge time: a membership
+            # that runs until 2030 is knowable today. valid_from carries the
+            # contract and is swept by the tripwire above.
+            exempt=("valid_to",),
+        )
+        if frame.empty:
+            return []
+        return sorted({str(s) for s in frame["symbol"]})
+
+    def surveillance_bars(
+        self, symbols: Sequence[str], lookback_days: int
+    ) -> pd.DataFrame:
+        """Canonical daily bars for ``symbols`` with ``ts`` in
+        ``[as_of - lookback, as_of]`` — bars after ``as_of`` are invisible.
+
+        Distinct from :meth:`bars` in two ways that matter at wide-universe
+        scale:
+
+        - the symbol filter is ``symbol = ANY(:array)``, ONE bind parameter,
+          not one per symbol. An expanded ``IN`` list of ~11,500 names pushes
+          the planner into a parallel hash whose shared-memory demand blew
+          the Postgres container's 64 MB ``/dev/shm`` — measured in preflight
+          (see ``dynamo.replay.preflight._symbol_in``), not hypothetical;
+        - it goes through :meth:`_read_df`, so the tripwire sees the RAW
+          rows, before ``canonical_bars`` merges the per-column source rule
+          and drops ``fetched_at``.
+
+        ``fetched_at`` is exempt for the same reason it is on :meth:`news`:
+        a historical backfill ingests old bars TODAY, so the ingestion wall
+        clock legitimately post-dates ``as_of``. ``ts`` is the knowledge
+        axis, and it is bounded above and swept.
+        """
+        from dynamo.persistence.repositories.market import canonical_bars
+
+        symbols = list(symbols)
+        if not symbols:
+            return canonical_bars(pd.DataFrame())
+        t = schema.bars_1d
+        array = bindparam("surveillance_symbols", value=symbols, type_=ARRAY(Text))
+        frame = self._read_df(
+            select(t).where(
+                t.c.symbol == func.any(array),
+                t.c.ts >= self._since(lookback_days),
+                t.c.ts <= self._cutoff,
+            ),
+            exempt=("fetched_at",),
+        )
+        return canonical_bars(frame)
 
     # -- research inputs ---------------------------------------------------
 

@@ -71,7 +71,7 @@ from typing import Any, Protocol, cast
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from dynamo.backtest.costs import (
     CostParams,
@@ -93,6 +93,7 @@ from dynamo.domain.models.risk import RegimeState, RiskConfig
 from dynamo.learning.experience import PathInputs, TradeFacts, build_experience
 from dynamo.portfolio.config import ConstructionConfig
 from dynamo.portfolio.constructor import AdvisoryInputs, RuleBasedConstructor
+from dynamo.replay.discovery import DISCOVERY_MODES
 from dynamo.research.quant.catalog import asset_classes_for
 from dynamo.research.quant.features import build_features
 from dynamo.research.quant.scoring import ModelBundle, score_universe
@@ -208,7 +209,40 @@ class ReplayConfig(BaseModel):
     # ``shortlist_rotation_lookback_sessions`` sessions (universe sweep).
     shortlist_rotation_slots: int = Field(default=1, ge=0)
     shortlist_rotation_lookback_sessions: int = Field(default=20, ge=0)
+    # --- Discovery (wide-campaign design, §"How discovery participates").
+    # Every replay before this one ran over a static tier-1/3 list, which
+    # measures construction and risk and measures NOTHING about the platform's
+    # actual thesis. These five knobs turn on the detector sweep that decides
+    # what ``universe_D`` IS on each day; see ``dynamo.replay.discovery``.
+    #
+    # All five are in config_hash like every field, which is the point: a run
+    # with `code` promotion at 60/day is a DIFFERENT, separately reproducible
+    # experiment from the same window with discovery off, and the two must
+    # never be able to share a run id. 'off' is the control arm and builds
+    # none of the machinery, so it reproduces the pre-discovery loop exactly.
+    discovery_mode: str = "off"  # off | code | haiku
+    # Pre-filter applied before the detectors see a symbol, in
+    # CONSOLIDATED-EQUIVALENT dollars (the free feed is IEX-only for ~11,200
+    # of ~11,500 names, at ~2-3% of the tape — filtering on observed volume
+    # would keep nothing). 0 disables.
+    discovery_min_dollar_volume: float = Field(default=1_000_000.0, ge=0.0)
+    # Minimum last close. Sub-dollar names produce the loudest z-scores and
+    # the least tradable ones.
+    discovery_min_price: float = Field(default=1.0, ge=0.0)
+    # Promotion cap per session (the design's 60) and how many sessions a
+    # promoted name stays in the universe (the design's 30).
+    discovery_promotions_per_day: int = Field(default=60, ge=0)
+    discovery_promotion_days: int = Field(default=30, ge=0)
     code_version: str = ""
+
+    @field_validator("discovery_mode")
+    @classmethod
+    def _known_discovery_mode(cls, value: str) -> str:
+        if value not in DISCOVERY_MODES:
+            raise ValueError(
+                f"discovery_mode {value!r} is not one of {DISCOVERY_MODES}"
+            )
+        return value
 
     @property
     def config_hash(self) -> str:
@@ -238,6 +272,20 @@ class ReplayGateway(Protocol):
     def macro_series(self, lookback_days: int) -> pd.DataFrame: ...
     def sectors(self, symbols: Sequence[str] | None = None) -> dict[str, str]: ...
     def regime_state(self) -> RegimeState | None: ...
+
+
+class DiscoveryDriver(Protocol):
+    """The slice of ``dynamo.replay.discovery.ReplayDiscovery`` the loop uses.
+
+    Structural on purpose: the runner never constructs discovery, never
+    decides whether it is on, and imports nothing from it. When the
+    composition layer passes ``None`` — which is what ``discovery_mode='off'``
+    does — the loop below is byte-identical to the pre-discovery one.
+    """
+
+    def universe_for(
+        self, gw: Any, day: date, base_universe: Sequence[str]
+    ) -> list[str]: ...
 
 
 class ExperienceSink(Protocol):
@@ -627,6 +675,7 @@ class ReplayRunner:
         run_config_extras: Mapping[str, Any] | None = None,
         bundle_factory: Callable[[str], ModelBundle] | None = None,
         verdict_source: Callable[[str], Sequence[Mapping[str, Any]]] | None = None,
+        discovery: DiscoveryDriver | None = None,
     ) -> None:
         if config.mode not in {"quant", "portfolio"}:
             raise ValueError(
@@ -644,7 +693,14 @@ class ReplayRunner:
                     "portfolio mode requires a verdict_source (the composition "
                     "layer passes ReplayRepository.verdicts_for)"
                 )
+        if discovery is not None and config.discovery_mode == "off":
+            raise ValueError(
+                "a discovery driver was injected but discovery_mode is 'off' — "
+                "the control arm must build no discovery machinery at all, or "
+                "the A/B it exists to measure is not an A/B"
+            )
         self._gateway_factory = gateway_factory
+        self._discovery = discovery
         self._experiences = experience_repo
         self._runs = run_repo
         self.config = config
@@ -810,6 +866,14 @@ class ReplayRunner:
 
             gw = self._gateway_factory(day)
             universe = gw.universe(cfg.universe_tiers)
+            if self._discovery is not None:
+                # Steps 1-4 of the discovery layer: panel slice -> detectors
+                # -> promotion gate -> universe_D. Everything below this line
+                # is unchanged; discovery only widens what "the universe" is.
+                # Feature building (step 4/5, via ``_quant_scores``) is scoped
+                # to THIS list — core plus promotions, a few hundred names —
+                # never to all of tier 2, which would cost ~50 hours.
+                universe = self._discovery.universe_for(gw, day, universe)
             ballast = self._construction_config.ballast_symbol
             panel_symbols = sorted(
                 {*universe, *shares, *BENCHMARK_SYMBOLS}

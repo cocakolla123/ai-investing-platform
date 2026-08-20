@@ -418,9 +418,18 @@ class MarketDataRepository:
     def upsert_earnings(
         self, events: Iterable[EarningsEvent], *, fetched_at: datetime | None = None
     ) -> int:
+        """Upsert the calendar, keyed by (symbol, event_date).
+
+        Finnhub repeats a key inside ONE response — a company that reports two
+        fiscal quarters on the same day, and outright duplicate entries in the
+        historical windows. A multi-VALUES ``ON CONFLICT DO UPDATE`` refuses
+        in-batch duplicates (CardinalityViolation), which turned a history
+        sweep into a hard failure, so dedupe keep-last first: the same end
+        state a row-by-row upsert would reach.
+        """
         ts = fetched_at or _now()
-        rows = [
-            {
+        deduped: dict[tuple[str, date], dict[str, Any]] = {
+            (e.symbol, e.event_date): {
                 "symbol": e.symbol,
                 "event_date": e.event_date,
                 "period": e.period,
@@ -432,8 +441,8 @@ class MarketDataRepository:
                 "fetched_at": ts,
             }
             for e in events
-        ]
-        return self.upsert_rows(schema.earnings_events, rows)
+        }
+        return self.upsert_rows(schema.earnings_events, list(deduped.values()))
 
     def latest_estimate_vintages(
         self, keys: Iterable[tuple[str, date]]
