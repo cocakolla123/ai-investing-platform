@@ -1284,6 +1284,7 @@ def _journal_hits_for(
     if not settings.journal_retrieval_enabled or not symbols:
         return {sym: [] for sym in symbols}
     from dynamo.learning.journal import (
+        HASH_FALLBACK_REMEDIATION,
         JournalFilters,
         drop_hash_fallback_entries,
         journal_retrieval_gate,
@@ -1333,8 +1334,6 @@ def _journal_hits_for(
             )
             hits[sym] = [(r.entry.id, r.entry.text) for r in ranked]
         if dropped:
-            from dynamo.learning.journal import HASH_FALLBACK_REMEDIATION
-
             _log.warning(
                 "journal_retrieval: dropped %d candidate(s) still carrying a "
                 "hash-fallback vector — they are random, not similar. Fix: %s",
