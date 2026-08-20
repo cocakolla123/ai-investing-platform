@@ -47,7 +47,7 @@ import argparse
 import os
 import sys
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 
@@ -391,6 +391,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--artifact-dir",
         default=None,
         help="artifact root (default: Settings().artifact_dir)",
+    )
+
+    disc = sub.add_parser(
+        "discovery-report",
+        help=(
+            "campaign GO/NO-GO #3 for a discovery run: flags/day, distinct "
+            "promotions, promoted share of decisions, and each detector's "
+            "forward excess vs the same session's unflagged names; "
+            "exit 2 unknown run, 1 no flags"
+        ),
+    )
+    disc.add_argument("--run-id", required=True)
+    disc.add_argument("--database-url", default=None)
+    disc.add_argument(
+        "--horizon-sessions",
+        type=int,
+        default=20,
+        help=(
+            "forward window in sessions (default %(default)s, matching the "
+            "quant label horizon so detector edge and model edge share a clock)"
+        ),
     )
 
     cmp_ = sub.add_parser(
@@ -1202,6 +1223,88 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_discovery_report(args: argparse.Namespace) -> int:
+    """GO/NO-GO #3 for a discovery run: exit 0 ok, 1 no flags, 2 unknown run.
+
+    The candidate-universe closes are the load-bearing input. Each detector's
+    number is flagged-minus-unflagged ON THE SAME SESSION, so reading closes
+    for only the flagged names would collapse every spread to zero and read
+    as "discovery found nothing" — the report warns when that happens, but
+    the fix is here: load the universe the panel scanned.
+
+    Reads run PAST each flag's as_of on purpose. This is post-hoc evaluation
+    of a finished run, not a decision path, so the replay gateway's
+    point-in-time bound would be measuring the wrong thing.
+    """
+    import pandas as pd
+
+    from dynamo.persistence.repositories.replay import ReplayRepository
+    from dynamo.replay.discovery_report import (
+        DiscoveryReportError,
+        build_discovery_report,
+        render_discovery_report,
+    )
+    from dynamo.replay.gateway import HistoricalDataGateway
+
+    engine = _engine(args.database_url)
+    repo = ReplayRepository(engine)
+    run = repo.get_run(args.run_id)
+    if run is None:
+        print(f"run {args.run_id!r} not found")
+        return 2
+
+    flags = repo.flags_for(args.run_id)
+    if not flags:
+        print(
+            f"run {args.run_id!r} recorded no flags — it ran with "
+            "--discovery off, or the liquidity gate filtered everything"
+        )
+        return 1
+
+    start, end = run["start_as_of"], run["end_as_of"]
+    # Forward returns need bars PAST the window end, so the gateway is pinned
+    # far enough ahead to see them. Post-hoc evaluation only.
+    horizon = int(args.horizon_sessions)
+    lookahead = end + timedelta(days=horizon * 2 + 10)
+    gw = HistoricalDataGateway(engine, lookahead)
+    # The universe the panel SCANNED, not just the names it flagged. The
+    # unflagged half of every daily spread comes from here; restricting this
+    # to flagged names is the one input error that silently reads as
+    # "no edge found".
+    tiers = tuple(int(t) for t in (run["config_json"].get("universe_tiers") or (1, 2, 3)))
+    scanned = set(gw.universe(tiers))
+    symbols = sorted(scanned | {str(f["symbol"]) for f in flags} | {"SPY"})
+    span = (lookahead - start).days + 10
+    bars = gw.bars(symbols, span)
+    if bars.empty:
+        print(f"no bars for the {len(symbols)} symbols over {start} -> {lookahead}")
+        return 1
+    print(
+        f"scanned universe: {len(scanned)} symbols (tiers {tiers}); "
+        f"bars loaded for {bars['symbol'].nunique()}"
+    )
+
+    spy = bars[bars["symbol"] == "SPY"].sort_values("ts")
+    benchmark = {
+        pd.Timestamp(t).date(): float(c)
+        for t, c in zip(spy["ts"], spy["close"], strict=True)
+    }
+    try:
+        report = build_discovery_report(
+            args.run_id,
+            flags,
+            bars[bars["symbol"] != "SPY"],
+            benchmark,
+            decisions=repo.decisions_for(args.run_id),
+            horizon_sessions=horizon,
+        )
+    except DiscoveryReportError as exc:
+        print(str(exc))
+        return 1
+    print(render_discovery_report(report))
+    return 0
+
+
 def _cmd_compare(args: argparse.Namespace) -> int:
     """Cross-run metrics table (+ optional normalized-curve png); exit 2 on
     any unknown run id, 1 when a run has no persisted curve."""
@@ -1385,6 +1488,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_audit(args)
     if args.command == "report":
         return _cmd_report(args)
+    if args.command == "discovery-report":
+        return _cmd_discovery_report(args)
     if args.command == "compare":
         return _cmd_compare(args)
     if args.command == "list":
