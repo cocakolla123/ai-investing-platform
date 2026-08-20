@@ -339,3 +339,57 @@ def test_log_row_fail_verdict_and_nan_formatting() -> None:
         verdict=verdict,
     )
     assert "| n/a | n/a | FAIL |" in row
+
+
+# --- the real, checked-in candidate files ----------------------------------
+#
+# The rails load candidates from disk by path, so nothing else in the test
+# suite would notice if a checked-in candidate stopped satisfying the
+# contract. These tests are that noticing.
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CANDIDATES_DIR = REPO_ROOT / "research" / "candidates"
+
+
+def test_every_checked_in_candidate_file_satisfies_the_contract() -> None:
+    files = sorted(p for p in CANDIDATES_DIR.glob("*.py") if not p.name.startswith("_"))
+    assert files, f"no candidate files found under {CANDIDATES_DIR}"
+    for path in files:
+        spec = load_candidate(path)
+        assert isinstance(spec, FeatureSpec)
+        assert spec.name.isidentifier()
+        assert callable(spec.fn)
+
+
+def test_range_reversion_candidate_loads_and_scores_a_synthetic_panel() -> None:
+    """The checked-in candidate, through the rails' own loader, run on the
+    panel the audition would build: a real signed number for the oscillator,
+    NaN for a name without enough history — never a raise."""
+    from dynamo.research.quant.catalog import FeatureInputs, build_context
+
+    spec = load_candidate(CANDIDATES_DIR / "range_reversion.py")
+    assert spec.name == "range_reversion"
+    assert spec.group == "meanrev"  # normalized, not a RAW_GROUP
+    assert spec.lookback_days == 140
+
+    rng = np.random.default_rng(4)
+    sessions = pd.bdate_range(end="2026-03-03", periods=420)
+    prices, x = [], 4.8
+    for _ in range(len(sessions)):
+        x = min(max(x + 0.10 * (4.8 - x) + rng.normal(0, 0.10), 4.30), 5.30)
+        prices.append(x)
+    rows = [
+        {"symbol": "OSC", "ts": t, "close": p, "adj_close": p, "volume": 500_000}
+        for t, p in zip(sessions, prices, strict=True)
+    ]
+    rows += [
+        {"symbol": "NEW", "ts": t, "close": 10.0 + i * 0.01, "adj_close": 10.0 + i * 0.01,
+         "volume": 500_000}
+        for i, t in enumerate(sessions[-30:])
+    ]
+    ctx = build_context(FeatureInputs(bars=pd.DataFrame(rows)), date(2026, 3, 3), ["OSC", "NEW"])
+    values = spec.fn(ctx)
+    assert list(values.index) == ["OSC", "NEW"]
+    assert np.isfinite(float(values["OSC"]))
+    assert -1.0 <= float(values["OSC"]) <= 1.0
+    assert np.isnan(float(values["NEW"]))

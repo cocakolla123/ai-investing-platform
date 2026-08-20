@@ -28,6 +28,28 @@ SCHEMA = {"type": "object", "required": ["answer"], "properties": {"answer": {"t
 GOOD = {"answer": "42"}
 
 
+def isolated_settings(**overrides: Any) -> Settings:
+    """``Settings`` built from explicit kwargs only — no ambient environment.
+
+    Two separate leaks have to be closed, and they need different tools:
+
+    - The repo's ``.env`` sets ``RESEARCH_BACKEND=claude_code`` (ADR-0014, so
+      the nightly pipeline cannot silently bill the metered API). ``Settings``
+      declares ``env_file=".env"``, so a bare ``Settings()`` run from inside
+      the repo picks that up. ``_env_file=None`` drops the dotenv source.
+    - An *exported* ``RESEARCH_BACKEND`` is read from ``os.environ`` by the
+      env source regardless of ``_env_file``. Only an explicit init kwarg
+      outranks it (init > env > dotenv in pydantic-settings' precedence).
+
+    So a test asserting on a *default* passes that default explicitly. The
+    value under test stays visible at the call site instead of depending on
+    whatever the developer happens to have exported.
+    """
+    kwargs: dict[str, Any] = {"RESEARCH_BACKEND": "api"}
+    kwargs.update(overrides)
+    return Settings(_env_file=None, **kwargs)  # type: ignore[call-arg]
+
+
 def envelope(
     payload: Any,
     *,
@@ -77,7 +99,7 @@ def ok(stdout: str) -> CliResult:
 
 
 def make_settings(**overrides: Any) -> Settings:
-    return Settings(ANTHROPIC_API_KEY="", **overrides)
+    return isolated_settings(ANTHROPIC_API_KEY="", **overrides)
 
 
 def make_client(
@@ -379,12 +401,12 @@ class TestResourcesWiring:
     def test_default_api_backend_unchanged(self) -> None:
         from dynamo.llm.anthropic_client import AnthropicClient
 
-        resource = self._resource(Settings(ANTHROPIC_API_KEY="test-key"))
+        resource = self._resource(isolated_settings(ANTHROPIC_API_KEY="test-key"))
         assert resource.settings().research_backend == "api"  # regression: default
         assert isinstance(resource.research_model(), AnthropicClient)
 
     def test_api_backend_without_key_is_none(self) -> None:
-        resource = self._resource(Settings(ANTHROPIC_API_KEY=""))
+        resource = self._resource(isolated_settings(ANTHROPIC_API_KEY=""))
         assert resource.research_model() is None
 
     def test_claude_code_backend_returns_cli_client(self, tmp_path: Any) -> None:
@@ -392,7 +414,7 @@ class TestResourcesWiring:
         binary.write_text("#!/bin/sh\n")
         binary.chmod(0o755)
         resource = self._resource(
-            Settings(
+            isolated_settings(
                 ANTHROPIC_API_KEY="",
                 RESEARCH_BACKEND="claude_code",
                 CLAUDE_CODE_BINARY=str(binary),
@@ -404,7 +426,7 @@ class TestResourcesWiring:
 
     def test_claude_code_backend_missing_binary_is_none(self, tmp_path: Any) -> None:
         resource = self._resource(
-            Settings(
+            isolated_settings(
                 ANTHROPIC_API_KEY="",
                 RESEARCH_BACKEND="claude_code",
                 CLAUDE_CODE_BINARY=str(tmp_path / "missing"),
@@ -419,7 +441,7 @@ class TestResourcesWiring:
         binary.write_text("#!/bin/sh\n")
         binary.chmod(0o755)
         resource = self._resource(
-            Settings(
+            isolated_settings(
                 ANTHROPIC_API_KEY="test-key",
                 RESEARCH_BACKEND="claude_code",
                 CLAUDE_CODE_BINARY=str(binary),
