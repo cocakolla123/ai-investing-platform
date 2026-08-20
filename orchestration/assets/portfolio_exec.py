@@ -5,21 +5,25 @@ execution is gated: paper orders only with Alpaca keys AND DYNAMO_ENV=PAPER,
 and never with the kill switch engaged.
 """
 
+from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, cast
 
 import pandas as pd
 from dagster import (
     AssetExecutionContext,
+    In,
     MaterializeResult,
+    Nothing,
     OpExecutionContext,
+    Out,
     job,
     op,
 )
 from dagster import asset as dagster_asset
 from sqlalchemy import select
 
-from dynamo.config.settings import DynamoEnv
+from dynamo.config.settings import DynamoEnv, Settings
 from dynamo.persistence import schema
 from orchestration.assets.research import _pydate, _read_df, _rows_to_models
 from orchestration.resources import DynamoResource, utcnow
@@ -469,7 +473,69 @@ def _verdict_expectations(
     return out
 
 
+def _equity_gate(settings: Settings) -> Callable[[Any], Any]:
+    """The doc 09 §7 gate as a callable over equity/crypto Orders.
+
+    The SAME function the options and PM sleeves use. Non-LIVE short-circuits
+    to permitted *unless* the kill-switch is engaged; LIVE additionally
+    requires the signed approval artifact covering the order's symbol (or
+    ``all``) plus met readiness — fail-closed when either is absent.
+
+    Crucially the kill-switch file is re-read inside the closure, so it is
+    consulted on EVERY submission: a switch thrown mid-job blocks the very
+    next order instead of being noticed at the start of the next job.
+    """
+    from pathlib import Path
+
+    from dynamo.execution.gate import (
+        Readiness,
+        kill_switch_engaged,
+        live_orders_permitted,
+        load_approval,
+    )
+
+    approval = None
+    if settings.dynamo_env == DynamoEnv.LIVE:
+        path = Path(settings.approvals_dir) / f"live-{utcnow().date().isoformat()}.yaml"
+        if path.exists():
+            approval = load_approval(path)
+
+    def gate(order: Any) -> Any:
+        return live_orders_permitted(
+            settings.dynamo_env,
+            approval,
+            kill_switch_engaged(settings.kill_switch_path),
+            Readiness(),  # LIVE readiness comes from stored metrics; unset → refuse
+            scope_target=order.symbol,
+        )
+
+    return gate
+
+
+# pm/options reconciliation runs are scope-prefixed; anything else in the table
+# belongs to the equity/crypto sleeve — including rows written before the
+# equity reconciler started labelling its runs, which is the fail-closed read.
+_FOREIGN_HALT_PREFIXES = ("pm", "options")
+
+
+def _equities_sticky_halt_active(dynamo: DynamoResource) -> bool:
+    """Unacknowledged divergent equity reconciliation runs block new orders.
+
+    The halt is sticky because it lives in the database, not in the
+    ``HaltRegistry`` of whichever Reconciler instance happened to find it: the
+    15-minute op builds a fresh Reconciler every cycle, so an in-memory halt
+    would evaporate before the next order was ever proposed.
+    """
+    from dynamo.persistence.repositories.execution import ReconciliationRepository
+
+    runs = ReconciliationRepository(dynamo.engine()).unacked_divergent_runs()
+    return any(
+        not str(r.get("scope", "")).startswith(_FOREIGN_HALT_PREFIXES) for r in runs
+    )
+
+
 def _order_manager(dynamo: DynamoResource, broker: Any) -> Any:
+    """The equity/crypto OrderManager, gated and halt-aware per submission."""
     from dynamo.execution.order_manager import OrderManager
     from dynamo.persistence.repositories.execution import OrderRepository, TradeRepository
 
@@ -482,17 +548,25 @@ def _order_manager(dynamo: DynamoResource, broker: Any) -> Any:
         UtcClock(),
         auto_approve=s.auto_approve,
         approval_ttl_minutes=s.approval_ttl_minutes,
+        gate=_equity_gate(s),
+        halt_check=lambda _order: _equities_sticky_halt_active(dynamo),
     )
 
 
 @op
 def execute_paper_orders(context: OpExecutionContext, dynamo: DynamoResource) -> None:
-    """Propose -> approve -> submit the latest target (paper only, gated)."""
-    from dynamo.domain.models.portfolio import DecisionContext, TargetPortfolio
+    """Propose -> risk-check -> approve -> submit the latest target (gated)."""
+    from dynamo.domain.models.portfolio import DecisionContext, OrderState, TargetPortfolio
     from dynamo.domain.models.research import Sleeve
+    from dynamo.execution.errors import ExecutionError
     from dynamo.persistence.repositories.learning import DecisionContextRepository
 
     if not _execution_ready(context, dynamo):
+        return
+    if _equities_sticky_halt_active(dynamo):
+        context.log.error(
+            "execute_paper_orders: sticky reconciliation halt active — refusing all orders"
+        )
         return
     tp = schema.target_portfolios
     frame = _read_df(dynamo, select(tp).order_by(tp.c.as_of.desc()).limit(1))
@@ -511,6 +585,7 @@ def execute_paper_orders(context: OpExecutionContext, dynamo: DynamoResource) ->
     if broker is None:
         return
     manager = _order_manager(dynamo, broker)
+    manager.startup_reconciliation()  # doc 09 §4: broker truth before submission
     dc_repo = DecisionContextRepository(dynamo.engine())
     settings = dynamo.settings()
 
@@ -519,6 +594,15 @@ def execute_paper_orders(context: OpExecutionContext, dynamo: DynamoResource) ->
     orders = manager.propose_orders(target, state, prices)
     submitted = 0
     for order in orders:
+        if order.state is not OrderState.PROPOSED:
+            # Deterministic ids mean a re-run re-derives the same intents; an
+            # order already past ``proposed`` was handled by the earlier run.
+            context.log.info(
+                "execute_paper_orders: %s already %s — skipping (idempotent)",
+                order.client_order_id,
+                order.state.value,
+            )
+            continue
         verdict_id = verdict_by_symbol.get(order.symbol)
         # Committee expectations denormalized from the verdict where one
         # exists; (0, 0, 20) only for verdict-less orders (e.g. pure exits).
@@ -542,11 +626,24 @@ def execute_paper_orders(context: OpExecutionContext, dynamo: DynamoResource) ->
             horizon_days=horizon,
         )
         dc_id = dc_repo.append(dc)
+        # proposed -> risk_checked -> pending_approval: the constructor already
+        # clamped this order to the risk verdict's constraints, and skipping
+        # the hop is an IllegalTransition, not a shortcut (doc 09 §2).
+        manager.transition(
+            order.client_order_id, OrderState.RISK_CHECKED, "target diff within risk verdict"
+        )
         manager.attach_decision_context(order.client_order_id, dc_id)
         manager.request_approval(order.client_order_id)
         if settings.auto_approve:
-            manager.submit(order.client_order_id)
-            submitted += 1
+            try:
+                manager.submit(order.client_order_id)
+                submitted += 1
+            except ExecutionError as exc:
+                # A refusal (gate, kill-switch, halt) stops THIS order; the
+                # rest of the batch is still evaluated and refused in turn.
+                context.log.error(
+                    "execute_paper_orders: %s not submitted: %s", order.client_order_id, exc
+                )
     context.log.info(
         "execute_paper_orders: %d proposed, %d submitted for target %s",
         len(orders),
@@ -594,9 +691,48 @@ class _InternalReader:
         return self._equity_row()[1]
 
 
-@op
+@op(out=Out(Nothing))
+def poll_equity_fills(context: OpExecutionContext, dynamo: DynamoResource) -> None:
+    """Poll live equity/crypto orders for fills; write trades AND positions.
+
+    The missing half of the equity loop: submission wrote an order and nothing
+    ever asked the broker what became of it, so a real fill left ``trades`` and
+    ``positions`` empty and the reconciler below — correctly — halted the
+    sleeve for divergence. Mirrors the options/PM sync_orders + apply_fill
+    pattern; partial fills top up on the next poll and re-polling an unchanged
+    order records nothing.
+    """
+    from dynamo.persistence.repositories.execution import PositionRepository
+
+    s = dynamo.settings()
+    if not (s.alpaca_api_key and s.alpaca_api_secret):
+        context.log.info("equity_fills: no broker configured — skipping")
+        return
+    broker = _broker(dynamo)
+    if broker is None:
+        return
+    manager = _order_manager(dynamo, broker)
+    trades = manager.sync_orders()
+    positions = PositionRepository(dynamo.engine())
+    now = utcnow()
+    for trade in trades:
+        positions.apply_fill(trade, now)
+    context.log.info("equity_fills: %d new fill(s) recorded", len(trades))
+
+
+@job
+def equity_fills_job() -> None:
+    """Manual/ad-hoc equity fill poll (also runs inside reconciliation_job)."""
+    poll_equity_fills()
+
+
+@op(ins={"fills_polled": In(Nothing)})
 def reconcile_broker_state(context: OpExecutionContext, dynamo: DynamoResource) -> None:
-    """15-minute positions/orders/cash reconciliation during market hours."""
+    """15-minute positions/orders/cash reconciliation during market hours.
+
+    Runs *after* the fill poller in the same job: reconciling before recording
+    known fills would flag every one of them as a divergence.
+    """
     from dynamo.execution.reconciliation import Reconciler
     from dynamo.persistence.repositories.execution import ReconciliationRepository
 
@@ -629,7 +765,7 @@ def reconcile_broker_state(context: OpExecutionContext, dynamo: DynamoResource) 
 
 @job
 def reconciliation_job() -> None:
-    reconcile_broker_state()
+    reconcile_broker_state(poll_equity_fills())
 
 
 def _pdt_filtered_specs(
@@ -692,6 +828,9 @@ def maintain_stops(context: OpExecutionContext, dynamo: DynamoResource) -> None:
 
     if not _execution_ready(context, dynamo):
         return
+    if _equities_sticky_halt_active(dynamo):
+        context.log.error("stops: sticky reconciliation halt active — refusing all orders")
+        return
     latest = _latest_risk_verdict(dynamo)
     if latest is None:
         context.log.info("stops: no risk verdict yet — skipping")
@@ -711,6 +850,7 @@ def maintain_stops(context: OpExecutionContext, dynamo: DynamoResource) -> None:
     if broker is None:
         return
     manager = _order_manager(dynamo, broker)
+    manager.startup_reconciliation()  # doc 09 §4: broker truth before submission
     dc_repo = DecisionContextRepository(dynamo.engine())
     settings = dynamo.settings()
     dc_ids: dict[str, str] = {}
@@ -747,4 +887,4 @@ def stops_job() -> None:
 
 
 PORTFOLIO_ASSETS = [risk_verdict_asset, target_portfolio_asset]
-EXECUTION_JOBS = [paper_execution_job, reconciliation_job, stops_job]
+EXECUTION_JOBS = [paper_execution_job, reconciliation_job, equity_fills_job, stops_job]
