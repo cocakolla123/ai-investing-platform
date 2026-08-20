@@ -73,6 +73,54 @@ known then. The promotion decision is never re-simulated.
 
 ---
 
+---
+
+## Repair status — measured 2026-08-19, after the fixes
+
+| Blocker | State | Evidence |
+|---|---|---|
+| B1 adjustment | **mostly fixed, residual named** | see below |
+| B2 volume scale | **fixed** | canonical view single-sources volume |
+| B3 membership dates | **fixed** | 11,251 rows backdated, idempotent |
+| B4 discovery in replay | **not started** | still the core deliverable |
+| corporate_actions | **fixed** | 104,835 rows |
+
+**B1.** Alpaca daily bars are now requested `Adjustment.SPLIT` and the whole
+wide universe was re-backfilled in place (6,080,787 rows, 11,322 symbols,
+763 s). Split artifacts, same symbol set, before vs after:
+
+| Metric | RAW (before) | SPLIT-adjusted (after) |
+|---|---|---|
+| Extreme moves on a **recorded split ex-date** | **1,166** | **257** (−78%) |
+| …within ±1 session | 1,307 | 408 |
+| …distinct symbols | 876 | 242 |
+| Near-exact split-ratio events (whole panel) | 219 / 213 syms | 180 / 172 syms |
+| …of which land on a real split | 76 | **38** |
+| Symbols fixed / regressed | — | 298 fixed, 3 regressed |
+
+Two honest caveats. (a) **The ratio test alone is mostly noise.** Of 180
+ratio-matched candidates only 38 are real splits — a −50% crash sits within 1%
+of a 2:1 ratio, so the `0.5`/`2.0` buckets are dominated by genuine price
+moves. Only the `corporate_actions` cross-check separates them; that is why
+B1 and the corporate-actions load belong together. (b) **The residual 257 is
+Alpaca's own split-coverage gap, not a code bug** — for KIDZ, IXHL and HIMZ
+the RAW, `SPLIT` and `ALL` series are byte-identical, so the feed has no
+split on record. `Adjustment.ALL` was measured against `SPLIT` on the 2,397
+split-carrying symbols and scores identically (336 / 526 either way), so
+`SPLIT` stands. Only **10** of the 264 affected names clear the liquidity
+screen and only **4** move inside the campaign window.
+
+**B3.** Tier-2 `valid_from` distribution after backdating (11,455 rows):
+2018: 4, 2024: 8,642, 2025: 1,449, 2026: 1,360. Visible membership goes from
+**zero at every date before 2026-08-17** to **7,727 at 2024-01-02** and
+**10,374 at 2026-03-03**. The 55 Tier-1 CORE rows are unchanged.
+
+**Preflight now refuses** a run whose universe still carries unadjusted
+actions (`bar_adjustment` check). Measured: tiers (1,3) 55 names → OK; tiers
+(1,2) 10,429 names → ERROR naming 264 symbols.
+
+---
+
 ## Compute — measured, and it inverts the intuition
 
 | Operation | Measured | Over 115 days |
