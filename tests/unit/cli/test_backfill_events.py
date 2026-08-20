@@ -366,3 +366,33 @@ def test_a_clean_sweep_still_exits_zero(wired: dict[str, Any]) -> None:
     wired["edgar"].by_day = {START: [_tx("0001-26-000010", "ACME", "A Director", START)]}
     argv = ["insider", "--universe-file", str(wired["universe"]), *_args()]
     assert be.main(argv) == 0
+
+
+def test_the_index_root_form_is_stored_as_the_sec_form_code(
+    wired: dict[str, Any],
+) -> None:
+    """EDGAR's full-text index calls it "SCHEDULE 13D"; the detector's
+    MATERIAL_FORMS says "SC 13D", and startswith("SC 13D") is False on the
+    index's spelling. Storing the index name would produce rows
+    ``filing_event`` reads and silently ignores."""
+    wired["edgar"].by_day = {
+        START: [_filing("0002-26-000011", "SCHEDULE 13D", START, "ACME")]
+    }
+    assert be.main(["filings", "--forms", "SCHEDULE 13D", *_args()]) == 0
+    assert wired["repo"].filings["0002-26-000011"].form_type == "SC 13D"
+
+
+def test_the_stored_form_codes_are_the_ones_the_detector_matches() -> None:
+    """Belt and braces on the mapping itself, against the real constant."""
+    from dynamo.data.detectors import MATERIAL_FORMS
+
+    for form in be.DEFAULT_FILING_FORMS:
+        stored = be.normalized_form_type(form).upper()
+        if stored.startswith("8-K"):
+            continue  # 8-K is material via its item codes, not its form
+        assert any(stored.startswith(m) for m in MATERIAL_FORMS), stored
+
+
+def test_an_unmapped_form_is_stored_verbatim(wired: dict[str, Any]) -> None:
+    assert be.normalized_form_type("8-K") == "8-K"
+    assert be.normalized_form_type("S-1") == "S-1"

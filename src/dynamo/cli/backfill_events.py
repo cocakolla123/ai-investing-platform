@@ -73,7 +73,23 @@ EARNINGS_LOOKAHEAD_DAYS = 120
 
 # The forms ``filing_event`` reacts to. 8-K carries the item codes; the rest
 # are material by form alone (see dynamo.data.detectors.MATERIAL_FORMS).
-DEFAULT_FILING_FORMS = ("8-K", "S-1", "SC 13D", "SC 13G")
+#
+# These are EDGAR full-text-index ``root_forms`` values, which are NOT the SEC
+# form codes: the index says "SCHEDULE 13D" where the detector's MATERIAL_FORMS
+# says "SC 13D", and `"SCHEDULE 13D".startswith("SC 13D")` is False — so a
+# beneficial-ownership filing stored under the index's own name is a row the
+# detector reads and silently ignores. Query by the index's name, store the
+# form code.
+DEFAULT_FILING_FORMS = ("8-K", "S-1", "SCHEDULE 13D", "SCHEDULE 13G")
+EDGAR_ROOT_FORM_TO_FORM_TYPE = {
+    "SCHEDULE 13D": "SC 13D",
+    "SCHEDULE 13G": "SC 13G",
+}
+
+
+def normalized_form_type(form_type: str) -> str:
+    """EDGAR's human-readable root form -> the SEC form code detectors key on."""
+    return EDGAR_ROOT_FORM_TO_FORM_TYPE.get(form_type.upper(), form_type)
 
 
 # -- injectable composition seams (tests monkeypatch these) -----------------
@@ -278,12 +294,16 @@ def _cmd_filings(args: argparse.Namespace) -> int:
         try:
             for form in forms:
                 for filing in edgar.filings_in_range(form, day, day):
+                    update: dict[str, Any] = {}
                     if filing.symbol is None:
                         symbol = by_cik.get(filing.cik.lstrip("0"))
                         if symbol is not None:
                             resolved += 1
-                            filing = filing.model_copy(update={"symbol": symbol})
-                    batch.append(filing)
+                            update["symbol"] = symbol
+                    normalized = normalized_form_type(filing.form_type)
+                    if normalized != filing.form_type:
+                        update["form_type"] = normalized
+                    batch.append(filing.model_copy(update=update) if update else filing)
         except (ProviderDown, RateLimited, DataGap) as exc:
             gaps.append(day)
             print(f"  {day}: SKIPPED — {type(exc).__name__}: {exc}", flush=True)
