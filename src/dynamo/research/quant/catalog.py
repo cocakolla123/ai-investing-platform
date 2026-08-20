@@ -79,7 +79,29 @@ GROUP_TARGETS: dict[str, int] = {
     "macro": 5,
     "calendar": 3,
     "weekly": 7,
+    "accumulation": 4,
+    "momentum_quality": 3,
+    "attention": 1,
 }
+
+# Accumulation / distribution (group 12).
+OBV_SLOPE_WINDOWS = (20, 60)
+SUSTAINED_NEAR_SESSIONS = 20  # "is volume elevated NOW"
+SUSTAINED_FAR_SESSIONS = 120  # "...against the name's own prior regime"
+UNUSUAL_VOLUME_WINDOW = 60  # sessions scanned for quiet-but-heavy days
+UNUSUAL_VOLUME_MULT = 2.0  # a session is unusual above 2x its own baseline
+UNUSUAL_VOLUME_BASELINE = 60  # sessions of median volume forming that baseline
+NEWS_BLACKOUT_DAYS = 1  # a session counts as "with news" within +/- 1 day
+# A symbol is only credited with OBSERVED silence if we have seen at least one
+# story about it in this window; below that, absence is missing coverage, not
+# quiet — see :func:`_unusual_volume_no_news`.
+NEWS_COVERAGE_EVIDENCE_DAYS = 365
+NEWS_WINDOW_DAYS = 60  # attention proxy: stories in the trailing 60 days
+
+# Momentum quality (group 13): the window over which a total move's PATH is
+# judged. 60 sessions is the same horizon as ret_60d, deliberately — these
+# features exist to tell two names with the same ret_60d apart.
+MOMENTUM_QUALITY_WINDOW = 60
 
 
 @dataclass(frozen=True)
@@ -93,6 +115,9 @@ class FeatureInputs:
     macro: [series_id, ts, value, vintage_ts]
     regime: Series of regime labels indexed by date
     earnings_calendar: [symbol, event_date]
+    news: [symbol | symbols, published_at] (either one symbol per row or the
+        stored ARRAY column, which is exploded) — attention proxy and the
+        "was this volume explained?" input
     sector_map: symbol -> sector ETF ticker (also the peer-group key)
     """
 
@@ -103,6 +128,7 @@ class FeatureInputs:
     macro: pd.DataFrame | None = None
     regime: pd.Series | None = None
     earnings_calendar: pd.DataFrame | None = None
+    news: pd.DataFrame | None = None
     sector_map: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -1269,6 +1295,250 @@ def _weekly_confirms_daily_breakout(ctx: FeatureContext) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
+# Group 12 — accumulation / distribution
+# ---------------------------------------------------------------------------
+#
+# The existing volume group measures SIZE (dollar volume, Amihud) and one-day
+# surprise (dollar_vol_z_60d). The read-only detector pilot measured the
+# one-day-surprise shape at -3.03% forward 20-session excess return, i.e.
+# contra-indicative and most likely IEX routing noise. What it never measured
+# is DIRECTION accumulated over time, or elevation SUSTAINED over weeks —
+# which is what "someone is quietly building a position" actually looks like.
+
+
+def _obv_panel(ctx: FeatureContext) -> pd.DataFrame:
+    """Cumulative signed volume (on-balance volume) per symbol.
+
+    ``+volume`` on an up session, ``-volume`` on a down session, running sum
+    over the symbol's OWN sessions. The first session of each symbol has no
+    prior close, so it contributes NaN rather than an arbitrary sign.
+    """
+    p, v = ctx.price, ctx.volume
+    if p.empty or v.empty:
+        return _empty_panel()
+    direction = cast(pd.DataFrame, np.sign(_diff_per_symbol(p)))
+    signed = direction * v
+    return _apply_per_symbol(signed, lambda s: cast(pd.Series, s.cumsum()))
+
+
+def _obv_slope(window: int) -> FeatureFn:
+    """OBV change over ``window`` sessions as a fraction of volume traded.
+
+    Dividing by ``window x average volume`` puts every name on the same
+    scale: +1.0 would mean every share over the window changed hands on an up
+    session, 0.0 means buying and selling volume cancelled exactly. Raw OBV
+    levels are meaningless cross-sectionally (they scale with float and with
+    how long the symbol has been in the panel); this slope is not.
+    """
+
+    def fn(ctx: FeatureContext) -> pd.Series:
+        obv = _obv_panel(ctx)
+        if obv.empty or len(obv) <= window:
+            return _nan_series(ctx)
+        change = obv.iloc[-1] - _shift_per_symbol(obv, window).iloc[-1]
+        traded = _roll_per_symbol(ctx.volume, window, "mean").iloc[-1] * window
+        denom = traded.where(traded > 0)
+        return _finite(change / denom).reindex(ctx.universe)
+
+    return fn
+
+
+def _sustained_volume_expansion(ctx: FeatureContext) -> pd.Series:
+    """Median volume of the last 20 sessions vs the 120 sessions BEFORE them.
+
+    Deliberately median-of-many, not max-of-one: a single 10x print barely
+    moves a 20-session median, while twenty sessions at 1.5x moves it 50%.
+    That is the whole distinction from ``dollar_vol_z_60d`` — persistent
+    elevation rather than a one-day pop, which the detector pilot scored at
+    -3.03% and which looks like routing noise. The baseline window is shifted
+    clear of the recent one so a name is compared against its own prior
+    regime, not against a window it is itself inflating.
+    """
+    v = ctx.volume
+    if v.empty or len(v) < SUSTAINED_NEAR_SESSIONS + SUSTAINED_FAR_SESSIONS:
+        return _nan_series(ctx)
+    near = _roll_per_symbol(v, SUSTAINED_NEAR_SESSIONS, "median").iloc[-1]
+    prior = _shift_per_symbol(v, SUSTAINED_NEAR_SESSIONS)
+    far = _roll_per_symbol(prior, SUSTAINED_FAR_SESSIONS, "median").iloc[-1]
+    denom = far.where(far > 0)
+    return _finite(near / denom - 1.0).reindex(ctx.universe)
+
+
+def _news_frame(ctx: FeatureContext) -> pd.DataFrame:
+    """``[symbol, published_at]`` with ``published_at <= as_of``.
+
+    Accepts either one symbol per row or the stored ``symbols`` ARRAY column
+    (exploded). Empty frame when there is no news input at all.
+    """
+    news = ctx.inputs.news
+    cols = ["symbol", "published_at"]
+    empty = pd.DataFrame(columns=pd.Index(cols))
+    if news is None or news.empty or "published_at" not in news.columns:
+        return empty
+    df = news.copy()
+    if "symbol" not in df.columns:
+        if "symbols" not in df.columns:
+            return empty
+        df = df.explode("symbols").rename(columns={"symbols": "symbol"})
+    df = df.loc[:, cols].dropna(subset=["symbol"])
+    if df.empty:
+        return empty
+    df["symbol"] = df["symbol"].astype(str)
+    df["published_at"] = dt_naive_utc(df["published_at"])
+    return _rows(df, df["published_at"] <= ctx.as_of)
+
+
+def _unusual_volume_no_news(ctx: FeatureContext) -> pd.Series:
+    """Fraction of the last 60 sessions that were heavy AND unexplained.
+
+    A session is heavy above ``2x`` the symbol's own trailing 60-session
+    median volume, and unexplained when no story about the symbol was
+    published within a day either side. That combination — real volume, no
+    visible reason — is the "someone knows something" shape.
+
+    Graceful degradation is the point of the guard, not an aside. News
+    coverage is sparse for tier-2 names, so a symbol we have simply never
+    collected a story about would otherwise score a perfect 1.0 on every
+    heavy day and flood the screen with false positives. The feature is
+    therefore NaN unless we have seen at least one story about that symbol in
+    the trailing year: silence only counts when it is OBSERVED silence.
+    """
+    v = ctx.volume
+    news = _news_frame(ctx)
+    if v.empty or news.empty or len(v) < UNUSUAL_VOLUME_BASELINE:
+        return _nan_series(ctx)
+    baseline = _shift_per_symbol(
+        _roll_per_symbol(v, UNUSUAL_VOLUME_BASELINE, "median"), 1
+    )
+    heavy = v > UNUSUAL_VOLUME_MULT * baseline.where(baseline > 0)
+    evidence_lo = ctx.as_of - pd.Timedelta(days=NEWS_COVERAGE_EVIDENCE_DAYS)
+    covered = set(
+        _rows(news, news["published_at"] >= evidence_lo)["symbol"].unique()
+    )
+    blackout = np.timedelta64(NEWS_BLACKOUT_DAYS, "D")
+    out: dict[str, float] = {}
+    for sym in ctx.universe:
+        if sym not in v.columns or sym not in covered:
+            out[sym] = float("nan")
+            continue
+        own = cast(pd.Series, heavy[sym]).where(cast(pd.Series, v[sym]).notna()).dropna()
+        window = own.iloc[-UNUSUAL_VOLUME_WINDOW:]
+        if len(window) < UNUSUAL_VOLUME_WINDOW:
+            out[sym] = float("nan")
+            continue
+        published = cast(
+            pd.Series, _rows(news, news["symbol"] == sym)["published_at"]
+        ).to_numpy()
+        heavy_days = cast(pd.DatetimeIndex, window.index[window.astype(bool)])
+        quiet = 0
+        for day in heavy_days:
+            near = np.abs(published - np.datetime64(day)) <= blackout
+            if not bool(near.any()):
+                quiet += 1
+        out[sym] = quiet / float(UNUSUAL_VOLUME_WINDOW)
+    return pd.Series(out, dtype=float).reindex(ctx.universe)
+
+
+# ---------------------------------------------------------------------------
+# Group 13 — momentum quality (the PATH, not just the total)
+# ---------------------------------------------------------------------------
+#
+# ret_60d cannot tell a name that ground out +30% over three months from one
+# that gapped +30% on a single headline and went sideways. They are different
+# animals with different forward distributions, and today they score
+# identically. These three read the path.
+
+
+def _quality_paths(ctx: FeatureContext) -> dict[str, pd.Series]:
+    """Each symbol's last ``MOMENTUM_QUALITY_WINDOW`` daily log returns.
+
+    Taken from the symbol's OWN session sequence, so "60 sessions" means the
+    same thing for a 5-day equity and a 7-day crypto pair.
+    """
+    p = ctx.price
+    out: dict[str, pd.Series] = {}
+    if p.empty:
+        return out
+    for sym in ctx.universe:
+        if sym not in p.columns:
+            continue
+        own = cast(pd.Series, p[sym]).dropna()
+        if len(own) < MOMENTUM_QUALITY_WINDOW + 1:
+            continue
+        path = own.iloc[-(MOMENTUM_QUALITY_WINDOW + 1) :]
+        if bool((path <= 0).any()):
+            continue
+        lr = cast(pd.Series, np.log(path)).diff().dropna()
+        if len(lr) == MOMENTUM_QUALITY_WINDOW:
+            out[sym] = lr
+    return out
+
+
+def _up_session_fraction_60d(ctx: FeatureContext) -> pd.Series:
+    """Share of the last 60 sessions that closed up — smoothness, plainly."""
+    paths = _quality_paths(ctx)
+    return pd.Series(
+        {sym: float((lr > 0).mean()) for sym, lr in paths.items()}, dtype=float
+    ).reindex(ctx.universe)
+
+
+def _max_session_share_60d(ctx: FeatureContext) -> pd.Series:
+    """Largest single session's share of the window's total absolute move.
+
+    ``max(log return) / sum(|log return|)``. Near 1.0 means one gap did
+    essentially all of it (a lottery ticket); near ``1/60`` means the move
+    was earned across the whole window (a climber). Defined for fallers too —
+    a negative reading is a name whose best day was still a loss.
+    """
+    paths = _quality_paths(ctx)
+    out: dict[str, float] = {}
+    for sym, lr in paths.items():
+        total = float(lr.abs().sum())
+        out[sym] = float(lr.max()) / total if total > 0 else float("nan")
+    return pd.Series(out, dtype=float).reindex(ctx.universe)
+
+
+def _drawdown_adj_momentum_60d(ctx: FeatureContext) -> pd.Series:
+    """60-session return divided by ``1 + `` its deepest drawdown en route.
+
+    Two names arriving at the same +30% score very differently when one did
+    it without ever giving back 25%. This is the path-risk-adjusted version
+    of ``ret_60d``, not a replacement for it.
+    """
+    paths = _quality_paths(ctx)
+    out: dict[str, float] = {}
+    for sym, lr in paths.items():
+        equity = cast(pd.Series, np.exp(lr.cumsum()))
+        drawdown = float((1.0 - equity / equity.cummax()).max())
+        out[sym] = float(equity.iloc[-1] - 1.0) / (1.0 + drawdown)
+    return pd.Series(out, dtype=float).reindex(ctx.universe)
+
+
+# ---------------------------------------------------------------------------
+# Group 14 — attention
+# ---------------------------------------------------------------------------
+
+
+def _news_count_60d(ctx: FeatureContext) -> pd.Series:
+    """Stories mentioning the symbol in the trailing 60 days.
+
+    The low-attention proxy the sleeper screen is built on: an under-followed
+    name is one nobody is writing about. Unlike
+    :func:`_unusual_volume_no_news` a zero here IS reported as 0.0 (once any
+    news at all has been collected) — "nobody wrote about it" is precisely
+    the reading we want, and the screen treats it as a positive, not as a
+    trigger. The whole feature is NaN only when no news was collected at all.
+    """
+    news = _news_frame(ctx)
+    if news.empty:
+        return _nan_series(ctx)
+    lo = ctx.as_of - pd.Timedelta(days=NEWS_WINDOW_DAYS)
+    recent = _rows(news, news["published_at"] >= lo)
+    counts = cast(pd.Series, recent.groupby("symbol").size().astype(float))
+    return cast(pd.Series, counts.reindex(ctx.universe).fillna(0.0))
+
+
+# ---------------------------------------------------------------------------
 # The catalog
 # ---------------------------------------------------------------------------
 
@@ -1355,6 +1625,42 @@ def _specs() -> list[FeatureSpec]:
             7 * WEEKLY_BREAKOUT_WEEKS,
             _weekly_confirms_daily_breakout,
         ),
+        # 12 — accumulation / distribution (4)
+        s("obv_slope_20d", "accumulation", 21, _obv_slope(20)),
+        s("obv_slope_60d", "accumulation", 61, _obv_slope(60)),
+        s(
+            "sustained_volume_expansion",
+            "accumulation",
+            SUSTAINED_NEAR_SESSIONS + SUSTAINED_FAR_SESSIONS,
+            _sustained_volume_expansion,
+        ),
+        s(
+            "unusual_volume_no_news",
+            "accumulation",
+            NEWS_COVERAGE_EVIDENCE_DAYS,
+            _unusual_volume_no_news,
+        ),
+        # 13 — momentum quality (3)
+        s(
+            "up_session_fraction_60d",
+            "momentum_quality",
+            MOMENTUM_QUALITY_WINDOW + 1,
+            _up_session_fraction_60d,
+        ),
+        s(
+            "max_session_share_60d",
+            "momentum_quality",
+            MOMENTUM_QUALITY_WINDOW + 1,
+            _max_session_share_60d,
+        ),
+        s(
+            "drawdown_adj_momentum_60d",
+            "momentum_quality",
+            MOMENTUM_QUALITY_WINDOW + 1,
+            _drawdown_adj_momentum_60d,
+        ),
+        # 14 — attention (1)
+        s("news_count_60d", "attention", NEWS_WINDOW_DAYS, _news_count_60d),
     ]
 
 
@@ -1401,6 +1707,10 @@ _NON_ISSUER_GROUPS = frozenset({"value", "quality", "estimates", "insider"})
 _NON_ISSUER_FEATURES = frozenset(
     {"days_to_next_earnings", "days_since_last_earnings", "rs_20d_sector"}
 )
+# The news feed is an equity/ETF headline feed; a crypto pair is not covered by
+# it, so the two attention-dependent columns are structurally NaN for crypto
+# rather than a data gap it should be charged for.
+_NO_NEWS_FEED_FEATURES = frozenset({"news_count_60d", "unusual_volume_no_news"})
 
 INAPPLICABLE_GROUPS: Mapping[str, frozenset[str]] = {
     ASSET_CLASS_EQUITY: frozenset(),
@@ -1410,7 +1720,7 @@ INAPPLICABLE_GROUPS: Mapping[str, frozenset[str]] = {
 INAPPLICABLE_FEATURES: Mapping[str, frozenset[str]] = {
     ASSET_CLASS_EQUITY: frozenset(),
     ASSET_CLASS_ETF: _NON_ISSUER_FEATURES,
-    ASSET_CLASS_CRYPTO: _NON_ISSUER_FEATURES,
+    ASSET_CLASS_CRYPTO: _NON_ISSUER_FEATURES | _NO_NEWS_FEED_FEATURES,
 }
 
 

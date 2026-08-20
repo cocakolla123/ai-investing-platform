@@ -117,8 +117,18 @@ def _catalog_row(values: dict[str, float]) -> pd.Series:
 # genuinely fills in every night. Keep in step with the catalog: a new
 # bars-only group left out here silently understates ETF/crypto coverage.
 BARS_DRIVEN_GROUPS = frozenset(
-    {"momentum", "meanrev", "volatility", "volume", "weekly"}
+    {
+        "momentum",
+        "meanrev",
+        "volatility",
+        "volume",
+        "weekly",
+        "accumulation",
+        "momentum_quality",
+    }
 )
+# ...minus the members of those groups that need something other than bars.
+NOT_BARS_DRIVEN = frozenset({"rs_20d_sector", "unusual_volume_no_news"})
 
 
 def _bars_only_frame(symbols: list[str]) -> pd.DataFrame:
@@ -129,7 +139,7 @@ def _bars_only_frame(symbols: list[str]) -> pd.DataFrame:
     bars_driven = {
         name: 0.5
         for name, spec in FEATURE_CATALOG.items()
-        if spec.group in BARS_DRIVEN_GROUPS and name != "rs_20d_sector"
+        if spec.group in BARS_DRIVEN_GROUPS and name not in NOT_BARS_DRIVEN
     }
     return pd.DataFrame(
         {sym: _catalog_row(bars_driven) for sym in symbols}, dtype=float

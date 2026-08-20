@@ -42,6 +42,10 @@ FUNDAMENTALS_LOOKBACK_DAYS = 500
 DOSSIER_FUNDAMENTALS_LOOKBACK_DAYS = 1500
 INSIDER_LOOKBACK_DAYS = 200
 MACRO_LOOKBACK_DAYS = 400
+# The attention features need a full year of headlines: ``news_count_60d``
+# only reads the last 60 days, but ``unusual_volume_no_news`` needs a year to
+# decide whether the feed covers a symbol at all (catalog group 12).
+FEATURE_NEWS_LOOKBACK_DAYS = 365
 EARNINGS_LOOKAHEAD_DAYS = 30
 TRANSCRIPT_LOOKBACK_DAYS = 30  # live dossier window parity (assets/research.py)
 
@@ -117,6 +121,8 @@ class HistoricalDataGateway:
           (revisions published later are invisible);
         - earnings calendar: ``event_date >= as_of - 30d`` AND
           ``fetched_at <= as_of`` (knowledge-time bound);
+        - news: ``as_of - 365d <= published_at <= as_of``, exploded to one
+          row per (symbol, story), feeding the attention features;
         - estimates: append-only ``earnings_estimate_vintages`` rows with
           ``fetched_at <= as_of`` (migration 0019) — the estimate-revision
           features go live from the first collected vintage onward; dates
@@ -178,6 +184,18 @@ class HistoricalDataGateway:
             ),
             exempt=("event_date",),
         )
+        nw = schema.news
+        # ``news.symbols`` is an ARRAY column; the feature path wants one row
+        # per (symbol, story), so explode here rather than in the catalog.
+        news = self._read_df(
+            select(nw.c.symbols, nw.c.published_at).where(
+                nw.c.published_at >= self._since(FEATURE_NEWS_LOOKBACK_DAYS),
+                nw.c.published_at <= self._cutoff,
+            )
+        )
+        if not news.empty:
+            news = news.explode("symbols").rename(columns={"symbols": "symbol"})
+            news = news.dropna(subset=["symbol"])
         return FeatureInputs(
             bars=bars,
             fundamentals=fundamentals if not fundamentals.empty else None,
@@ -185,6 +203,7 @@ class HistoricalDataGateway:
             estimates=estimates if not estimates.empty else None,
             macro=macro if not macro.empty else None,
             earnings_calendar=earnings if not earnings.empty else None,
+            news=news if not news.empty else None,
             sector_map=default_sector_etf_map(sectors),
         )
 
