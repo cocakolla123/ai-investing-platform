@@ -79,7 +79,10 @@ def social_scan(context: AssetExecutionContext, dynamo: DynamoResource) -> Mater
     )
     if flags:
         repo.insert_surveillance_flags(flags)
-    triaged = _triage_flags(context, dynamo, flags, as_of)
+    # Persist first, then triage the TABLE: `_triage_flags` reads the
+    # un-triaged queue rather than taking a list, so tonight's social flags
+    # and anything earlier runs left behind are judged together.
+    triaged = _triage_flags(context, dynamo, as_of)
     return MaterializeResult(
         metadata={
             "mentions": len(fetched),

@@ -169,22 +169,98 @@ def _triage_history(dynamo: DynamoResource, as_of: date, sessions: int) -> list[
     ]
 
 
+# How far back the triage queue reaches. Flags persist in the table, so
+# triage drains a BACKLOG, not just tonight's batch — but not an unbounded
+# one: a flag older than this describes a price move that today's triage
+# cannot usefully judge, and should expire unread rather than be answered
+# against stale context. Two weeks covers a long holiday weekend plus a
+# multi-day outage without reaching back into a different market regime.
+TRIAGE_QUEUE_LOOKBACK_DAYS = 14
+
+# Hard ceiling on rows pulled into memory per run. The first whole-market
+# sweep wrote 1,155 flags in one night; the cap on LLM calls is applied after
+# ranking, so this only bounds the frame, not the spend.
+TRIAGE_QUEUE_MAX_ROWS = 20_000
+
+# `data_quality` flags are not trading candidates — they mark a bar the
+# detectors could not trust (an unadjusted corporate action; see
+# dynamo.data.detectors). They must never reach the LLM or the promotion
+# path, and they must not sit in the queue forever either, so they are
+# stamped with their own verdict without an API call.
+DATA_QUALITY_VERDICT = "data_quality"
+
+
+def _flags_from_rows(frame: pd.DataFrame) -> tuple[list[Any], dict[int, int]]:
+    """Rebuild ``SurveillanceFlag`` objects from queue rows.
+
+    Returns the flags and a map from each flag's *object identity* to its
+    database id. Identity is the right key here: the ranking layer hands the
+    same objects back, and two genuinely distinct rows can otherwise be equal
+    by value (same symbol, detector and severity on two dates).
+    """
+    from dynamo.domain.models.market import SurveillanceFlag
+
+    flags: list[Any] = []
+    ids: dict[int, int] = {}
+    for row in frame.to_dict(orient="records"):
+        details = row.get("details") or {}
+        flag = SurveillanceFlag(
+            symbol=str(row["symbol"]),
+            detector=str(row["detector"]),
+            severity=float(row["severity"]),
+            details=dict(details) if isinstance(details, dict) else {},
+            ts=_pydatetime(row["ts"]),
+        )
+        flags.append(flag)
+        ids[id(flag)] = int(row["id"])
+    return flags, ids
+
+
 def _triage_flags(
     context: AssetExecutionContext | OpExecutionContext,
     dynamo: DynamoResource,
-    flags: Sequence[Any],
     as_of: date,
+    *,
+    lookback_days: int = TRIAGE_QUEUE_LOOKBACK_DAYS,
 ) -> int:
-    """Haiku triage over the best-ranked flagged symbols; material -> Tier 3."""
-    model = dynamo.research_model()
-    if model is None or not flags:
-        if flags:
-            context.log.warning("tier2 triage skipped: ANTHROPIC_API_KEY unset")
-        return 0
+    """Haiku triage over the best-ranked UN-TRIAGED flags; material -> Tier 3.
+
+    Reads the queue from ``surveillance_flags`` rather than from whatever this
+    process happened to compute. That is the difference between a pipeline and
+    a side effect: flags written by the ``surveillance-sweep`` CLI, or by a
+    run that died before triage, or on a night the model was unavailable, are
+    now picked up by the next run instead of being written and forgotten. The
+    first whole-market sweep left 1,155 such rows.
+    """
     from dynamo.data.universe import UniverseManager
     from dynamo.llm.schemas import TRIAGE_SCHEMA
     from dynamo.research.flag_ranking import group_by_symbol, select_for_triage
     from dynamo.research.prompt_loader import load_prompt
+
+    repo_for_queue = dynamo.market_repo()
+    since = _since(as_of, lookback_days)
+
+    # Retire data-quality flags first, without an API call, so they neither
+    # reach the model nor accumulate in the queue forever.
+    dq = repo_for_queue.untriaged_flags(since, limit=TRIAGE_QUEUE_MAX_ROWS)
+    dq_ids = [int(r["id"]) for r in dq.to_dict(orient="records") if r["detector"] == "data_quality"]
+    if dq_ids:
+        repo_for_queue.set_triage_verdicts(dq_ids, DATA_QUALITY_VERDICT, triaged_at=utcnow())
+        context.log.info("tier2 triage: retired %d data_quality flags (no LLM)", len(dq_ids))
+
+    queue = repo_for_queue.untriaged_flags(
+        since, exclude_detectors=("data_quality",), limit=TRIAGE_QUEUE_MAX_ROWS
+    )
+    flags, flag_ids = _flags_from_rows(queue)
+
+    model = dynamo.research_model()
+    if model is None or not flags:
+        if flags:
+            context.log.warning(
+                "tier2 triage skipped: ANTHROPIC_API_KEY unset (%d flags left un-triaged)",
+                len(flags),
+            )
+        return 0
 
     settings = dynamo.settings()
     repo = dynamo.market_repo()
@@ -236,16 +312,16 @@ def _triage_flags(
             max_tokens=512,
         )
         verdict = str(parsed.get("verdict", "noise"))
-        now = utcnow()
-        with dynamo.engine().begin() as conn:
-            conn.execute(
-                update(schema.surveillance_flags)
-                .where(
-                    schema.surveillance_flags.c.symbol == symbol,
-                    schema.surveillance_flags.c.triage_verdict.is_(None),
-                )
-                .values(triage_verdict=verdict, triaged_at=now)
-            )
+        # Stamp EXACTLY the rows this verdict was formed from. The previous
+        # write matched `symbol AND triage_verdict IS NULL` with no time
+        # bound, so one night's verdict for a symbol also overwrote every
+        # historical un-triaged row that symbol had — a verdict about
+        # yesterday's flags that nobody had read.
+        repo.set_triage_verdicts(
+            [flag_ids[id(f)] for f in sym_flags if id(f) in flag_ids],
+            verdict,
+            triaged_at=utcnow(),
+        )
         repo.insert_rows(
             schema.agent_opinions,
             [
@@ -313,8 +389,11 @@ def tier2_scan(context: AssetExecutionContext, dynamo: DynamoResource) -> Materi
             news_items=news_items,
         )
     )
+    # Persist FIRST, then triage the table. Triage no longer takes the flags
+    # it should look at as an argument — it reads the un-triaged queue, which
+    # now contains tonight's batch plus anything earlier runs left behind.
     inserted = repo.insert_surveillance_flags(flags)
-    triaged = _triage_flags(context, dynamo, flags, as_of)
+    triaged = _triage_flags(context, dynamo, as_of)
     return MaterializeResult(metadata={"flags": inserted, "triaged_symbols": triaged})
 
 

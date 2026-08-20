@@ -9,8 +9,9 @@ used by research/quant writers (dossiers, verdicts, scores, watchlist, ...).
 
 Point-in-time reads:
 
-- :meth:`bars_frame` — canonical daily closes (prefer Tiingo ``adj_close``,
-  else Alpaca raw close; doc 02 §5).
+- :meth:`bars_frame` — the canonical multi-source view. Prices prefer Tiingo's
+  adjusted close, VOLUME prefers Alpaca so the whole panel sits on one tape;
+  the rule and the reasoning live in :func:`canonical_bars`.
 - :meth:`universe_at` — survivorship-safe membership as of a date (doc 02 §2).
 """
 
@@ -89,6 +90,111 @@ def estimate_vintage_rows(
             }
         )
     return rows
+
+
+# --- The canonical-view rule (D2) -----------------------------------------
+
+#: Feed preference for the PRICE columns (open/high/low/close/adj_close), best
+#: first. Tiingo's ``adj_close`` is split- AND dividend-adjusted consolidated
+#: EOD; the Alpaca free feed is split-adjusted IEX.
+CANONICAL_PRICE_SOURCES: tuple[str, ...] = ("tiingo", "alpaca")
+#: Feed preference for the VOLUME column, best first — deliberately the
+#: REVERSE of the price preference. See :func:`canonical_bars`.
+CANONICAL_VOLUME_SOURCES: tuple[str, ...] = ("alpaca", "tiingo")
+
+CANONICAL_BAR_COLUMNS: tuple[str, ...] = (
+    "symbol", "ts", "open", "high", "low",
+    "close", "adj_close", "volume", "source", "volume_source",
+)
+
+
+def _source_rank(sources: pd.Series, preference: Sequence[str]) -> pd.Series:
+    """Position of each row's source in ``preference`` (unlisted sorts last)."""
+    order = {name: i for i, name in enumerate(preference)}
+    return sources.map(lambda s: order.get(str(s), len(order))).astype(int)
+
+
+def canonical_bars(frame: pd.DataFrame) -> pd.DataFrame:
+    """Collapse a multi-source ``bars_1d`` frame to one row per (symbol, ts).
+
+    THE RULE, stated once so it stops being implicit:
+
+    ==========  ============================  ====================
+    Column      Source, best first            Reported in
+    ==========  ============================  ====================
+    price*      tiingo, then alpaca           ``source``
+    volume      **alpaca**, then tiingo       ``volume_source``
+    ==========  ============================  ====================
+
+    (*price = open/high/low/close/adj_close. When the winning row is Tiingo
+    and carries an ``adj_close``, that adjusted value BECOMES ``close`` — the
+    canonical close is an adjusted close, doc 02 §5.)
+
+    WHY PRICE AND VOLUME COME FROM DIFFERENT FEEDS. They are not the same
+    measurement problem.
+
+    *Price* wants the most-adjusted, whole-market print, which is Tiingo.
+
+    *Volume* wants the SAME TAPE for every symbol, which is Alpaca. Tiingo
+    reports consolidated volume — every share on every venue. Alpaca's free
+    feed reports IEX only, measured at ~6.6% of that (``dynamo.domain
+    .volume_source``). Only 55 names carry Tiingo; the other ~11,200 are
+    Alpaca-only. Taking "the best available volume per row" therefore puts 55
+    mega-caps on a ~15x larger scale than the rest of the panel, and every
+    cross-sectional volume ranking — ``dollar_vol_20d``, ``dollar_vol_z_60d``,
+    ``amihud_20d``, ``volume_trend_20_60`` — silently sorts by which vendor
+    supplied the row. Measured on comparable mega-caps: 17.4M shares/day on
+    Tiingo vs 1.46M on Alpaca IEX.
+
+    This is the crypto-calendar bug's exact shape: a data-source discontinuity
+    corrupting a cross-sectional ranking without anything failing. The fix is
+    not a better estimate, it is refusing to mix — one tape for the whole
+    panel, even though it is the *narrower* tape.
+
+    Commit b294501 solved the other half of the same problem: absolute
+    dollar-volume THRESHOLDS are expressed in consolidated-equivalent dollars
+    and scaled at the point of comparison via ``volume_source_share``. That
+    makes a threshold portable across feeds; it does not make two feeds
+    comparable to each other within one ranking. Both are needed, and this
+    frame carries ``volume_source`` precisely so that the scaling function is
+    handed the feed that produced ``volume`` rather than the feed that
+    produced ``close``.
+
+    KNOWN RESIDUAL. Alpaca history in this database starts 2024-01-02 while
+    Tiingo reaches back to 2018-06-01, so a Tier-1 name's volume series
+    switches tape at that boundary. The break is not removed here — it is
+    LABELLED, in ``volume_source``, so a consumer can scale across it or
+    refuse to span it. Removing it needs Alpaca bars before 2024, which the
+    free feed does not serve.
+    """
+    if frame.empty:
+        return pd.DataFrame({c: [] for c in CANONICAL_BAR_COLUMNS})
+
+    frame = frame.copy()
+    source = cast(pd.Series, frame["source"])
+    frame["_price_rank"] = _source_rank(source, CANONICAL_PRICE_SOURCES)
+    frame["_volume_rank"] = _source_rank(source, CANONICAL_VOLUME_SOURCES)
+
+    ordered = frame.sort_values(by=["symbol", "ts", "_price_rank"], kind="mergesort")
+    price = cast(
+        pd.DataFrame, ordered.drop_duplicates(subset=["symbol", "ts"], keep="first")
+    ).copy()
+
+    # Volume is chosen independently, then grafted on by (symbol, ts).
+    by_volume = frame.sort_values(by=["symbol", "ts", "_volume_rank"], kind="mergesort")
+    chosen = cast(
+        pd.DataFrame, by_volume.drop_duplicates(subset=["symbol", "ts"], keep="first")
+    )
+    volume = cast(pd.DataFrame, chosen[["symbol", "ts", "volume", "source"]]).copy()
+    volume["volume_source"] = volume.pop("source")
+
+    price = price.drop(columns=["volume"])
+    merged = price.merge(volume, on=["symbol", "ts"], how="left")
+
+    # The canonical close is the ADJUSTED close wherever one exists.
+    adj_close = cast(pd.Series, merged["adj_close"])
+    merged["close"] = adj_close.where(adj_close.notna(), merged["close"])
+    return cast(pd.DataFrame, merged[list(CANONICAL_BAR_COLUMNS)]).reset_index(drop=True)
 
 
 def _reported_rowcount(rowcount: int | None, fallback: int) -> int:
@@ -814,10 +920,10 @@ class MarketDataRepository:
     ) -> pd.DataFrame:
         """Canonical daily bars as a DataFrame (doc 02 §3 canonical view).
 
-        Both sources are stored; the canonical close prefers the Tiingo row
-        (``close`` column = its ``adj_close``, doc 02 §5 adjustment policy) and
-        falls back to the Alpaca raw close. Columns:
-        ``symbol, ts, open, high, low, close, adj_close, volume, source``.
+        The per-column source rule is :func:`canonical_bars` — read its
+        docstring, not this one, for why price and volume come from different
+        feeds. Columns: ``symbol, ts, open, high, low, close, adj_close,
+        volume, source, volume_source``.
         """
         t = schema.bars_1d
         conditions = [
@@ -829,22 +935,7 @@ class MarketDataRepository:
         stmt = select(t).where(*conditions).order_by(t.c.symbol, t.c.ts)
         with self._engine.connect() as conn:
             frame = pd.read_sql(stmt, conn)
-        if frame.empty:
-            empty_cols = [
-                "symbol", "ts", "open", "high", "low",
-                "close", "adj_close", "volume", "source",
-            ]
-            return pd.DataFrame({c: [] for c in empty_cols})
-        # Prefer tiingo per (symbol, ts); its adj_close becomes the canonical close.
-        frame["_rank"] = (frame["source"] != "tiingo").astype(int)
-        frame = (
-            frame.sort_values(["symbol", "ts", "_rank"])
-            .drop_duplicates(subset=["symbol", "ts"], keep="first")
-            .drop(columns=["_rank", "fetched_at"])
-        )
-        is_tiingo = (frame["source"] == "tiingo") & frame["adj_close"].notna()
-        frame.loc[is_tiingo, "close"] = frame.loc[is_tiingo, "adj_close"]
-        return frame.reset_index(drop=True)
+        return canonical_bars(frame)
 
     def universe_at(self, as_of: date, tier: Tier | None = None) -> list[UniverseMembership]:
         """Survivorship-safe membership as of ``as_of`` (doc 02 §2)."""

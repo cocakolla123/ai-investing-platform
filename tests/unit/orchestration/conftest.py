@@ -8,6 +8,7 @@ plain config field (``state_key``) that survives the copy.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
@@ -56,6 +57,12 @@ class FakeRepo:
         self.quarantines: list[dict[str, Any]] = []
         self.alerts: list[dict[str, Any]] = []
         self.flags: list[Any] = []
+        # Mirrors the surveillance_flags TABLE: surrogate ids, a nullable
+        # verdict, rows that outlive the process that wrote them. Triage now
+        # reads this queue instead of an in-process list, so the fake has to
+        # behave like a table or the pipeline under test is not exercised.
+        self.flag_rows: list[dict[str, Any]] = []
+        self._next_flag_id = 0
         self.inserted_rows: list[tuple[str, list[Any]]] = []
         self.transcript_links: list[tuple[str, Any, str]] = []
 
@@ -77,7 +84,60 @@ class FakeRepo:
     def insert_surveillance_flags(self, flags: Any) -> int:
         flags = list(flags)
         self.flags.extend(flags)
+        for flag in flags:
+            self._next_flag_id += 1
+            self.flag_rows.append(
+                {
+                    "id": self._next_flag_id,
+                    "symbol": flag.symbol,
+                    "detector": flag.detector,
+                    "severity": float(flag.severity),
+                    "details": dict(flag.details),
+                    "ts": flag.ts,
+                    "triage_verdict": None,
+                    "triaged_at": None,
+                }
+            )
         return len(flags)
+
+    def untriaged_flags(
+        self,
+        since: datetime,
+        *,
+        exclude_detectors: Sequence[str] = (),
+        limit: int | None = None,
+    ) -> pd.DataFrame:
+        excluded = set(exclude_detectors)
+        rows = [
+            r
+            for r in self.flag_rows
+            if r["triage_verdict"] is None
+            and r["ts"] >= since
+            and r["detector"] not in excluded
+        ]
+        rows.sort(key=lambda r: (r["ts"], r["id"]))
+        if limit is not None:
+            rows = rows[:limit]
+        columns = ["id", "symbol", "detector", "severity", "details", "ts"]
+        if not rows:
+            return pd.DataFrame({c: [] for c in columns})
+        return pd.DataFrame([{c: r[c] for c in columns} for r in rows])
+
+    def set_triage_verdicts(
+        self,
+        flag_ids: Sequence[int],
+        verdict: str,
+        *,
+        triaged_at: datetime | None = None,
+    ) -> int:
+        wanted = {int(i) for i in flag_ids}
+        stamped = 0
+        for row in self.flag_rows:
+            if row["id"] in wanted:
+                row["triage_verdict"] = verdict
+                row["triaged_at"] = triaged_at
+                stamped += 1
+        return stamped
 
     def insert_rows(self, table: Any, rows: Any) -> int:
         rows = list(rows)
@@ -86,6 +146,14 @@ class FakeRepo:
 
     def upsert_rows(self, table: Any, rows: Any) -> int:
         return self.insert_rows(table, rows)
+
+    def upsert_universe_membership(self, memberships: Any) -> int:
+        memberships = list(memberships)
+        self.members = [
+            m for m in self.members
+            if not any(m.symbol == n.symbol and m.tier == n.tier for n in memberships)
+        ] + memberships
+        return len(memberships)
 
     def upsert_cross_venue_spreads(self, spreads: Any) -> int:
         spreads = list(spreads)
