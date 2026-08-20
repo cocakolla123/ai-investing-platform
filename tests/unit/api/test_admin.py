@@ -201,3 +201,61 @@ def test_alert_ack_and_idempotency(client: TestClient, admin: FakeAdminStore) ->
 def test_page_class_alert_not_ackable(client: TestClient) -> None:
     resp = _post(client, "/alerts/4/ack", "alert-ack")
     assert resp.status_code == 409  # clears only when the condition clears (doc 11 §4)
+
+
+# --- Sticky reconciliation halts ---
+
+
+@pytest.fixture
+def halted(admin: FakeAdminStore) -> FakeAdminStore:
+    admin.reconciliation_runs[11] = {
+        "id": 11,
+        "scope": "equities:symbols",
+        "result": "divergent",
+    }
+    admin.reconciliation_runs[12] = {"id": 12, "scope": "equities", "result": "clean"}
+    return admin
+
+
+def test_reconciliation_ack_clears_the_halt_and_is_idempotent(
+    client: TestClient, halted: FakeAdminStore
+) -> None:
+    resp = _post(client, "/reconciliation/11/ack", "reconciliation-ack", {"note": "squared off"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "acked"
+    assert resp.json()["scope"] == "equities:symbols"
+    assert halted.reconciliation_acked(11)
+
+    again = _post(client, "/reconciliation/11/ack", "reconciliation-ack", {"note": "again"})
+    assert again.json()["status"] == "already_acked"
+    assert len(halted.reconciliation_ack_rows) == 1
+    assert halted.audits == [("reconciliation_ack", {"run_id": 11, "note": "squared off"})]
+
+
+def test_reconciliation_ack_requires_the_confirm_header(
+    client: TestClient, halted: FakeAdminStore
+) -> None:
+    assert _post(client, "/reconciliation/11/ack", None, {"note": "x"}).status_code == 400
+    assert not halted.reconciliation_acked(11)
+
+
+def test_reconciliation_ack_refuses_a_blank_note(
+    client: TestClient, halted: FakeAdminStore
+) -> None:
+    resp = _post(client, "/reconciliation/11/ack", "reconciliation-ack", {"note": "   "})
+    assert resp.status_code == 400
+    assert not halted.reconciliation_acked(11)
+    assert halted.audits == []
+
+
+def test_reconciliation_ack_rejects_unknown_and_clean_runs(
+    client: TestClient, halted: FakeAdminStore
+) -> None:
+    assert (
+        _post(client, "/reconciliation/99/ack", "reconciliation-ack", {"note": "x"}).status_code
+        == 404
+    )
+    assert (
+        _post(client, "/reconciliation/12/ack", "reconciliation-ack", {"note": "x"}).status_code
+        == 409
+    )
