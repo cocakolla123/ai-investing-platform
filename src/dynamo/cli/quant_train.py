@@ -147,6 +147,21 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="train on the active tier-1/3 universe at --train-end (the default)",
     )
+    parser.add_argument(
+        "--session-stride",
+        type=int,
+        default=1,
+        help=(
+            "Keep every Nth session (default 1 = all). With a 20-session "
+            "forward label, consecutive sessions share 19/20 of their label "
+            "window, so adjacent rows are ~95%% redundant: striding trades "
+            "almost no information for an N-fold cut in panel-build time AND "
+            "gives more nearly-independent samples, which makes the fold "
+            "statistics honest rather than optimistic. Purge is measured in "
+            "STRIDED rows, so a stride>1 over-purges in calendar terms — "
+            "conservative, never leaky."
+        ),
+    )
     parser.add_argument("--database-url", default=None)
     parser.add_argument(
         "--label-kind",
@@ -858,6 +873,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sector_map = label_sector_map(gw_end.sectors(universe), universe)
     sessions = _sessions_between(args.train_start, args.train_end)
+    stride = max(1, int(args.session_stride))
+    if stride > 1:
+        # Keep the LAST session so the panel ends at train_end; the label
+        # exclusion tail is applied downstream on the strided list.
+        sessions = sessions[::-1][::stride][::-1]
     # flush=True on every progress print: piped/block-buffered stdout hid a
     # 2h panel build entirely — liveness must not depend on a tty.
     print(
