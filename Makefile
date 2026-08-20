@@ -1,4 +1,4 @@
-.PHONY: dev test lint typecheck check up down migrate fmt
+.PHONY: dev test lint typecheck check up down migrate fmt backup backup-verify backup-status
 
 dev:            ## Install deps into .venv
 	uv sync
@@ -44,3 +44,18 @@ api:            ## Serve the FastAPI app on 127.0.0.1:8000
 
 dash:           ## Serve the Streamlit dashboard on 127.0.0.1:8501
 	uv run streamlit run dashboard/app.py
+
+# --- Backups (doc 12 section 4; runbook docs/runbooks/db-restore.md) -------
+# Deliberately NOT a compose service: a resident container costs RAM on a
+# 8 GB host all day for a job that runs 16 seconds a night, and the backup
+# you most want is the one taken while the app containers are stopped.
+# Schedule with host cron -- the crontab line is in the runbook.
+
+backup:         ## pg_dump -Fc into backups/, prune to 30 daily + 12 monthly, write the metric
+	uv run python -m dynamo.cli.backup run
+
+backup-verify:  ## Quarterly restore drill: restore the newest dump into a SCRATCH db and assert row counts
+	uv run python -m dynamo.cli.backup verify
+
+backup-status:  ## Inventory + staleness (exit 1 when the last backup is > 26h old)
+	uv run python -m dynamo.cli.backup status

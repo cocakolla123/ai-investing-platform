@@ -61,7 +61,11 @@ def _pm_broker(dynamo: DynamoResource) -> Any | None:
     return broker if broker.configured else None
 
 
-def _pm_gate(settings: Settings, scope_fn: Callable[[str], str] | None = None) -> Any:
+def _pm_gate(
+    settings: Settings,
+    scope_fn: Callable[[str], str] | None = None,
+    readiness: Any = None,
+) -> Any:
     """The doc 09 §7 gate as a callable over PMOrders (same function as equities).
 
     Non-LIVE short-circuits to permitted (unless the kill-switch is engaged);
@@ -89,7 +93,7 @@ def _pm_gate(settings: Settings, scope_fn: Callable[[str], str] | None = None) -
             settings.dynamo_env,
             approval,
             kill_switch_engaged(settings.kill_switch_file),
-            Readiness(),  # LIVE readiness comes from stored metrics; unset → refuse
+            readiness if readiness is not None else Readiness(),
             scope_target=scope(order.market_id),
         )
 
@@ -193,7 +197,7 @@ def _pm_manager(dynamo: DynamoResource, broker: Any) -> Any:
         PMOrderRepository(engine),
         PMTradeRepository(engine),
         UtcClock(),
-        gate=_pm_gate(dynamo.settings()),
+        gate=_pm_gate(dynamo.settings(), readiness=dynamo.readiness()),
     )
 
 

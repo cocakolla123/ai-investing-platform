@@ -46,7 +46,7 @@ def _options_chain(dynamo: DynamoResource) -> Any | None:
     return chain if chain.available else None
 
 
-def _options_gate(settings: Settings) -> Any:
+def _options_gate(settings: Settings, readiness: Any = None) -> Any:
     """The doc 09 §7 gate as a callable over OptionOrders (same function as
     equities). Non-LIVE short-circuits to permitted (unless the kill-switch is
     engaged); LIVE requires the signed approval covering ``OPT:<occ>`` (or
@@ -72,7 +72,7 @@ def _options_gate(settings: Settings) -> Any:
             settings.dynamo_env,
             approval,
             kill_switch_engaged(settings.kill_switch_file),
-            Readiness(),  # LIVE readiness comes from stored metrics; unset → refuse
+            readiness if readiness is not None else Readiness(),
             scope_target=opt_scope(order.occ_symbol),
         )
 
@@ -105,7 +105,7 @@ def _options_manager(dynamo: DynamoResource, broker: Any) -> Any:
         OptionsOrderRepository(engine),
         OptionsTradeRepository(engine),
         UtcClock(),
-        gate=_options_gate(dynamo.settings()),
+        gate=_options_gate(dynamo.settings(), dynamo.readiness()),
         shares_lookup=shares_lookup,
         cash_lookup=cash_lookup,
     )

@@ -37,3 +37,7 @@ secrets/
 # expiry, not source. The signing key ($DYNAMO_APPROVAL_KEY) never lives here.
 /approvals/*
 !/approvals/README.md
+
+# pg_dump archives (docs/runbooks/db-restore.md). Backups belong in object
+# storage, never in git.
+/backups/

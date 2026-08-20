@@ -310,6 +310,24 @@ class DynamoResource(ConfigurableResource):
                 .values(status="expired", resolved_at=utcnow())
             )
 
+    def readiness(self) -> Any:
+        """Live-readiness (doc 00 §5.4) from stored metrics.
+
+        Only ``backup_drill_ok`` is sourced today — it is the one criterion
+        with a producer (the ``make backup-verify`` drill writes
+        ``backup_last_success_timestamp{kind=restore_drill}``). The other
+        three stay False, so LIVE still fails closed; this makes the drill a
+        real dependency instead of a boolean nothing ever sets.
+        """
+        from dynamo.execution.gate import Readiness
+        from dynamo.persistence.backup import backup_drill_ok
+
+        try:
+            drill_ok = backup_drill_ok(self.engine(), utcnow())
+        except Exception:  # no DB / no table -> fail closed, never crash the gate
+            drill_ok = False
+        return Readiness(backup_drill_ok=drill_ok)
+
     def notifier(self) -> Any:
         """Out-of-band paging channel (doc 12 §7); disabled when unconfigured."""
         if self._notifier is None:

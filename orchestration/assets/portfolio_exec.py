@@ -473,7 +473,7 @@ def _verdict_expectations(
     return out
 
 
-def _equity_gate(settings: Settings) -> Callable[[Any], Any]:
+def _equity_gate(settings: Settings, readiness: Any = None) -> Callable[[Any], Any]:
     """The doc 09 §7 gate as a callable over equity/crypto Orders.
 
     The SAME function the options and PM sleeves use. Non-LIVE short-circuits
@@ -505,7 +505,7 @@ def _equity_gate(settings: Settings) -> Callable[[Any], Any]:
             settings.dynamo_env,
             approval,
             kill_switch_engaged(settings.kill_switch_file),
-            Readiness(),  # LIVE readiness comes from stored metrics; unset → refuse
+            readiness if readiness is not None else Readiness(),
             scope_target=order.symbol,
         )
 
@@ -548,7 +548,7 @@ def _order_manager(dynamo: DynamoResource, broker: Any) -> Any:
         UtcClock(),
         auto_approve=s.auto_approve,
         approval_ttl_minutes=s.approval_ttl_minutes,
-        gate=_equity_gate(s),
+        gate=_equity_gate(s, dynamo.readiness()),
         halt_check=lambda _order: _equities_sticky_halt_active(dynamo),
     )
 
