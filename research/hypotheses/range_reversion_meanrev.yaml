@@ -1,0 +1,100 @@
+# Pre-registered hypothesis (ADR-0015 alpha-research rails).
+#
+# Registered with:
+#   python -m dynamo.cli.alpha register --file research/hypotheses/range_reversion_meanrev.yaml
+#
+# Everything below was written BEFORE any test was run against it. The rails
+# enforce that mechanically: the audition refuses any hypothesis whose
+# registered_at is not strictly earlier than the audition invocation's start.
+# Nothing here may be edited after registration — the stored row is the
+# pre-commitment, and a revised idea gets a new id and a new trial.
+
+id: range-reversion-meanrev
+title: Range-bound names near the low of an established range outperform over 20 sessions
+
+trial_family: mean_reversion
+
+rationale: >
+  WHY THIS SHOULD WORK. A stock that oscillates inside a stable band is a
+  stock whose price is being set by inventory and liquidity provision rather
+  than by a stream of new information about its value. Market makers and
+  short-horizon liquidity providers absorb one-sided order flow and are
+  compensated for it by mean reversion: a seller who needs to exit pushes the
+  price below the level the marginal informed holder considers fair, the
+  liquidity provider takes the other side, and the price reverts as the
+  pressure clears. Grossman-Miller and the inventory-risk literature give the
+  mechanism; the observable signature is negatively autocorrelated returns
+  (variance ratio below 1) plus repeated two-sided visits to the edges of a
+  band. The absence of fundamental repricing is what makes the band stable in
+  the first place: no new information means no reason for the level to move,
+  so the flow-driven deviations are transient rather than the first leg of a
+  revaluation. The bullish extreme is a name with that established
+  oscillating structure sitting near the bottom of it, which is exactly the
+  pattern a retail trader recognises by eye when they repeatedly buy a stock
+  near $4.30 and sell it near $5.30.
+  .
+  WHY IT COULD FAIL, stated up front. (a) The mechanism is a compensation for
+  bearing inventory risk, and the compensation is paid in the spread, so the
+  gross edge and the trading cost come from the same place; a signal that
+  looks strong on closing prices can be entirely consumed by the spread.
+  (b) A "range" is only visible after the fact — a name in the early stage of
+  a fundamental repricing looks range-bound right up until it is not, so the
+  score is structurally exposed to value traps and to the moment a range
+  breaks. (c) Range trading is short-vol in disguise and should be expected
+  to lose in exactly the regimes where the rest of the book is also losing.
+  (d) The construction deliberately vetoes trending names, so it will refuse
+  the single best-performing group in a momentum-led market and its IC should
+  be expected to be regime-dependent rather than stable.
+  .
+  SCOPE — THE HONEST LIMIT OF TODAY'S TEST. The platform currently holds
+  daily history for about 55 mega-cap names. Mega-caps are the worst possible
+  universe for this idea: they are the most heavily arbitraged, most
+  continuously repriced, deepest-book names in the market, they trend more
+  than they oscillate, and any inventory-driven deviation in them is cleared
+  in minutes rather than sessions. An audition on today's panel is therefore
+  a WEAK test — it is a sanity check that the feature computes, behaves, and
+  does not blow up, not evidence about the hypothesis. It will consume a
+  trial from the mean_reversion family whatever it shows, which is the rails
+  working as designed and is not a reason to avoid running it or to
+  restructure the family to dodge the cost. A FAIL on 55 mega-caps is close
+  to uninformative about small and mid caps; a PASS on 55 mega-caps would be
+  more likely to be a small-sample artefact than a discovery, and should be
+  treated as one. The real test is the same candidate on the wide (~1,000
+  name) universe that the Tiingo Power backfill unlocks, where the small and
+  mid caps this hypothesis is actually about are present, and it should be
+  registered and auditioned as a separate hypothesis at that point.
+
+prediction: >
+  POSITIVE mean per-session cross-sectional Spearman rank IC between the
+  range_reversion score and the forward 20-session excess return, i.e. the
+  higher the score (more established range, closer to the low), the higher
+  the subsequent excess return. Magnitude: small, order +0.01 to +0.03 pooled
+  rank IC on a broad small/mid-cap universe. On today's 55-name mega-cap
+  panel I predict a NULL result — an IC statistically indistinguishable from
+  the permutation null, most likely somewhere in -0.01 to +0.01, and a
+  verdict of FAIL. I also predict the incremental walk-forward IC delta over
+  the existing 51-feature panel will be near zero on this panel, because
+  dist_20d_mean_sigma, ret_5d_z, ret_10d_z and rsi_14 already carry the
+  short-horizon reversion signal for mega-caps; the part this candidate adds
+  that they do not have is the variance-ratio and two-sided-oscillation
+  GATE, and a gate has little to bite on in a universe with almost no
+  genuinely range-bound names.
+
+data_requirements: >
+  Daily adjusted-close bars only; no fundamentals, no macro, no estimates,
+  no vendor data beyond what is already backfilled. Per symbol the score
+  needs 139 sessions of that symbol's OWN history and is declared as 140:
+  the binding term is the two-sided excursion counter (120 counted sessions
+  on top of the 20-session Bollinger band that defines a touch), ahead of
+  the variance ratio's 130 (120-session variance window + the 10-session
+  longest lag). A name is therefore NaN until it has roughly seven months
+  of trading, which also means recent IPOs and spin-offs — a population
+  with real range behaviour — are structurally invisible to it. The
+  point-in-time gateway supplies 420 calendar days (~288 sessions), which
+  clears that comfortably. Everything is computed with the catalog's per-symbol window
+  helpers so a mixed equity+crypto universe cannot turn sessions into
+  calendar days. What is NOT available and would materially improve the
+  test: quoted bid-ask spreads, without which the trading-cost objection in
+  the rationale cannot be quantified and the surveillance detector's spread
+  guard stays inert; and a wide small/mid-cap universe, without which this
+  is being tested on the wrong names.
