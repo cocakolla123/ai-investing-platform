@@ -506,9 +506,20 @@ class MarketDataRepository:
     def upsert_corporate_actions(
         self, actions: Iterable[CorporateAction], *, fetched_at: datetime | None = None
     ) -> int:
+        """Splits/dividends/mergers/spinoffs, keyed
+        ``(symbol, ex_date, action_type, source)``.
+
+        Alpaca's announcements endpoint legitimately repeats that key inside
+        one window: an announcement can be amended, and a corporate event
+        involving two tickers is returned once per side, so the same
+        ``(symbol, ex_date, "merger")`` arrives more than once. A multi-VALUES
+        ``ON CONFLICT DO UPDATE`` refuses in-batch duplicates
+        (``CardinalityViolation``, hit on the first real 2024 load), so dedupe
+        keep-last first — the same end state row-by-row upserts would produce.
+        """
         ts = fetched_at or _now()
-        rows = [
-            {
+        deduped: dict[tuple[str, date, str, str], dict[str, Any]] = {
+            (a.symbol, a.ex_date, a.action_type, a.source): {
                 "symbol": a.symbol,
                 "ex_date": a.ex_date,
                 "action_type": a.action_type,
@@ -518,8 +529,8 @@ class MarketDataRepository:
                 "fetched_at": ts,
             }
             for a in actions
-        ]
-        return self.upsert_rows(schema.corporate_actions, rows)
+        }
+        return self.upsert_rows(schema.corporate_actions, list(deduped.values()))
 
     def upsert_prediction_markets(self, markets: Iterable[PredictionMarket]) -> int:
         rows = [
@@ -734,15 +745,74 @@ class MarketDataRepository:
             rows = conn.execute(stmt).all()
         return {str(r[0]): cast(datetime, r[1]).date() for r in rows}
 
+    def bars_close_frame(
+        self,
+        *,
+        source: str | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> pd.DataFrame:
+        """``symbol, ts, close`` straight out of ``bars_1d``, per SOURCE.
+
+        Deliberately NOT the canonical view: the split-artifact census asks
+        "are the rows this feed stored adjusted?", which is a question about
+        one feed's rows and would be answered wrong by a frame that silently
+        substituted another feed's close.
+        """
+        t = schema.bars_1d
+        stmt = select(t.c.symbol, t.c.ts, t.c.close)
+        if source is not None:
+            stmt = stmt.where(t.c.source == source)
+        if start is not None:
+            stmt = stmt.where(t.c.ts >= datetime(start.year, start.month, start.day, tzinfo=UTC))
+        if end is not None:
+            stmt = stmt.where(
+                t.c.ts <= datetime(end.year, end.month, end.day, 23, 59, 59, tzinfo=UTC)
+            )
+        with self._engine.connect() as conn:
+            return pd.read_sql(stmt, conn)
+
+    def count_corporate_actions(self) -> int:
+        with self._engine.connect() as conn:
+            return int(
+                conn.execute(select(func.count()).select_from(schema.corporate_actions)).scalar()
+                or 0
+            )
+
+    def corporate_actions_by_type(self) -> dict[str, int]:
+        t = schema.corporate_actions
+        stmt = select(t.c.action_type, func.count()).group_by(t.c.action_type)
+        with self._engine.connect() as conn:
+            return {str(r[0]): int(r[1]) for r in conn.execute(stmt)}
+
+    def split_ex_dates(self) -> set[tuple[str, date]]:
+        """``(symbol, ex_date)`` for every recorded split.
+
+        The independent witness the census cross-checks against: a large move
+        landing on a ratio is a *candidate*; a large move landing on a ratio
+        AND a recorded split ex-date is evidence the rows are unadjusted.
+        """
+        t = schema.corporate_actions
+        stmt = select(t.c.symbol, t.c.ex_date).where(t.c.action_type == "split")
+        with self._engine.connect() as conn:
+            return {(str(r[0]), cast(date, r[1])) for r in conn.execute(stmt)}
+
     def rebase_universe_valid_from(
-        self, rebases: Sequence[tuple[str, date, date]]
+        self, rebases: Sequence[tuple[str, date, date]], *, chunk_size: int = 500
     ) -> tuple[int, int]:
         """Move membership rows from one ``valid_from`` to another, atomically.
 
         ``rebases``: ``(symbol, old_valid_from, new_valid_from)``. ``valid_from``
         is half the primary key, so this is a delete + insert rather than an
-        update; both happen in ONE transaction so a kill cannot leave a symbol
-        with no membership row at all.
+        update; a symbol's delete and insert always happen in ONE transaction,
+        so a kill can never leave a symbol with no membership row at all.
+
+        Chunked at ``chunk_size`` pairs: a row-values ``IN`` list of 11k tuples
+        exceeds PostgreSQL's parser stack (``StatementTooComplex``, measured on
+        the 11,251-row Tier-2 backdate). Chunks commit independently, so a kill
+        mid-run leaves some symbols rebased and some not — which the idempotent
+        re-run repairs, because an already-rebased symbol has no row at its old
+        ``valid_from`` and is skipped.
 
         Only the exact ``(symbol, old_valid_from)`` rows named are deleted —
         rows at any other ``valid_from``, and every row of every symbol not
@@ -751,6 +821,16 @@ class MarketDataRepository:
         """
         if not rebases:
             return (0, 0)
+        step = max(1, int(chunk_size))
+        if len(rebases) > step:
+            deleted_total, inserted_total = 0, 0
+            for start in range(0, len(rebases), step):
+                deleted, inserted = self.rebase_universe_valid_from(
+                    rebases[start : start + step], chunk_size=step
+                )
+                deleted_total += deleted
+                inserted_total += inserted
+            return (deleted_total, inserted_total)
         t = schema.universe_membership
         keys = [(symbol, old) for symbol, old, _ in rebases]
         with self._engine.begin() as conn:
