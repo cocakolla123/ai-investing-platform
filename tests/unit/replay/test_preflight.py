@@ -56,6 +56,9 @@ class FakeReads:
     audit_bars: pd.DataFrame | None = None
     splits: set[tuple[str, date]] | None = None
     audit_queries: list[tuple[date, date]] = field(default_factory=list)
+    # Schema check. Healthy default: the database is at head.
+    absent_tables: set[str] = field(default_factory=set)
+    table_queries: list[list[str]] = field(default_factory=list)
 
     def universe_symbols(self, as_of: date, tiers: tuple[int, ...]) -> list[str]:
         self.tier_queries.append(tuple(tiers))
@@ -92,6 +95,10 @@ class FakeReads:
         self, symbols: Sequence[str], start: date, end: date
     ) -> set[tuple[str, date]]:
         return set(self.splits) if self.splits is not None else {(SYMBOLS[0], SPLIT_DAY)}
+
+    def missing_tables(self, names: Sequence[str]) -> list[str]:
+        self.table_queries.append(list(names))
+        return [n for n in names if n in self.absent_tables]
 
 
 SPLIT_DAY = date(2026, 3, 4)
@@ -150,6 +157,7 @@ def test_healthy_data_passes_with_quant_model_warning() -> None:
     assert report.passed
     names = [c.name for c in report.checks]
     assert names == [
+        "schema",
         "universe",
         "bar_coverage_start",
         "bar_coverage_lookback",
@@ -660,3 +668,49 @@ def test_the_adjustment_audit_widens_to_the_surveillance_universe() -> None:
     wide = FakeReads()
     pf.run_preflight(wide, _discovery_config())
     assert set(wide.audit_symbols[0]) == set(SYMBOLS) | set(TIER2_SYMBOLS)
+
+
+# -- schema (D6) -------------------------------------------------------------
+
+
+def test_a_database_behind_the_code_refuses_the_run() -> None:
+    """The real failure this check exists for. The dev database sat at
+    migration 0020 while head was 0022, so `replay_flags` did not exist.
+    Every other check passed -- universe, bars, model all fine -- and the run
+    would have died on its first flag insert, hours in, with a raw
+    UndefinedTable traceback."""
+    reads = FakeReads(absent_tables={"replay_flags"})
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config(discovery_mode="code"))
+    detail = errors_of(exc.value)["schema"]
+    assert "replay_flags" in detail
+    assert "alembic upgrade head" in detail, "must name the fix, not just the symptom"
+
+
+def test_the_schema_check_asks_only_about_tables_this_run_writes() -> None:
+    """A quant run with discovery off does not write replay_flags, so a
+    database without that table must not be refused -- otherwise the check
+    blocks runs it has no business blocking."""
+    reads = FakeReads(absent_tables={"replay_flags", "replay_verdicts"})
+    report = pf.run_preflight(reads, config())
+    assert report.passed
+    asked = reads.table_queries[0]
+    assert "replay_flags" not in asked
+    assert "replay_verdicts" not in asked
+    assert "replay_runs" in asked
+
+
+def test_committee_mode_additionally_requires_the_verdict_tables() -> None:
+    reads = FakeReads(absent_tables={"replay_contexts"})
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config(mode="committee"))
+    assert "replay_contexts" in errors_of(exc.value)["schema"]
+
+
+def test_schema_runs_first_so_a_stale_database_fails_for_the_right_reason() -> None:
+    """A database behind the code makes downstream checks fail confusingly.
+    The schema check has to be the one that speaks."""
+    reads = FakeReads(absent_tables={"replay_runs"}, universe=[])
+    with pytest.raises(pf.PreflightError) as exc:
+        pf.run_preflight(reads, config())
+    assert exc.value.report.checks[0].name == "schema"

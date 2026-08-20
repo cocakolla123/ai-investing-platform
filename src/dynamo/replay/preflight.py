@@ -186,6 +186,8 @@ class PreflightReads(Protocol):
         self, symbols: Sequence[str], start: date, end: date
     ) -> set[tuple[str, date]]: ...
 
+    def missing_tables(self, names: Sequence[str]) -> list[str]: ...
+
 
 def _symbol_in(column: Any, symbols: Sequence[str]) -> Any:
     """``symbol = ANY(:array)`` rather than ``IN (:a, :b, ... x10,000)``.
@@ -306,6 +308,12 @@ class EngineReads:
         with _serial_connection(self._engine) as cx:
             return {(str(r.symbol), cast(date, r.ex_date)) for r in cx.execute(stmt)}
 
+    def missing_tables(self, names: Sequence[str]) -> list[str]:
+        from sqlalchemy import inspect
+
+        present = set(inspect(self._engine).get_table_names())
+        return [n for n in names if n not in present]
+
 
 def session_window(center: date, n_sessions: int = BAR_WINDOW_SESSIONS) -> tuple[date, date]:
     """[first, last] dates of the +/-``n_sessions`` NYSE-session window
@@ -355,6 +363,46 @@ def _check_universe(reads: PreflightReads, cfg: ReplayConfig) -> tuple[Preflight
         PreflightCheck("universe", OK, f"{len(symbols)} symbols active at {cfg.start}"),
         symbols,
     )
+
+
+#: Tables every replay mode writes, regardless of config.
+_ALWAYS_WRITTEN = ("replay_runs", "replay_decisions", "replay_equity", "replay_fills")
+#: Tables only some configurations write, keyed by what turns them on.
+_COMMITTEE_WRITTEN = ("replay_verdicts", "replay_contexts")
+_DISCOVERY_WRITTEN = ("replay_flags",)
+
+
+def _check_schema(reads: PreflightReads, cfg: ReplayConfig) -> PreflightCheck:
+    """Do the tables this run will WRITE actually exist?
+
+    Measured, not hypothetical: the dev database sat at migration 0020 while
+    head was 0022, so ``replay_flags`` did not exist. Every other check here
+    passed — the universe, the bars, the model were all fine — and the run
+    would have died on its first flag insert, hours in, with a raw
+    ``UndefinedTable`` traceback.
+
+    Checking the tables rather than comparing ``alembic_version`` to head is
+    deliberate: it names the thing that will break, it needs no alembic
+    config discovery at runtime, and a database legitimately ahead of this
+    checkout (a rollback in progress) is not an error for a run whose tables
+    are all present.
+    """
+    wanted = list(_ALWAYS_WRITTEN)
+    if cfg.mode == "committee":
+        wanted += list(_COMMITTEE_WRITTEN)
+    if cfg.discovery_mode != "off":
+        wanted += list(_DISCOVERY_WRITTEN)
+
+    missing = reads.missing_tables(wanted)
+    if missing:
+        return PreflightCheck(
+            "schema",
+            ERROR,
+            f"{len(missing)} table(s) this run writes do not exist: "
+            f"{', '.join(missing)} — the database is behind the code; "
+            "run `alembic upgrade head`",
+        )
+    return PreflightCheck("schema", OK, f"all {len(wanted)} written tables present")
 
 
 def _check_bar_coverage(
@@ -773,6 +821,10 @@ def run_preflight(
         EngineReads(engine_or_reads) if isinstance(engine_or_reads, Engine) else engine_or_reads
     )
     checks: list[PreflightCheck] = []
+
+    # First, and cheapest: a database behind the code fails every downstream
+    # check for the wrong reason, or worse, passes them all and dies hours in.
+    checks.append(_check_schema(reads, config))
 
     universe_check, symbols = _check_universe(reads, config)
     checks.append(universe_check)
