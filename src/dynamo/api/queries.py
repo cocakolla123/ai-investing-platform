@@ -18,6 +18,7 @@ from dynamo.domain.models.learning import JournalEntry, JournalKind, ProposalSta
 from dynamo.domain.models.research import CommitteeVerdict, Sleeve, WatchlistRow
 from dynamo.llm.cost_meter import SqlAlchemyLedgerWriter
 from dynamo.persistence import schema
+from dynamo.persistence.repositories.execution import ReconciliationRepository
 from dynamo.persistence.repositories.learning import JournalRepository, ProposalRepository
 from dynamo.persistence.repositories.market import MarketDataRepository
 
@@ -341,6 +342,25 @@ class SqlAdminStore:
 
     def set_improvement_status(self, proposal_id: str, status: str) -> None:
         self._proposals.set_status(proposal_id, ProposalStatus(status))
+
+    # --- Sticky reconciliation halts (doc 09 §5) ---
+
+    def get_reconciliation_run(self, run_id: int) -> dict[str, Any] | None:
+        t = schema.reconciliation_runs
+        rows = _rows(self._engine, select(t).where(t.c.id == run_id))
+        return rows[0] if rows else None
+
+    def reconciliation_acked(self, run_id: int) -> bool:
+        t = schema.reconciliation_acks
+        return bool(_rows(self._engine, select(t.c.id).where(t.c.run_id == run_id)))
+
+    def ack_reconciliation(self, run_id: int, acked_by: str, note: str, now: datetime) -> None:
+        """The one deliberate act that clears a sticky halt — never automatic."""
+        from dynamo.execution.reconciliation import acknowledge_reconciliation
+
+        acknowledge_reconciliation(
+            ReconciliationRepository(self._engine), run_id, acked_by, note, now
+        )
 
 
 def make_ping(engine: Engine):

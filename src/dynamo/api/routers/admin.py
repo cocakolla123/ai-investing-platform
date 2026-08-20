@@ -194,6 +194,47 @@ def ack_alert(
     return {"alert_id": alert_id, "status": "acked"}
 
 
+# --- Sticky reconciliation halts (doc 09 §5) ---
+
+
+class ReconciliationAckBody(BaseModel):
+    note: str
+
+
+@router.post("/reconciliation/{run_id}/ack")
+def ack_reconciliation(
+    run_id: int,
+    body: ReconciliationAckBody,
+    deps: DepsDep,
+    x_dynamo_confirm: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Clear the sticky halt engaged by one divergent reconciliation run.
+
+    A divergent run halts its sleeve until a human says otherwise; this is the
+    only thing that says otherwise. Nothing re-checks and quietly resumes, and
+    an empty note is refused — the ack row is the record of who resumed
+    trading, when, and why.
+    """
+    _require_confirm("reconciliation-ack", x_dynamo_confirm)
+    run = deps.admin.get_reconciliation_run(run_id)
+    if run is None:
+        raise HTTPException(404, f"no reconciliation run {run_id}")
+    if str(run.get("result", "")) != "divergent":
+        raise HTTPException(409, f"reconciliation run {run_id} is not divergent; nothing to clear")
+    if deps.admin.reconciliation_acked(run_id):
+        return {"run_id": run_id, "status": "already_acked"}
+    if not body.note.strip():
+        raise HTTPException(400, "reconciliation ack requires a non-empty note")
+    deps.admin.ack_reconciliation(run_id, ADMIN_ACTOR, body.note, _now())
+    deps.admin.audit("reconciliation_ack", {"run_id": run_id, "note": body.note})
+    return {
+        "run_id": run_id,
+        "status": "acked",
+        "acked_by": ADMIN_ACTOR,
+        "scope": run.get("scope"),
+    }
+
+
 # --- Kill-switch ---
 
 

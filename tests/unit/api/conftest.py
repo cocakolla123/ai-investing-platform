@@ -224,6 +224,8 @@ class FakeAdminStore:
         self.target_portfolios: dict[str, dict[str, Any]] = {}
         self.improvements: dict[str, dict[str, Any]] = {}
         self.universe_calls: list[dict[str, Any]] = []
+        self.reconciliation_runs: dict[int, dict[str, Any]] = {}
+        self.reconciliation_ack_rows: list[dict[str, Any]] = []
 
     def audit(self, action: str, payload: dict[str, Any]) -> None:
         self.audits.append((action, payload))
@@ -256,6 +258,30 @@ class FakeAdminStore:
 
     def set_improvement_status(self, proposal_id: str, status: str) -> None:
         self.improvements[proposal_id]["status"] = status
+
+    def get_reconciliation_run(self, run_id: int) -> dict[str, Any] | None:
+        return self.reconciliation_runs.get(run_id)
+
+    def reconciliation_acked(self, run_id: int) -> bool:
+        return any(r["run_id"] == run_id for r in self.reconciliation_ack_rows)
+
+    def ack_reconciliation(self, run_id: int, acked_by: str, note: str, now: datetime) -> None:
+        from dynamo.execution.reconciliation import acknowledge_reconciliation
+
+        store = self
+
+        class _Store:
+            def record_run(self, *args: Any, **kwargs: Any) -> int:  # pragma: no cover
+                raise AssertionError("ack path never records runs")
+
+            def record_ack(
+                self, run_id: int, acked_by: str, acked_at: datetime, note: str
+            ) -> None:
+                store.reconciliation_ack_rows.append(
+                    {"run_id": run_id, "acked_by": acked_by, "at": acked_at, "note": note}
+                )
+
+        acknowledge_reconciliation(_Store(), run_id, acked_by, note, now)
 
 
 class FakeKillSwitch:
