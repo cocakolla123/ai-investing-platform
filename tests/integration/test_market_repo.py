@@ -29,6 +29,7 @@ TABLES = [
     schema.transcripts,
     schema.earnings_estimate_vintages,
     schema.earnings_events,
+    schema.insider_tx,
 ]
 
 
@@ -304,6 +305,28 @@ def test_upsert_transcripts_dedupes_in_batch_keep_last(
         rows = conn.execute(select(schema.transcripts)).all()
     assert len(rows) == 1
     assert rows[0].content == "revised"
+
+
+def test_upsert_insider_tx_dedupes_in_batch_keep_last(
+    repo: MarketDataRepository, engine: Engine
+) -> None:
+    """One EDGAR accession can carry several ownership XML documents that
+    parse to the same aggregated rows, so a day's Form 4 batch repeats the
+    (accession, symbol, insider, tx_type) key."""
+    from dynamo.domain.models.market import InsiderTx
+
+    def tx(shares: float) -> InsiderTx:
+        return InsiderTx(
+            accession_no="0001-26-000001", symbol="ACME", insider_name="DOE JANE",
+            role="Director", tx_type="P", shares=shares, price=10.0,
+            filed_at=datetime(2026, 8, 6, 12, tzinfo=UTC),
+        )
+
+    assert repo.upsert_insider_tx([tx(1000.0), tx(1500.0)]) == 1
+    with engine.connect() as conn:
+        rows = conn.execute(select(schema.insider_tx)).all()
+    assert len(rows) == 1
+    assert rows[0].shares == 1500.0  # keep-last
 
 
 def test_upsert_earnings_dedupes_in_batch_keep_last(

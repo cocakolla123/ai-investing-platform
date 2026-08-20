@@ -268,3 +268,47 @@ def test_insider_range_without_a_cik_filter_takes_everything() -> None:
         make_client(httpx.MockTransport(handler)).insider_transactions_in_range(day, day)
     )
     assert len(txs) == 1
+
+
+TWO_XML_ONE_ACCESSION = {
+    "hits": {
+        "hits": [
+            {
+                "_id": "0000320193-26-000002:form4.xml",
+                "_source": {
+                    "adsh": "0000320193-26-000002",
+                    "ciks": ["0000320193"],
+                    "file_date": "2026-07-31",
+                },
+            },
+            {  # same accession, second ownership document
+                "_id": "0000320193-26-000002:primary_doc.xml",
+                "_source": {
+                    "adsh": "0000320193-26-000002",
+                    "ciks": ["0000320193"],
+                    "file_date": "2026-07-31",
+                },
+            },
+        ]
+    }
+}
+
+
+def test_insider_range_fetches_each_accession_once() -> None:
+    """A joint filing carries several ownership XMLs that parse to the same
+    aggregated rows: the second is a wasted request against the 10 req/s
+    budget and an in-batch duplicate key downstream."""
+    fetched: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if ".xml" in str(request.url):
+            fetched.append(str(request.url))
+            return httpx.Response(200, text=FORM4_XML)
+        return httpx.Response(200, json=TWO_XML_ONE_ACCESSION)
+
+    day = date(2026, 7, 31)
+    txs = list(
+        make_client(httpx.MockTransport(handler)).insider_transactions_in_range(day, day)
+    )
+    assert len(fetched) == 1
+    assert len(txs) == 1

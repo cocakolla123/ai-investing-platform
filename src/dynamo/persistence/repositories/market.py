@@ -370,8 +370,17 @@ class MarketDataRepository:
         return self.upsert_rows(schema.xbrl_facts, list(deduped.values()))
 
     def upsert_insider_tx(self, txs: Iterable[InsiderTx]) -> int:
-        rows = [
-            {
+        """Form 4 transactions keyed by (accession, symbol, insider, tx_type).
+
+        One EDGAR accession can carry more than one ownership XML document
+        (a joint filing's primary_doc plus the form itself), and each parses
+        to the same aggregated rows — so a day's batch repeats the key. A
+        multi-VALUES ``ON CONFLICT DO UPDATE`` refuses in-batch duplicates
+        (CardinalityViolation), so dedupe keep-last first, like the xbrl,
+        transcript and earnings upserts already do.
+        """
+        deduped: dict[tuple[str, str, str, str], dict[str, Any]] = {
+            (t.accession_no, t.symbol, t.insider_name, t.tx_type): {
                 "accession_no": t.accession_no,
                 "symbol": t.symbol,
                 "insider_name": t.insider_name,
@@ -382,8 +391,8 @@ class MarketDataRepository:
                 "filed_at": t.filed_at,
             }
             for t in txs
-        ]
-        return self.upsert_rows(schema.insider_tx, rows)
+        }
+        return self.upsert_rows(schema.insider_tx, list(deduped.values()))
 
     def upsert_news(self, items: Iterable[NewsItem], *, fetched_at: datetime | None = None) -> int:
         ts = fetched_at or _now()

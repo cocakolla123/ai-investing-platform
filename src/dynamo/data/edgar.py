@@ -232,6 +232,7 @@ class EdgarClient:
         the one that decides how much history it is willing to pay for.
         """
         wanted = None if ciks is None else {str(c).lstrip("0") for c in ciks}
+        seen: set[str] = set()
         for hit in self._search_hits(self._range_params("4", start, end)):
             source = hit.get("_source", {})
             adsh = source.get("adsh")
@@ -240,6 +241,13 @@ class EdgarClient:
             filename = doc_id.split(":", 1)[1] if ":" in doc_id else ""
             if not adsh or not hit_ciks or not filename.endswith(".xml"):
                 continue
+            # One accession can carry several ownership XMLs (a joint filing's
+            # primary_doc alongside the form). They parse to the same rows, so
+            # fetching the second is a wasted request against the 10 req/s
+            # budget and an in-batch duplicate key downstream.
+            if adsh in seen:
+                continue
+            seen.add(adsh)
             if wanted is not None and not any(
                 str(c).lstrip("0") in wanted for c in hit_ciks
             ):
