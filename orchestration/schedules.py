@@ -31,6 +31,7 @@
 | Chain verify + experience completeness | 02:20 daily |
 | Healthcheck dead-man ping | 02:30 daily |
 | Post-trade reviews + experiences + calibration + drift + learning metrics | Sunday 08:00 |
+| Monte Carlo + 7-scenario stress suite (doc 06 §6) | Sunday 09:00 |
 | Quant retrain-cadence check (proposal-gated, never trains) | 09:00, 1st of month |
 | Failure clustering | sensor-triggered (~150 new resolved failures), never scheduled |
 """
@@ -148,6 +149,13 @@ weekly_learning_job = define_asset_job(
         "drift_monitors",
         "learning_metrics",
     ),
+)
+risk_scenarios_job = define_asset_job(
+    "risk_scenarios_job",
+    # Weekly Monte Carlo + 7-scenario deterministic stress suite (doc 06 §6).
+    # Registered but, like every Dagster schedule here, STOPPED until a human
+    # turns it on in the daemon/UI.
+    selection=AssetSelection.assets("risk_scenarios"),
 )
 quant_retrain_check_job = define_asset_job(
     "quant_retrain_check_job",
@@ -352,6 +360,14 @@ weekly_learning_schedule = ScheduleDefinition(
     job=weekly_learning_job,
     execution_timezone=TZ,
 )
+# Weekly (Sunday 09:00 ET) risk scenario suite — after the 08:00 learning
+# job, so a week's realized outcomes are already resolved.
+risk_scenarios_schedule = ScheduleDefinition(
+    name="risk_scenarios_schedule",
+    cron_schedule="0 9 * * 0",
+    job=risk_scenarios_job,
+    execution_timezone=TZ,
+)
 # Monthly (1st, 09:00 ET) quant retrain-cadence check — proposal-gated.
 quant_retrain_check_schedule = ScheduleDefinition(
     name="quant_retrain_check_schedule",
@@ -379,6 +395,7 @@ ALL_JOBS = [
     nightly_rollup_job,
     daily_report_job,
     weekly_learning_job,
+    risk_scenarios_job,
     safety_checks_job,
     quant_retrain_check_job,
     # Sensor target only (failure_clustering_sensor) — deliberately unscheduled.
@@ -417,5 +434,6 @@ ALL_SCHEDULES = [
     safety_checks_schedule,
     healthcheck_schedule,
     weekly_learning_schedule,
+    risk_scenarios_schedule,
     quant_retrain_check_schedule,
 ]

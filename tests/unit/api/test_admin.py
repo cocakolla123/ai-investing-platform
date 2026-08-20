@@ -259,3 +259,85 @@ def test_reconciliation_ack_rejects_unknown_and_clean_runs(
         _post(client, "/reconciliation/12/ack", "reconciliation-ack", {"note": "x"}).status_code
         == 409
     )
+
+
+# --------------------------------------------------------------------------
+# Drawdown-ladder acks (doc 06 §3) — the blocking state DD8/DD15 never had
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ladder_halted(admin: FakeAdminStore) -> FakeAdminStore:
+    admin.ladder_events[7] = {
+        "id": 7,
+        "to_rung": "dd15",
+        "requires_ack": True,
+        "acked_at": None,
+        "kill_switch_engaged": False,
+    }
+    admin.ladder_events[8] = {
+        "id": 8,
+        "to_rung": "dd5",
+        "requires_ack": False,
+        "acked_at": None,
+        "kill_switch_engaged": False,
+    }
+    return admin
+
+
+def test_ladder_ack_clears_the_halt_and_is_idempotent(
+    client: TestClient, ladder_halted: FakeAdminStore
+) -> None:
+    resp = _post(client, "/ladder/7/ack", "ladder-ack", {"note": "reviewed the drawdown"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "acked"
+    assert resp.json()["rung"] == "dd15"
+    assert ladder_halted.ladder_events[7]["acked_at"] is not None
+
+    again = _post(client, "/ladder/7/ack", "ladder-ack", {"note": "again"})
+    assert again.json()["status"] == "already_acked"
+    assert ladder_halted.audits == [
+        ("ladder_ack", {"event_id": 7, "note": "reviewed the drawdown"})
+    ]
+
+
+def test_ladder_ack_requires_the_confirm_header(
+    client: TestClient, ladder_halted: FakeAdminStore
+) -> None:
+    assert _post(client, "/ladder/7/ack", None, {"note": "x"}).status_code == 400
+    assert ladder_halted.ladder_events[7]["acked_at"] is None
+
+
+def test_ladder_ack_refuses_a_blank_note(
+    client: TestClient, ladder_halted: FakeAdminStore
+) -> None:
+    resp = _post(client, "/ladder/7/ack", "ladder-ack", {"note": "  "})
+    assert resp.status_code == 400
+    assert ladder_halted.ladder_events[7]["acked_at"] is None
+    assert ladder_halted.audits == []
+
+
+def test_ladder_ack_rejects_unknown_and_non_blocking_events(
+    client: TestClient, ladder_halted: FakeAdminStore
+) -> None:
+    assert _post(client, "/ladder/99/ack", "ladder-ack", {"note": "x"}).status_code == 404
+    # DD5 never blocked; there is nothing to clear.
+    assert _post(client, "/ladder/8/ack", "ladder-ack", {"note": "x"}).status_code == 409
+
+
+def test_ladder_ack_does_not_disengage_the_kill_switch(
+    client: TestClient, ladder_halted: FakeAdminStore, deps: Any
+) -> None:
+    """DD20 freezes trading; clearing THAT is a separate deliberate act."""
+    ladder_halted.ladder_events[9] = {
+        "id": 9,
+        "to_rung": "dd20",
+        "requires_ack": True,
+        "acked_at": None,
+        "kill_switch_engaged": True,
+    }
+    deps.kill.engage("dd20", "ladder")
+    resp = _post(client, "/ladder/9/ack", "ladder-ack", {"note": "reviewed"})
+    assert resp.status_code == 200
+    assert resp.json()["kill_switch_engaged"] is True
+    assert deps.kill.engaged() is True

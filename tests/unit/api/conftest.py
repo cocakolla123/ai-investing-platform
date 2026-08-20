@@ -165,9 +165,29 @@ class FakeRiskStore:
                 "cash_floor": 0.05,
                 "metrics": {"var95_1d": 0.012},
                 "clusters": {"AAPL": "c1"},
-                "stress": [{"scenario": "2008", "equity_impact_pct": -0.31}],
             },
         }
+        # /risk/stress reads the risk_scenarios table (doc 06 §6), not the
+        # verdict payload — nothing ever wrote a "stress" key there.
+        self.scenarios: list[dict[str, Any]] = [
+            {
+                "as_of": AS_OF,
+                "kind": "stress",
+                "scenario": "2008_q4",
+                "equity_impact_pct": -0.31,
+                "ladder_implication": "dd20",
+                "details": {},
+            },
+            {
+                "as_of": AS_OF,
+                "kind": "monte_carlo",
+                "scenario": "20d_student_t_copula",
+                "equity_impact_pct": -0.08,
+                "ladder_implication": None,
+                "details": {"n_paths": 10000, "expected_shortfall_95": 0.08},
+            },
+        ]
+        self.ladder_event_rows: list[dict[str, Any]] = []
 
     def latest_risk_verdict(self) -> dict[str, Any] | None:
         return self.verdict
@@ -177,6 +197,19 @@ class FakeRiskStore:
 
     def latest_regime(self) -> dict[str, Any] | None:
         return {"as_of": AS_OF, "regime": "neutral", "composite_score": 0.2}
+
+    def latest_scenarios(self) -> list[dict[str, Any]]:
+        return self.scenarios
+
+    def ladder_events(self, limit: int) -> list[dict[str, Any]]:
+        return self.ladder_event_rows[:limit]
+
+    def unacked_ladder_events(self) -> list[dict[str, Any]]:
+        return [
+            e
+            for e in self.ladder_event_rows
+            if e.get("requires_ack") and e.get("acked_at") is None
+        ]
 
 
 class FakeJournalStore:
@@ -226,6 +259,7 @@ class FakeAdminStore:
         self.universe_calls: list[dict[str, Any]] = []
         self.reconciliation_runs: dict[int, dict[str, Any]] = {}
         self.reconciliation_ack_rows: list[dict[str, Any]] = []
+        self.ladder_events: dict[int, dict[str, Any]] = {}
 
     def audit(self, action: str, payload: dict[str, Any]) -> None:
         self.audits.append((action, payload))
@@ -282,6 +316,20 @@ class FakeAdminStore:
                 )
 
         acknowledge_reconciliation(_Store(), run_id, acked_by, note, now)
+
+    def get_ladder_event(self, event_id: int) -> dict[str, Any] | None:
+        return self.ladder_events.get(event_id)
+
+    def ack_ladder_event(
+        self, event_id: int, acked_by: str, note: str, now: datetime
+    ) -> bool:
+        from dynamo.risk.ladder_response import ack_note_required
+
+        event = self.ladder_events.get(event_id)
+        if event is None or event.get("acked_at") is not None:
+            return False
+        event.update(acked_by=acked_by, acked_at=now, ack_note=ack_note_required(note))
+        return True
 
 
 class FakeKillSwitch:

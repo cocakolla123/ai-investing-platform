@@ -432,3 +432,29 @@ def test_0008_repair_rewrites_hash_refs_and_reports_orphans(integration_db_url: 
             engine, tables=[schema.decision_context, schema.orders], checkfirst=True
         )
         engine.dispose()
+
+
+def test_0022_targets_ladder_events_and_risk_scenarios() -> None:
+    """The blocking state DD8/DD15 never had, and a home for the weekly
+    stress suite that ``/risk/stress`` can actually read (doc 06 §3, §6)."""
+    from dynamo.persistence import schema
+
+    events = schema.metadata.tables["ladder_events"]
+    assert [c.name for c in events.primary_key.columns] == ["id"]
+    assert events.c.as_of.index
+    for col in ("as_of", "from_rung", "to_rung", "drawdown", "requires_ack"):
+        assert not events.c[col].nullable
+    # The ack columns are NULL until a human clears the halt — that NULL IS
+    # the halt (mirrors the unacked-reconciliation pattern, doc 09 §5).
+    for col in ("acked_by", "acked_at", "ack_note"):
+        assert events.c[col].nullable
+
+    scenarios = schema.metadata.tables["risk_scenarios"]
+    assert [c.name for c in scenarios.primary_key.columns] == ["as_of", "kind", "scenario"]
+    assert not scenarios.c.equity_impact_pct.nullable
+    assert scenarios.c.ladder_implication.nullable  # Monte Carlo rows carry none
+
+    module = _load(VERSIONS / "0022_ladder_events_risk_scenarios.py")
+    assert module.LADDER_EVENTS == "ladder_events"
+    assert module.RISK_SCENARIOS == "risk_scenarios"
+    assert module.revision == "0022" and module.down_revision == "0021"

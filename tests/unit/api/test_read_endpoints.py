@@ -82,7 +82,9 @@ def test_risk_endpoints(client) -> None:
     assert metrics["regime"]["regime"] == "neutral"
     assert client.get("/risk/ladder").json()["items"][0]["rung"] == "normal"
     stress = client.get("/risk/stress").json()["data"]
-    assert stress["results"][0]["scenario"] == "2008"
+    assert stress["results"][0]["scenario"] == "2008_q4"
+    # The Monte Carlo run is reported alongside the deterministic scenarios.
+    assert stress["monte_carlo"]["details"]["n_paths"] == 10000
 
 
 def test_journal_search(client, deps) -> None:

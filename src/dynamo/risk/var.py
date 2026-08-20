@@ -8,7 +8,7 @@ with automatic cap tightening (0.75x) in the red zone.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -102,3 +102,79 @@ def kupiec_traffic_light(
 def kupiec_tighten_factor(light: VarTrafficLight) -> float:
     """Cap multiplier when the VaR model is degraded: red -> 0.75, else 1.0."""
     return RED_TIGHTEN_FACTOR if light is VarTrafficLight.RED else 1.0
+
+
+# --- backtesting the VaR model (doc 06 §6) --------------------------------
+
+EXCEPTION_WINDOW_SESSIONS = 250
+MIN_BACKTEST_OBSERVATIONS = 60
+
+
+@dataclass(frozen=True)
+class VarBacktest:
+    """Realized outcome of the VaR model over a trailing window."""
+
+    exceptions: int
+    observations: int
+    light: VarTrafficLight
+    tighten_factor: float
+    worst_excess: float = 0.0  # largest (loss - predicted var95); 0.0 when none
+
+    @property
+    def caps_tightened(self) -> bool:
+        return self.tighten_factor < 1.0
+
+
+def count_var_exceptions(observations: Sequence[tuple[float, float]]) -> tuple[int, float]:
+    """Days where the realized loss exceeded the VaR predicted *for that day*.
+
+    ``observations`` is ``(predicted_var95, realized_return)`` in
+    chronological order; ``realized_return`` is a simple return (-0.03 = down
+    3%) and ``predicted_var95`` is a positive loss magnitude, matching
+    :class:`VarResult`. Pairs with a non-finite or non-positive VaR are
+    skipped rather than counted — a day on which the model produced no
+    forecast is evidence neither for nor against it.
+
+    Returns ``(exceptions, worst_excess)``.
+    """
+    exceptions = 0
+    worst = 0.0
+    for predicted, realized in observations:
+        if not (math.isfinite(predicted) and predicted > 0.0):
+            continue
+        if not math.isfinite(realized):
+            continue
+        loss = -realized
+        if loss > predicted:
+            exceptions += 1
+            worst = max(worst, loss - predicted)
+    return exceptions, worst
+
+
+def backtest_var(
+    observations: Sequence[tuple[float, float]],
+    *,
+    window: int = EXCEPTION_WINDOW_SESSIONS,
+    coverage: float = 0.95,
+) -> VarBacktest:
+    """Trailing-window VaR backtest and the cap multiplier it implies.
+
+    doc 06 §6: "too many VaR exceptions -> caps tighten 25%". The count fed to
+    :func:`kupiec_traffic_light` has to come from *realized* returns compared
+    against the VaR actually stored on each day. A hard-coded 0 — the state
+    before this function existed — makes the traffic light permanently green
+    and the tightening rule unreachable.
+
+    Fewer than 60 usable observations is not enough to judge the model: the
+    light stays GREEN and caps are untouched. Tightening on noise would be
+    its own risk.
+    """
+    recent = list(observations)[-max(window, 1) :]
+    usable = [
+        (p, r) for p, r in recent if math.isfinite(p) and p > 0.0 and math.isfinite(r)
+    ]
+    exceptions, worst = count_var_exceptions(usable)
+    if len(usable) < MIN_BACKTEST_OBSERVATIONS:
+        return VarBacktest(exceptions, len(usable), VarTrafficLight.GREEN, 1.0, worst)
+    light = kupiec_traffic_light(exceptions, len(usable), coverage)
+    return VarBacktest(exceptions, len(usable), light, kupiec_tighten_factor(light), worst)

@@ -24,6 +24,7 @@ import pytest
 from dagster import build_op_context
 from orchestration.assets.portfolio_exec import (
     _equities_sticky_halt_active,
+    _ladder_halt_active,
     execute_paper_orders,
     poll_equity_fills,
 )
@@ -184,6 +185,42 @@ class MemoryReconciliation:
         return self.record_run(datetime.now(UTC), scope, "divergent", [])
 
 
+class MemoryLadderEvents:
+    """In-memory ``ladder_events``: an unacked ack-requiring row is a halt."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def record(self, **kwargs: Any) -> int:
+        event_id = len(self.events) + 1
+        self.events.append({"id": event_id, "acked_at": None, **kwargs})
+        return event_id
+
+    def unacked_blocking(self) -> list[dict[str, Any]]:
+        return [
+            e for e in self.events if e.get("requires_ack") and e.get("acked_at") is None
+        ]
+
+    def is_halted(self) -> bool:
+        return bool(self.unacked_blocking())
+
+    def recent(self, limit: int = 50) -> list[dict[str, Any]]:
+        return list(reversed(self.events))[:limit]
+
+    def acknowledge(self, event_id: int, acked_by: str, note: str, now: Any = None) -> bool:
+        for e in self.events:
+            if e["id"] == event_id and e["acked_at"] is None:
+                e.update(acked_at=now or datetime.now(UTC), acked_by=acked_by, ack_note=note)
+                return True
+        return False
+
+    def halt(self, rung: str = "dd8") -> int:
+        return self.record(
+            as_of=TODAY, from_rung="normal", to_rung=rung, drawdown=-0.09,
+            requires_ack=True, kill_switch_engaged=False,
+        )
+
+
 # --------------------------------------------------------------------------
 # Wiring
 # --------------------------------------------------------------------------
@@ -212,6 +249,7 @@ class Wiring:
         self.positions = MemoryPositions()
         self.decision_contexts = MemoryDecisionContexts()
         self.reconciliation = MemoryReconciliation()
+        self.ladder_events = MemoryLadderEvents()
         self.broker = MockBroker(script=[ScriptStep(behavior="accept") for _ in range(20)])
         self.dynamo: Any = None
         self.settings: Settings = Settings(_env_file=None)  # type: ignore[call-arg]
@@ -257,6 +295,7 @@ def _fake_read_df(target: TargetPortfolio) -> Any:
 def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     import dynamo.persistence.repositories.execution as exec_repos
     import dynamo.persistence.repositories.learning as learn_repos
+    import dynamo.persistence.repositories.risk as risk_repos
 
     w = Wiring()
     w.settings = Settings(
@@ -275,6 +314,7 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     monkeypatch.setattr(
         learn_repos, "DecisionContextRepository", lambda _e: w.decision_contexts
     )
+    monkeypatch.setattr(risk_repos, "LadderEventRepository", lambda _e: w.ladder_events)
     monkeypatch.setattr(pexec, "_broker", lambda _d: w.broker)
 
     key = uuid.uuid4().hex
@@ -586,3 +626,40 @@ def test_nightly_equity_path_target_to_position(
     # --- and a re-poll of the same night changes nothing ---
     poll_equity_fills(ctx, wiring.dynamo)
     assert len(wiring.trades.trades) == 1
+
+
+# --------------------------------------------------------------------------
+# Drawdown-ladder acks (doc 06 §3) — RungEffects.requires_human_ack had no
+# reader at all before this: DD8/DD15 changed nothing in the live path.
+# --------------------------------------------------------------------------
+
+
+def test_an_unacked_ack_requiring_rung_blocks_every_order(
+    wiring: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wiring.ladder_events.halt("dd8")
+    assert _ladder_halt_active(wiring.dynamo) is True
+    _run(wiring, _target(("AAA", 0.10)), monkeypatch)
+    assert wiring.broker.submit_calls == 0
+
+
+def test_acknowledging_the_rung_lets_trading_resume(
+    wiring: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event_id = wiring.ladder_events.halt("dd15")
+    _run(wiring, _target(("AAA", 0.10)), monkeypatch)
+    assert wiring.broker.submit_calls == 0
+
+    wiring.ladder_events.acknowledge(event_id, "owner", "reviewed the drawdown")
+    assert _ladder_halt_active(wiring.dynamo) is False
+    _run(wiring, _target(("AAA", 0.10)), monkeypatch)
+    assert wiring.broker.submit_calls == 1
+
+
+def test_a_rung_that_needs_no_ack_does_not_halt(wiring: Any) -> None:
+    """DD5 warns; it does not require a human before the next order."""
+    wiring.ladder_events.record(
+        as_of=TODAY, from_rung="normal", to_rung="dd5", drawdown=-0.06,
+        requires_ack=False, kill_switch_engaged=False,
+    )
+    assert _ladder_halt_active(wiring.dynamo) is False

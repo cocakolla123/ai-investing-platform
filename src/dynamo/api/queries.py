@@ -211,6 +211,23 @@ class SqlRiskStore:
         rows = _rows(self._engine, select(t).order_by(t.c.as_of.desc()).limit(1))
         return rows[0] if rows else None
 
+    def latest_scenarios(self) -> list[dict[str, Any]]:
+        """Most recent weekly stress + Monte Carlo run (doc 06 §6)."""
+        from dynamo.persistence.repositories.risk import RiskScenarioRepository
+
+        return RiskScenarioRepository(self._engine).latest()
+
+    def ladder_events(self, limit: int) -> list[dict[str, Any]]:
+        from dynamo.persistence.repositories.risk import LadderEventRepository
+
+        return LadderEventRepository(self._engine).recent(limit)
+
+    def unacked_ladder_events(self) -> list[dict[str, Any]]:
+        """Ack-requiring rungs nobody has cleared — non-empty means halted."""
+        from dynamo.persistence.repositories.risk import LadderEventRepository
+
+        return LadderEventRepository(self._engine).unacked_blocking()
+
 
 class SqlJournalStore:
     def __init__(self, engine: Engine) -> None:
@@ -360,6 +377,22 @@ class SqlAdminStore:
 
         acknowledge_reconciliation(
             ReconciliationRepository(self._engine), run_id, acked_by, note, now
+        )
+
+    def get_ladder_event(self, event_id: int) -> dict[str, Any] | None:
+        t = schema.ladder_events
+        rows = _rows(self._engine, select(t).where(t.c.id == event_id))
+        return rows[0] if rows else None
+
+    def ack_ladder_event(
+        self, event_id: int, acked_by: str, note: str, now: datetime
+    ) -> bool:
+        """Clear one drawdown-ladder halt (doc 06 §3). Never automatic."""
+        from dynamo.persistence.repositories.risk import LadderEventRepository
+        from dynamo.risk.ladder_response import ack_note_required
+
+        return LadderEventRepository(self._engine).acknowledge(
+            event_id, acked_by, ack_note_required(note), now
         )
 
 

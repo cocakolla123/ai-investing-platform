@@ -249,6 +249,14 @@ def risk_verdict_asset(context: AssetExecutionContext, dynamo: DynamoResource) -
         )["key"]
     )
 
+    # doc 06 §6: the Kupiec traffic light needs REALIZED exceptions. Nothing
+    # counted them — var_exceptions_250d defaulted to 0, so the light was
+    # permanently green and the 25% tightening was unreachable code.
+    from dynamo.persistence.repositories.risk import VarBacktestReader
+    from dynamo.risk.var import VarTrafficLight, backtest_var
+
+    var_backtest = backtest_var(VarBacktestReader(dynamo.engine()).observations(today=as_of))
+
     engine = RiskEngine()
     verdict = engine.compute_verdict(
         RiskEngineInputs(
@@ -263,6 +271,7 @@ def risk_verdict_asset(context: AssetExecutionContext, dynamo: DynamoResource) -
             as_of=utcnow(),
             session_index=n - 1,
             quarantined=quarantined,
+            var_exceptions_250d=var_backtest.exceptions,
         )
     )
     verdict_id = f"risk-{as_of.isoformat()}"
@@ -282,6 +291,27 @@ def risk_verdict_asset(context: AssetExecutionContext, dynamo: DynamoResource) -
             }
         ],
     )
+
+    if var_backtest.light is not VarTrafficLight.GREEN:
+        # doc 12 §7: "VaR exception cluster | warn | Kupiec traffic light
+        # leaves green". The tightening itself already happened in the engine.
+        dynamo.alert(
+            "warn",
+            "var_exception_cluster",
+            f"VaR traffic light {var_backtest.light.value}: {var_backtest.exceptions} "
+            f"exceptions in {var_backtest.observations} sessions; "
+            f"caps x{var_backtest.tighten_factor:.2f}",
+        )
+
+    ladder_event_id = _apply_ladder_transition(
+        context,
+        dynamo,
+        prev_ladder.rung,
+        verdict.ladder,
+        verdict.metrics.drawdown_from_hwm,
+        as_of,
+    )
+
     return MaterializeResult(
         metadata={
             "id": verdict_id,
@@ -289,6 +319,232 @@ def risk_verdict_asset(context: AssetExecutionContext, dynamo: DynamoResource) -
             "new_risk_allowed": verdict.new_risk_allowed,
             "degraded": verdict.degraded,
             "vetoes": len(verdict.vetoes),
+            "var_exceptions_250d": var_backtest.exceptions,
+            "var_traffic_light": var_backtest.light.value,
+            "var_cap_multiplier": var_backtest.tighten_factor,
+            "ladder_event_id": -1 if ladder_event_id is None else ladder_event_id,
+        }
+    )
+
+
+class _NoOpBroker:
+    """No broker configured: the kill-switch file still gets written."""
+
+    def open_orders(self) -> list[dict[str, object]]:
+        return []
+
+    def cancel(self, client_order_id: str) -> None:  # pragma: no cover - never called
+        return None
+
+
+def _apply_ladder_transition(
+    context: AssetExecutionContext,
+    dynamo: DynamoResource,
+    from_rung: Any,
+    to_rung: Any,
+    drawdown: float,
+    as_of: date,
+) -> int | None:
+    """Perform the obligations of a ladder move (doc 06 §3).
+
+    Before this, ``RungEffects.kill_switch`` was read only by the backtester
+    and ``requires_human_ack`` by nothing at all: in the live path a -20%
+    drawdown reduced to ``gross_override = 0.0`` — no file, no alert, no
+    freeze. Now DD20 writes the kill-switch file and cancels open orders
+    through the SAME ``engage_kill_switch`` the API's big red button uses,
+    and every ack-requiring rung leaves an unacked row that blocks new orders
+    until a human clears it with a note.
+    """
+    from dynamo.execution.gate import engage_kill_switch
+    from dynamo.persistence.repositories.risk import LadderEventRepository
+    from dynamo.risk.ladder_response import respond_to_transition
+
+    response = respond_to_transition(from_rung, to_rung, drawdown)
+    if response is None:
+        return None
+
+    event_id = LadderEventRepository(dynamo.engine()).record(
+        as_of=as_of,
+        from_rung=response.from_rung.value,
+        to_rung=response.to_rung.value,
+        drawdown=drawdown,
+        requires_ack=response.requires_human_ack,
+        kill_switch_engaged=response.engage_kill_switch,
+    )
+    context.log.warning("ladder_transition: %s (event %s)", response.message, event_id)
+
+    if response.engage_kill_switch:
+        settings = dynamo.settings()
+        broker = _broker(dynamo) or _NoOpBroker()
+        try:
+            engage_kill_switch(
+                settings.kill_switch_file,
+                broker,  # type: ignore[arg-type]  # _NoOpBroker covers the used subset
+                lambda name, message: dynamo.alert("page", name, message, ackable=False),
+                engaged_by=f"drawdown ladder {response.to_rung.value}",
+                now=utcnow(),
+            )
+        except Exception as exc:  # the freeze must still be recorded and paged
+            context.log.error("ladder_transition: kill-switch engage failed: %r", exc)
+            dynamo.alert(
+                "page",
+                "kill_switch_engage_failed",
+                f"DD20 reached but engaging the kill switch failed: {exc!r} — "
+                f"halt trading MANUALLY (docs/runbooks/kill-switch.md)",
+                ackable=False,
+            )
+
+    dynamo.alert(
+        response.alert_severity,
+        response.alert_name,
+        f"{response.message} (event id {event_id})",
+        # The ladder ack clears this, not an alert ack — never both.
+        ackable=not response.requires_human_ack,
+    )
+    return event_id
+
+
+# --------------------------------------------------------------------------
+# risk_scenarios — doc 06 §6 weekly Monte Carlo + 7-scenario stress suite
+# --------------------------------------------------------------------------
+
+MONTE_CARLO_SEED = 20260101  # fixed: a stress number that moves on rerun is noise
+
+
+def _returns_panel(dynamo: DynamoResource, symbols: list[str], as_of: date, days: int) -> Any:
+    """Daily returns panel over ``symbols`` — the risk modules' input shape."""
+    import numpy as np
+
+    from dynamo.risk.types import ReturnsPanel
+
+    bars = dynamo.bars_window(symbols, as_of, days)
+    if bars.empty:
+        return None
+    wide = bars.pivot_table(index="ts", columns="symbol", values="close").sort_index()
+    returns = wide.pct_change().dropna(how="all").fillna(0.0)
+    if returns.empty:
+        return None
+    return ReturnsPanel(
+        dates=tuple(_pydate(t) for t in returns.index),
+        symbols=tuple(str(c) for c in returns.columns),
+        values=returns.to_numpy(dtype=np.float64),
+    )
+
+
+@dagster_asset(name="risk_scenarios", group_name=PORTFOLIO_GROUP)
+def risk_scenarios_asset(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """Weekly Monte Carlo + deterministic stress suite (doc 06 §6).
+
+    ``risk/montecarlo.py`` (167 lines) and ``run_stress_suite`` had zero
+    importers outside their own tests — no asset, no schedule, no table — and
+    ``/risk/stress`` read a verdict key nothing ever wrote. This is the
+    producer: it writes ``risk_scenarios``, which the endpoint now reads.
+
+    Deliberately NOT part of the nightly risk verdict: the stress suite is a
+    10k-path simulation over ~2y of history, and doc 06 §6 asks for it
+    weekly. It is advisory — a scenario result never moves a cap on its own.
+    A breach of the defensive floor pages, because that is the case where a
+    human should look before the market makes the decision.
+    """
+    from dynamo.risk.montecarlo import run_monte_carlo
+    from dynamo.risk.stress import DEFENSIVE_FLOOR_BREACH, run_stress_suite
+
+    as_of = utcnow().date()
+    state = _portfolio_state(dynamo)
+    if state is None:
+        context.log.warning("risk_scenarios: no portfolio state — skipping")
+        return MaterializeResult(metadata={"skipped": "no portfolio state"})
+
+    prices = _latest_prices(
+        dynamo, sorted({p.symbol for p in state.positions}), as_of
+    )
+    weights = {
+        p.symbol: p.qty * prices[p.symbol] / state.equity
+        for p in state.positions
+        if p.qty != 0.0 and prices.get(p.symbol, 0.0) > 0.0
+    }
+    if not weights:
+        context.log.info("risk_scenarios: no priced positions — nothing to stress")
+        return MaterializeResult(metadata={"skipped": "no positions"})
+
+    symbols = sorted({*weights, *BENCHMARK_SYMBOLS})
+    # The historical windows reach back to 2008; a 750-day panel cannot
+    # replay them, so this asset reads the full available history.
+    panel = _returns_panel(dynamo, symbols, as_of, days=365 * 20)
+    if panel is None:
+        context.log.warning("risk_scenarios: no return history — skipping")
+        return MaterializeResult(metadata={"skipped": "no returns"})
+
+    hwm = state.high_water_mark or state.equity
+    rows: list[dict[str, Any]] = []
+
+    stress = run_stress_suite(panel, weights, state.equity, hwm)
+    for result in stress:
+        rows.append(
+            {
+                "as_of": as_of,
+                "kind": "stress",
+                "scenario": result.scenario,
+                "equity_impact_pct": result.equity_impact_pct,
+                "ladder_implication": (
+                    result.ladder_implication.value if result.ladder_implication else None
+                ),
+                "details": dict(result.details),
+            }
+        )
+
+    mc = run_monte_carlo(
+        panel, weights, equity=state.equity, high_water_mark=hwm, seed=MONTE_CARLO_SEED
+    )
+    if mc is not None:
+        rows.append(
+            {
+                "as_of": as_of,
+                "kind": "monte_carlo",
+                "scenario": f"{mc.horizon_days}d_student_t_copula",
+                "equity_impact_pct": -mc.expected_shortfall_95,
+                "ladder_implication": None,
+                "details": {
+                    "n_paths": mc.n_paths,
+                    "horizon_days": mc.horizon_days,
+                    "seed": mc.seed,
+                    "expected_shortfall_95": mc.expected_shortfall_95,
+                    "loss_probabilities": {str(k): v for k, v in mc.loss_probabilities.items()},
+                    "rung_hit_probabilities": {
+                        rung.value: prob for rung, prob in mc.rung_hit_probabilities.items()
+                    },
+                    "df_by_symbol": mc.df_by_symbol,
+                },
+            }
+        )
+
+    from dynamo.persistence.repositories.risk import RiskScenarioRepository
+
+    written = RiskScenarioRepository(dynamo.engine()).upsert(rows)
+
+    breaches = [
+        r["scenario"] for r in rows
+        if r["kind"] == "stress" and float(r["equity_impact_pct"]) <= DEFENSIVE_FLOOR_BREACH
+    ]
+    if breaches:
+        dynamo.alert(
+            "warn",
+            "stress_defensive_floor_breach",
+            f"{len(breaches)} stress scenarios breach the -15% defensive floor: "
+            f"{', '.join(sorted(breaches)[:7])}",
+        )
+
+    worst = min((float(r["equity_impact_pct"]) for r in rows), default=0.0)
+    return MaterializeResult(
+        metadata={
+            "as_of": as_of.isoformat(),
+            "rows": written,
+            "scenarios": len(stress),
+            "monte_carlo": mc is not None,
+            "worst_impact_pct": worst,
+            "defensive_floor_breaches": len(breaches),
         }
     )
 
@@ -534,6 +790,20 @@ def _equities_sticky_halt_active(dynamo: DynamoResource) -> bool:
     )
 
 
+def _ladder_halt_active(dynamo: DynamoResource) -> bool:
+    """An unacked ack-requiring ladder rung blocks new orders (doc 06 §3).
+
+    DD8 (human ack) and DD15 (human review) were documented mitigations that
+    read ``RungEffects.requires_human_ack`` — which nothing read. The halt is
+    a database row for the same reason the reconciliation halt is: the
+    15-minute op rebuilds every object each cycle, so an in-memory flag would
+    evaporate before the next order was proposed.
+    """
+    from dynamo.persistence.repositories.risk import LadderEventRepository
+
+    return LadderEventRepository(dynamo.engine()).is_halted()
+
+
 def _order_manager(dynamo: DynamoResource, broker: Any) -> Any:
     """The equity/crypto OrderManager, gated and halt-aware per submission."""
     from dynamo.execution.order_manager import OrderManager
@@ -549,7 +819,9 @@ def _order_manager(dynamo: DynamoResource, broker: Any) -> Any:
         auto_approve=s.auto_approve,
         approval_ttl_minutes=s.approval_ttl_minutes,
         gate=_equity_gate(s, dynamo.readiness()),
-        halt_check=lambda _order: _equities_sticky_halt_active(dynamo),
+        halt_check=lambda _order: (
+            _equities_sticky_halt_active(dynamo) or _ladder_halt_active(dynamo)
+        ),
     )
 
 
@@ -566,6 +838,12 @@ def execute_paper_orders(context: OpExecutionContext, dynamo: DynamoResource) ->
     if _equities_sticky_halt_active(dynamo):
         context.log.error(
             "execute_paper_orders: sticky reconciliation halt active — refusing all orders"
+        )
+        return
+    if _ladder_halt_active(dynamo):
+        context.log.error(
+            "execute_paper_orders: drawdown-ladder rung awaiting human acknowledgment — "
+            "refusing all orders (POST /admin/ladder/{id}/ack to clear)"
         )
         return
     tp = schema.target_portfolios
@@ -883,5 +1161,5 @@ def stops_job() -> None:
     maintain_stops()
 
 
-PORTFOLIO_ASSETS = [risk_verdict_asset, target_portfolio_asset]
+PORTFOLIO_ASSETS = [risk_verdict_asset, risk_scenarios_asset, target_portfolio_asset]
 EXECUTION_JOBS = [paper_execution_job, reconciliation_job, equity_fills_job, stops_job]

@@ -707,6 +707,42 @@ ladder_states = Table(
     Column("hwm", Float, nullable=False),
 )
 
+# One row per drawdown-ladder TRANSITION (doc 06 §3; migration 0021).
+# ``ladder_states`` above is the daily state; this is the event log — and for
+# ack-requiring rungs (DD8/DD10/DD15/DD20) an unacked row is a BLOCKING
+# state, the same shape as an unacked divergent reconciliation run (doc 09
+# §5), so the halt lives in the database and survives a restart.
+ladder_events = Table(
+    "ladder_events",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    _ts("created_at"),
+    Column("as_of", Date, nullable=False, index=True),
+    Column("from_rung", Text, nullable=False),
+    Column("to_rung", Text, nullable=False),
+    Column("drawdown", Float, nullable=False),
+    Column("requires_ack", Boolean, nullable=False, default=False),
+    Column("kill_switch_engaged", Boolean, nullable=False, default=False),
+    Column("acked_by", Text),
+    Column("acked_at", DateTime(timezone=True)),
+    Column("ack_note", Text),
+)
+
+# Weekly Monte Carlo + deterministic stress suite (doc 06 §6; migration 0021).
+# ``/risk/stress`` reads this table; before it existed the endpoint read a
+# ``stress`` key of the risk verdict that nothing ever wrote.
+risk_scenarios = Table(
+    "risk_scenarios",
+    metadata,
+    Column("as_of", Date, primary_key=True),
+    Column("kind", Text, primary_key=True),  # stress | monte_carlo
+    Column("scenario", Text, primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("equity_impact_pct", Float, nullable=False, default=0.0),
+    Column("ladder_implication", Text),
+    Column("details", JSONB, nullable=False, default={}),
+)
+
 # --- Portfolio & execution (docs 07, 09) ---
 
 target_portfolios = Table(

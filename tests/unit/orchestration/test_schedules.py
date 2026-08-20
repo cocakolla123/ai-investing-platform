@@ -41,6 +41,9 @@ EXPECTED_CRONS = {
     "safety_checks_schedule": "20 2 * * *",
     "healthcheck_schedule": "30 2 * * *",
     "weekly_learning_schedule": "0 8 * * 0",
+    # Weekly Monte Carlo + 7-scenario stress suite (doc 06 §6), after the
+    # 08:00 learning job so the week's outcomes are already resolved.
+    "risk_scenarios_schedule": "0 9 * * 0",
     # Monthly quant retrain-cadence check (proposal-gated; registered like
     # every schedule, STOPPED until a human enables it).
     "quant_retrain_check_schedule": "0 9 1 * *",

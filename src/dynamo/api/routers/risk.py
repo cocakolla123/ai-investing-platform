@@ -61,11 +61,33 @@ def get_ladder(deps: DepsDep, limit: int = 90) -> Page[dict[str, Any]]:
 
 @router.get("/stress")
 def get_stress(deps: DepsDep) -> AsOf[dict[str, Any]]:
-    """Latest stress results from the risk-verdict payload, when present."""
-    latest = deps.risk.latest_risk_verdict()
-    payload = latest["payload"] if latest else {}
-    stress = payload.get("stress") or payload.get("stress_results") or []
+    """Latest weekly stress suite + Monte Carlo (doc 06 §6).
+
+    Reads the ``risk_scenarios`` table written by the weekly
+    ``risk_scenarios`` asset. It used to read a ``stress`` key of the risk
+    verdict that no producer ever wrote, so this endpoint always returned an
+    empty list.
+    """
+    rows = deps.risk.latest_scenarios()
+    stress = [r for r in rows if r.get("kind") == "stress"]
+    monte_carlo = [r for r in rows if r.get("kind") == "monte_carlo"]
     return AsOf(
-        data={"results": stress},
-        as_of=latest["as_of"] if latest else None,
+        data={
+            "results": stress,
+            "monte_carlo": monte_carlo[0] if monte_carlo else None,
+        },
+        as_of=rows[0]["as_of"] if rows else None,
     )
+
+
+@router.get("/ladder/events")
+def get_ladder_events(deps: DepsDep, limit: int = 50) -> Page[dict[str, Any]]:
+    """Drawdown-ladder transitions, newest first (doc 06 §3)."""
+    return Page.of(deps.risk.ladder_events(min(limit, 500)))
+
+
+@router.get("/ladder/halts")
+def get_ladder_halts(deps: DepsDep) -> AsOf[dict[str, Any]]:
+    """Ack-requiring rungs nobody has cleared. Non-empty means orders are halted."""
+    pending = deps.risk.unacked_ladder_events()
+    return AsOf(data={"halted": bool(pending), "pending": pending}, as_of=None)

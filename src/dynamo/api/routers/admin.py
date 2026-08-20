@@ -257,3 +257,52 @@ def toggle_killswitch(
         deps.kill.disengage(body.note or f"disengaged by {ADMIN_ACTOR}")
     deps.admin.audit("killswitch", {"engage": body.engage, "note": body.note})
     return {"engaged": deps.kill.engaged(), "note": body.note}
+
+
+# --- Drawdown-ladder acknowledgments (doc 06 §3) ---
+
+
+class LadderAckBody(BaseModel):
+    note: str
+
+
+@router.post("/ladder/{event_id}/ack")
+def ack_ladder_event(
+    event_id: int,
+    body: LadderAckBody,
+    deps: DepsDep,
+    x_dynamo_confirm: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Clear the halt engaged by one drawdown-ladder transition.
+
+    DD8 ("human ack") and DD15 ("human review") are documented mitigations in
+    doc 06 §3. Until a human acks the rung, new orders are refused — this is
+    the only thing that resumes them. The mandatory note is the record of who
+    reviewed the drawdown, and what they concluded.
+
+    Acking does NOT disengage the kill switch: a DD20 transition writes the
+    switch file, and clearing that is a separate, deliberate act
+    (``POST /admin/kill-switch/disengage``).
+    """
+    _require_confirm("ladder-ack", x_dynamo_confirm)
+    event = deps.admin.get_ladder_event(event_id)
+    if event is None:
+        raise HTTPException(404, f"no ladder event {event_id}")
+    if not event.get("requires_ack", False):
+        raise HTTPException(
+            409, f"ladder event {event_id} does not require acknowledgment; nothing to clear"
+        )
+    if event.get("acked_at") is not None:
+        return {"event_id": event_id, "status": "already_acked"}
+    if not body.note.strip():
+        raise HTTPException(400, "ladder ack requires a non-empty note")
+    if not deps.admin.ack_ladder_event(event_id, ADMIN_ACTOR, body.note, _now()):
+        return {"event_id": event_id, "status": "already_acked"}
+    deps.admin.audit("ladder_ack", {"event_id": event_id, "note": body.note})
+    return {
+        "event_id": event_id,
+        "status": "acked",
+        "acked_by": ADMIN_ACTOR,
+        "rung": event.get("to_rung"),
+        "kill_switch_engaged": event.get("kill_switch_engaged", False),
+    }
