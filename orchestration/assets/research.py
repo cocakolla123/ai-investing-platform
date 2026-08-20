@@ -7,6 +7,7 @@ persist results, return metadata. Guardrails and all business logic live in
 """
 
 import json
+import logging
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, cast
@@ -25,6 +26,8 @@ from sqlalchemy import select, update
 
 from dynamo.persistence import schema
 from orchestration.resources import DynamoResource, utcnow
+
+_log = logging.getLogger(__name__)
 
 RESEARCH_GROUP = "research"
 
@@ -1266,35 +1269,73 @@ def _journal_hits_for(
     followed by prior-similar-case evidence lines from ``decision_experience``
     (plan Phase 2) under the same gate and top-k.
 
-    Vector search (hash-fallback embedder keeps this functional without the
-    embeddings extra) filtered to entries written on/before ``as_of`` — the
-    run's point-in-time, mandatory for replay correctness later. Deterministic
-    for a fixed journal, so the batch stages that re-derive it agree.
+    Vector search filtered to entries written on/before ``as_of`` — the run's
+    point-in-time, mandatory for replay correctness later. Deterministic for a
+    fixed journal, so the batch stages that re-derive it agree.
+
+    Vector search ABSTAINS on hash-fallback embeddings (see
+    ``dynamo.learning.journal``): those vectors are random, and their hits
+    would enter the committee prompt labelled "similar past situations". The
+    prior-similar-case lines below are structured retrieval over
+    ``decision_experience`` and use no embedding at all, so they keep flowing
+    either way — the abstention removes the noise, not the evidence.
     """
     settings = dynamo.settings()
     if not settings.journal_retrieval_enabled or not symbols:
         return {sym: [] for sym in symbols}
-    from dynamo.learning.journal import JournalFilters, rank_similar
+    from dynamo.learning.journal import (
+        JournalFilters,
+        drop_hash_fallback_entries,
+        journal_retrieval_gate,
+        rank_similar,
+    )
     from dynamo.persistence.repositories.learning import JournalRepository
 
     repo = JournalRepository(dynamo.engine())
     top_k = settings.experience_retrieval_top_k
     cutoff = datetime.combine(as_of, time.max, tzinfo=UTC)
-    queries = [f"{sym} investment thesis, lessons and post-trade reviews" for sym in symbols]
-    vectors = _journal_embedder().embed(queries)
-    hits: dict[str, list[tuple[str, str]]] = {}
-    for sym, vector in zip(symbols, vectors, strict=True):
-        # Symbol filtered in SQL (not only boosted in rank_similar): journal
-        # entries are symbol-scoped evidence, and a weak embedding backend
-        # would otherwise return other tickers' entries as this one's
-        # "similar situations".
-        candidates = repo.search(
-            embedding=vector, symbols=[sym], top_k=max(top_k * 4, top_k), as_of=cutoff
-        )
-        ranked = rank_similar(
-            candidates, JournalFilters(symbols=frozenset({sym})), top_k=top_k
-        )
-        hits[sym] = [(r.entry.id, r.entry.text) for r in ranked]
+    allow_fallback = settings.journal_allow_hash_fallback
+    embedder = _journal_embedder()
+    gate = journal_retrieval_gate(
+        query_backend=embedder.backend, allow_hash_fallback=allow_fallback
+    )
+    if gate.reason:
+        _log.warning("journal_retrieval: %s", gate.reason)
+    hits: dict[str, list[tuple[str, str]]] = {sym: [] for sym in symbols}
+    if gate.allowed:
+        queries = [f"{sym} investment thesis, lessons and post-trade reviews" for sym in symbols]
+        vectors = embedder.embed(queries)
+        dropped = 0
+        for sym, vector in zip(symbols, vectors, strict=True):
+            # Symbol filtered in SQL (not only boosted in rank_similar):
+            # journal entries are symbol-scoped evidence, and a weak embedding
+            # backend would otherwise return other tickers' entries as this
+            # one's "similar situations".
+            candidates = repo.search(
+                embedding=vector, symbols=[sym], top_k=max(top_k * 4, top_k), as_of=cutoff
+            )
+            # The other half of the guard: a real query vector ranked against
+            # stored random ones is just as meaningless. After a partial
+            # re-embed both kinds are in the table at once.
+            candidates, n = drop_hash_fallback_entries(
+                candidates,
+                repo.embedding_versions([e.id for e, _ in candidates]),
+                allow_hash_fallback=allow_fallback,
+            )
+            dropped += n
+            ranked = rank_similar(
+                candidates, JournalFilters(symbols=frozenset({sym})), top_k=top_k
+            )
+            hits[sym] = [(r.entry.id, r.entry.text) for r in ranked]
+        if dropped:
+            from dynamo.learning.journal import HASH_FALLBACK_REMEDIATION
+
+            _log.warning(
+                "journal_retrieval: dropped %d candidate(s) still carrying a "
+                "hash-fallback vector — they are random, not similar. Fix: %s",
+                dropped,
+                HASH_FALLBACK_REMEDIATION,
+            )
     # Prior similar cases (plan Phase 2): structured retrieval from resolved
     # live experiences, appended through the SAME journal_hits channel so the
     # dossier needs no new parameter.

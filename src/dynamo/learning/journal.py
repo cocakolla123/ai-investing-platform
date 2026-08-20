@@ -3,11 +3,44 @@
 Builders turn domain events (verdict theses, reviews, lessons, incidents) into
 ``JournalEntry`` rows; ``rank_similar`` merges vector similarity with the
 structured filters used during dossier assembly.
+
+THE HASH-FALLBACK ABSTENTION
+----------------------------
+``dynamo.llm.embeddings.LocalEmbedder`` falls back to a **random Gaussian
+seeded from sha256(text)** when the optional ``embeddings`` extra is absent.
+Those vectors are deterministic, correctly normalized, the right dimension —
+and carry zero semantic signal. Cosine similarity over them is a random
+ordering of the journal. All 113 rows in ``journal_entries`` were written
+that way.
+
+That is a tolerable degradation for an offline search box. It is not one
+here: journal retrieval is ON by default and injects its hits into live
+committee prompts under the heading "similar past situations". Randomly
+chosen past trades, presented to the committee as precedent, are worse than
+no precedent at all — nothing downstream can tell them from real ones.
+
+So retrieval **abstains** instead of degrading. :func:`journal_retrieval_gate`
+is that decision, kept pure and here rather than in the composition roots so
+the live and replay paths cannot drift apart on it. Both halves are checked:
+the QUERY backend, and each candidate's stored ``embedding_version`` — a real
+query vector ranked against 113 stored random ones is exactly as meaningless
+as the reverse.
+
+REMEDIATION (the whole fix, two commands)::
+
+    uv sync --extra embeddings
+    uv run python -m dynamo.cli.journal_seed --reembed
+
+The first installs sentence-transformers/bge-small (384-d, local, zero API
+cost); the second re-embeds in place every entry stamped ``hash-fallback``,
+touching only the vector, never the text or the write time. Retrieval turns
+itself back on once the entries stop being fallback-stamped — no setting has
+to be flipped back. See ``docs/journal_embeddings.md``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -16,6 +49,92 @@ from dynamo.domain.models.research import CommitteeVerdict
 
 DEFAULT_TOP_K = 5
 _FILTER_BOOST = 0.05  # per matched structured filter, on top of cosine sim
+
+# Mirrors ``dynamo.llm.embeddings.BACKEND_HASH_FALLBACK``. Duplicated rather
+# than imported: ``dynamo.learning`` may not import ``dynamo.llm``
+# (import-linter contract "core logic does not import adapters"). The equality
+# is asserted in ``tests/unit/learning/test_journal_guard.py``.
+HASH_FALLBACK_BACKEND = "hash-fallback"
+
+HASH_FALLBACK_REMEDIATION = (
+    "uv sync --extra embeddings && "
+    "uv run python -m dynamo.cli.journal_seed --reembed"
+)
+
+
+@dataclass(frozen=True)
+class RetrievalGate:
+    """Whether journal vector hits may enter a committee context, and why not."""
+
+    allowed: bool
+    reason: str = ""
+
+    def __bool__(self) -> bool:
+        return self.allowed
+
+
+def journal_retrieval_gate(
+    *, query_backend: str, allow_hash_fallback: bool = False
+) -> RetrievalGate:
+    """Refuse to run journal vector search on the hash fallback.
+
+    ``query_backend`` is ``LocalEmbedder.backend``. When it is the fallback,
+    the query vector is noise and every hit is a random journal entry dressed
+    up as a similar past situation. Callers must log the returned ``reason``
+    at WARNING and skip retrieval entirely — NOT quietly substitute text
+    search, which would change what the committee reads without saying so.
+
+    ``allow_hash_fallback`` (settings: ``journal_allow_hash_fallback``) exists
+    for the operator who explicitly wants the old behaviour, e.g. to reproduce
+    a historical run byte-for-byte. It defaults to off, and it still logs.
+    """
+    if query_backend != HASH_FALLBACK_BACKEND:
+        return RetrievalGate(allowed=True)
+    if allow_hash_fallback:
+        return RetrievalGate(
+            allowed=True,
+            reason=(
+                f"journal retrieval is running on the {HASH_FALLBACK_BACKEND} "
+                "embedder because journal_allow_hash_fallback is ON — the committee "
+                "is being shown RANDOM past situations as precedent. Fix: "
+                f"{HASH_FALLBACK_REMEDIATION}"
+            ),
+        )
+    return RetrievalGate(
+        allowed=False,
+        reason=(
+            f"journal retrieval ABSTAINING: the embedder resolved to "
+            f"{HASH_FALLBACK_BACKEND}, whose vectors are a random Gaussian seeded "
+            "from sha256(text) and carry no semantic signal. Injecting those hits "
+            "would put randomly chosen past trades in front of the committee as "
+            f"'similar past situations'. Fix: {HASH_FALLBACK_REMEDIATION}"
+        ),
+    )
+
+
+def drop_hash_fallback_entries(
+    hits: Sequence[tuple[JournalEntry, float]],
+    versions: Mapping[str, str],
+    *,
+    allow_hash_fallback: bool = False,
+) -> tuple[list[tuple[JournalEntry, float]], int]:
+    """(kept hits, number dropped) — drop entries whose STORED vector is fallback.
+
+    The gate above catches a fallback query. This catches the other half, and
+    the mixed state a partial re-embed leaves behind: the journal can hold
+    real and random vectors at once, and only the stamp tells them apart.
+    ``versions`` maps entry id -> ``embedding_version``; an entry missing from
+    it is assumed good, because an absent stamp predates the column rather
+    than denying it.
+    """
+    if allow_hash_fallback:
+        return list(hits), 0
+    kept = [
+        (entry, score)
+        for entry, score in hits
+        if versions.get(entry.id, "") != HASH_FALLBACK_BACKEND
+    ]
+    return kept, len(hits) - len(kept)
 
 
 # --- entry builders ---

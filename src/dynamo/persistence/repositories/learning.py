@@ -308,6 +308,25 @@ class JournalRepository:
             for r in rows
         ]
 
+    def embedding_versions(self, entry_ids: Sequence[str]) -> dict[str, str]:
+        """entry id -> ``embedding_version`` for the given ids.
+
+        The retrieval guard needs this: after a partial re-embed the journal
+        holds real and hash-fallback vectors at once, and only the stamp
+        distinguishes them (:func:`dynamo.learning.journal.
+        drop_hash_fallback_entries`). ``search`` deliberately does not carry
+        the column — it is a property of the row's representation, not of the
+        entry, and no other caller wants it.
+        """
+        ids = list(entry_ids)
+        if not ids:
+            return {}
+        stmt = select(journal_entries.c.id, journal_entries.c.embedding_version).where(
+            journal_entries.c.id.in_(ids)
+        )
+        with self._engine.connect() as cx:
+            return {str(r.id): str(r.embedding_version or "") for r in cx.execute(stmt)}
+
     def update_embedding(
         self, entry_id: str, embedding: Sequence[float], embedding_version: str
     ) -> None:

@@ -26,6 +26,26 @@ TWO deliberate refusals:
   and always reports which backend ran (also stored in
   ``journal_entries.embedding_version``). After installing the extra,
   ``--reembed`` upgrades the vectors already written, in place.
+
+REMEDIATING THE 113 EXISTING FALLBACK ENTRIES
+---------------------------------------------
+Every row in ``journal_entries`` was written under the fallback, so RETRIEVAL
+CURRENTLY ABSTAINS: ``dynamo.learning.journal.journal_retrieval_gate`` refuses
+to put those hits into a live committee prompt, because random past trades
+labelled "similar past situations" are worse than no precedent at all. The
+whole repair is two commands::
+
+    uv sync --extra embeddings
+    uv run python -m dynamo.cli.journal_seed --reembed
+
+``--reembed`` rewrites only the vector — never the text, never ``created_at``
+— so no point-in-time read changes, and retrieval re-enables itself once the
+entries stop being fallback-stamped (no setting to flip back). Verify with::
+
+    SELECT embedding_version, count(*) FROM journal_entries GROUP BY 1;
+
+Full write-up, including why this was not simply done in place:
+``docs/journal_embeddings.md``.
 """
 
 from __future__ import annotations

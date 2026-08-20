@@ -287,6 +287,16 @@ class Settings(BaseSettings):
     # --- Learning loop (doc 10; journal retrieval feeds dossier contexts) ---
     journal_retrieval_enabled: bool = True
     experience_retrieval_top_k: int = 3  # journal hits per symbol in the dossier
+    # Journal vector search runs on sha256-seeded random vectors when the
+    # optional ``embeddings`` extra is missing (dynamo.llm.embeddings). Those
+    # hits are noise, and they enter live committee prompts labelled "similar
+    # past situations", so retrieval ABSTAINS rather than degrading. Turning
+    # this on restores the old behaviour and still logs a warning every run;
+    # the real fix is `uv sync --extra embeddings && uv run python -m
+    # dynamo.cli.journal_seed --reembed` (see docs/journal_embeddings.md).
+    journal_allow_hash_fallback: bool = Field(
+        default=False, alias="DYNAMO_JOURNAL_ALLOW_HASH_FALLBACK"
+    )
     # Hierarchical (scope-chain) calibration, plan Phase 2. Gates the
     # hier-scope calibration_points emission AND the advisory calibrated-p
     # logging onto decision_experience. ADVISORY ONLY — nothing consumes
