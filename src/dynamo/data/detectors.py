@@ -10,6 +10,8 @@ Input conventions:
 - ``bars``: DataFrame with columns ``symbol, ts, close, volume`` (canonical
   adjusted closes from ``MarketDataRepository.bars_frame``; ``high``/``low``
   are used by ``range_break`` when present, else ``close`` substitutes).
+  ``range_bound`` needs ~140 sessions of history per symbol and uses
+  ``close``/``volume`` only.
 - Event inputs are sequences of the corresponding domain entities.
 - ``as_of``: the flag timestamp (aware UTC); detectors only look backwards
   from it (as-of discipline, doc 01 §6).
@@ -21,6 +23,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 
 from dynamo.domain.models.market import (
@@ -29,6 +32,10 @@ from dynamo.domain.models.market import (
     InsiderTx,
     NewsItem,
     SurveillanceFlag,
+)
+from dynamo.domain.volume_source import (
+    consolidated_equivalent_dollar_volume,
+    dominant_source,
 )
 
 # 8-K items considered material (doc 02 §2: 1.01, 2.01, 5.02, ...).
@@ -39,6 +46,22 @@ MATERIAL_FORMS: frozenset[str] = frozenset({"S-1", "13D", "13G", "SC 13D", "SC 1
 MNA_KEYWORDS: tuple[str, ...] = (
     "merger", "acquisition", "acquire", "buyout", "takeover", "tender offer",
 )
+
+# --- range_bound liquidity floor ------------------------------------------
+#
+# $2M median daily dollar volume. The number is a judgement call, so here is
+# the reasoning rather than just the constant. Range trading earns the width
+# of the range and pays the spread twice; a 5-cent spread against a $1 range
+# is ~10% of the gross edge per round trip, and below roughly $2M/day US
+# equities routinely quote 3-10 cents on sub-$10 names, at which point a
+# range that looks profitable on closing prices is not. It is deliberately a
+# default argument, not a hard-coded constant: raising it buys tradability
+# and costs breadth (small caps oscillate most and are thinnest), and that
+# is the operator's trade to make.
+RANGE_BOUND_MIN_DOLLAR_VOLUME = 2_000_000.0
+# Direct spread guard, applied only to symbols present in the supplied
+# ``spreads_bps`` map. 50bps on a $5 name is 2.5 cents.
+RANGE_BOUND_MAX_SPREAD_BPS = 50.0
 
 
 def _sev(value: float) -> float:
@@ -53,23 +76,150 @@ def _per_symbol(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
     }
 
 
+# --- price_zscore eligibility guards --------------------------------------
+#
+# The first whole-market sweep (11,258 symbols, 2026-08-18) produced 61
+# price_zscore flags. Reading them one by one, only 7 described a real,
+# tradable price event. The rest were two failure modes, and each needs its
+# own guard because each defeats the other's.
+
+# 1. UNADJUSTED CORPORATE ACTIONS. bars_1d stores Alpaca closes as the feed
+#    returns them, and a reverse split lands in the series as a price move:
+#    RCON printed 0.0226 -> 3.19 (+14,015%) and CXAI 0.0898 -> 4.23 (+4,610%)
+#    on 2026-08-17/18. 7 of the 61 flags were shaped like this. A z-score
+#    cannot tell a split from a rally — the ratio is simply enormous — so the
+#    only reliable discriminator at this layer is the size of the move.
+#
+#    The ceiling is stated as a PRICE RATIO, not a return, and it is symmetric
+#    in that ratio: a session is rejected when the close is >= 2x or <= 1/2x
+#    the previous close. Splits come in both directions and a return-based
+#    ceiling is lopsided against them — a 1-for-141 reverse split is +14,015%
+#    but an ordinary 2-for-1 forward split is only -50%, which no plausible
+#    ceiling on |return| would ever catch. In ratio terms both are exactly one
+#    factor of the split away from the previous close.
+#
+#    The asymmetry of COSTS justifies setting it this tight: routing a genuine
+#    -50% biotech blowup to data-quality review costs a day's delay, while
+#    treating a split as a price move fabricates a trade on a price that never
+#    happened. On the measured date this reroutes 4 of the 61, two of them
+#    confirmed reverse splits.
+PRICE_ZSCORE_MAX_PRICE_RATIO = 2.0
+DATA_QUALITY_DETECTOR = "data_quality"
+
+# 2. COLLAPSED VOLATILITY. Dividing by a 60-day sigma that tends to zero makes
+#    any move enormous in sigma units. AACP moved +0.4% and scored 10.4 sigma
+#    because its sigma was 0.038% — it barely prints on IEX. 13% of the
+#    scanned universe has a 60-day sigma below 0.3%.
+#
+#    Two independent guards, because either alone is escapable:
+#      - a floor under the denominator. 0.5%/session sits at roughly the 18th
+#        percentile of the universe's 60-day sigma (measured quantiles:
+#        p5 0.12%, p25 0.74%, p50 1.88%), so it binds only on the dead tail
+#        and leaves the median name untouched.
+#      - a floor under the numerator. Below 2% a single session simply is not
+#        a surveillance event on an equity, whatever the sigma says. The two
+#        numbers are deliberately consistent: at k=4 the sigma floor already
+#        implies a 2% minimum move, so this restates the same bound where a
+#        caller lowers k.
+PRICE_ZSCORE_SIGMA_FLOOR = 0.005
+PRICE_ZSCORE_MIN_ABS_RETURN = 0.02
+
+# 3. UNTRADABLE NAMES. 39 of the 61 flagged symbols had a MEDIAN daily dollar
+#    volume of exactly zero over the trailing window — no position could be
+#    opened in them at any size. Expressed in CONSOLIDATED-EQUIVALENT dollars
+#    (see dynamo.domain.volume_source): $1M/day consolidated is ~$66k/day as
+#    observed on the IEX feed. At the risk engine's own exit assumption (20%
+#    participation) a $1M/day name absorbs ~$200k/session, which is the point
+#    below which a flag cannot become a position worth holding.
+PRICE_ZSCORE_MIN_DOLLAR_VOLUME = 1_000_000.0
+
+
+def _consolidated_dollar_volume(grp: pd.DataFrame, window: int) -> float:
+    """Median daily dollar volume over the window, in consolidated-equivalent
+    dollars — scaled up from the bar's own feed (doc 02 §5 / D5).
+
+    A frame without a ``source`` column is assumed consolidated, which
+    UNDER-states liquidity and so fails toward rejecting a flag.
+    """
+    dollar = (grp["close"] * grp["volume"]).tail(window)
+    observed = float(dollar.median()) if len(dollar) else 0.0
+    source = dominant_source(grp["source"]) if "source" in grp.columns else None
+    return consolidated_equivalent_dollar_volume(observed, source)
+
+
 def price_zscore(
     bars: pd.DataFrame,
     *,
     as_of: datetime,
     k: float = 4.0,
     window: int = 60,
+    sigma_floor: float = PRICE_ZSCORE_SIGMA_FLOOR,
+    min_abs_return: float = PRICE_ZSCORE_MIN_ABS_RETURN,
+    min_dollar_volume: float = PRICE_ZSCORE_MIN_DOLLAR_VOLUME,
+    max_price_ratio: float = PRICE_ZSCORE_MAX_PRICE_RATIO,
 ) -> list[SurveillanceFlag]:
-    """|1-day return| > k * sigma(60d) (doc 02 §2, default k=4)."""
+    """|1-day return| > k * sigma(60d), gated for tradability (doc 02 §2).
+
+    Emits two kinds of flag. ``price_zscore`` is a TRADING signal: a move
+    large enough to matter, on a name liquid enough to act on, measured
+    against a volatility that is not an artifact. ``data_quality`` is not a
+    trading signal at all — it marks a session whose printed move is too
+    large to be a price move, which in this database means an unadjusted
+    corporate action, and asks for a human rather than a position.
+
+    The ceiling is tested FIRST and unconditionally, so no combination of the
+    other arguments can route a split into the trading branch. See the
+    constants above for what each threshold is worth on measured data.
+    """
     flags: list[SurveillanceFlag] = []
     for symbol, grp in _per_symbol(bars).items():
         returns = grp["close"].pct_change().dropna()
         if len(returns) < window // 2 + 1:
             continue
         last = float(returns.iloc[-1])
-        sigma = float(returns.iloc[:-1].tail(window).std())
-        if sigma <= 0:
+
+        # (1) Sanity ceiling, before anything else can make this a signal.
+        #     Symmetric in price ratio so both split directions are caught.
+        ratio = 1.0 + last
+        floor_ratio = 1.0 / max_price_ratio if max_price_ratio > 0 else 0.0
+        if ratio >= max_price_ratio or ratio <= floor_ratio:
+            flags.append(
+                SurveillanceFlag(
+                    symbol=symbol,
+                    detector=DATA_QUALITY_DETECTOR,
+                    severity=0.9,
+                    details={
+                        "check": "unadjusted_price_move",
+                        "return_1d": round(last, 5),
+                        "price_ratio": round(ratio, 4),
+                        "max_price_ratio": max_price_ratio,
+                        "direction": "reverse_split_shaped"
+                        if ratio >= max_price_ratio
+                        else "forward_split_shaped",
+                        "reason": (
+                            "single-session price ratio outside the sanity band; "
+                            "most likely an unadjusted corporate action, "
+                            "NOT a trading signal"
+                        ),
+                    },
+                    ts=as_of,
+                )
+            )
             continue
+
+        # (2) Dead-sigma guard: floor the denominator AND the numerator.
+        raw_sigma = float(returns.iloc[:-1].tail(window).std())
+        if raw_sigma != raw_sigma:  # NaN
+            continue
+        sigma = max(raw_sigma, sigma_floor)
+        if sigma <= 0 or abs(last) < min_abs_return:
+            continue
+
+        # (3) Tradability: consolidated-equivalent dollars, per D5.
+        dollar_volume = _consolidated_dollar_volume(grp, window)
+        if dollar_volume < min_dollar_volume:
+            continue
+
         z = abs(last) / sigma
         if z > k:
             flags.append(
@@ -77,7 +227,14 @@ def price_zscore(
                     symbol=symbol,
                     detector="price_zscore",
                     severity=_sev(z / (2.0 * k)),
-                    details={"z": round(z, 3), "return_1d": round(last, 5), "k": k},
+                    details={
+                        "z": round(z, 3),
+                        "return_1d": round(last, 5),
+                        "k": k,
+                        "sigma": round(sigma, 6),
+                        "sigma_floored": str(raw_sigma < sigma_floor).lower(),
+                        "dollar_volume_consolidated": round(dollar_volume, 0),
+                    },
                     ts=as_of,
                 )
             )
@@ -204,6 +361,143 @@ def range_break(
                     ts=as_of,
                 )
             )
+    return flags
+
+
+def range_bound(
+    bars: pd.DataFrame,
+    *,
+    as_of: datetime,
+    band_window: int = 20,
+    band_sigma: float = 2.0,
+    touch_window: int = 60,
+    min_band_touches: int = 2,
+    vr_lag: int = 10,
+    vr_window: int = 120,
+    max_variance_ratio: float = 0.90,
+    range_window: int = 60,
+    max_range_position: float = 0.25,
+    min_dollar_volume: float = RANGE_BOUND_MIN_DOLLAR_VOLUME,
+    max_spread_bps: float = RANGE_BOUND_MAX_SPREAD_BPS,
+    spreads_bps: Mapping[str, float] | None = None,
+) -> list[SurveillanceFlag]:
+    """Established trading range, price currently near the LOW of it.
+
+    This is the whole-market counterpart of the ``range_reversion`` research
+    candidate (``research/candidates/range_reversion.py``): the piece that
+    lets a $4.30-$5.30 oscillator somewhere in a 6,000-name universe get
+    noticed and enter the promotion funnel instead of being invisible because
+    nobody was looking at it. Four conditions, all required:
+
+    1. **Mean-reverting** — Lo-MacKinlay variance ratio
+       ``Var(10-session log return) / (10 * Var(1-session))`` over the
+       trailing ``vr_window`` sessions is at or below ``max_variance_ratio``.
+       Under a random walk this is 1.0; below 1 means increments reverse.
+    2. **Two-sided oscillation** — at least ``min_band_touches`` distinct
+       excursions beyond BOTH the upper and the lower ``band_sigma``
+       Bollinger band in the trailing ``touch_window`` sessions. Consecutive
+       sessions outside a band count as one excursion; requiring both ends
+       is what separates an oscillator from a trend riding one band.
+    3. **Near the low** — the close sits in the bottom ``max_range_position``
+       of the trailing ``range_window`` high-low range.
+    4. **Liquid enough to actually trade** — see below.
+
+    Liquidity is a first-class, configurable parameter here rather than a
+    hidden assumption, because for this strategy it IS the strategy. The
+    edge being harvested is the width of the range, and the cost of
+    harvesting it is the spread, paid twice. A 5-cent spread on a $1 range
+    costs about 5% of the range on entry and 5% on exit — roughly **10% of
+    the gross edge per round trip** — before commissions, slippage, or the
+    fact that a thin book means the quoted spread is optimistic for any size.
+    Widen the spread to 10 cents, or narrow the range to 50 cents, and a
+    quarter to a half of the edge is gone. ``min_dollar_volume`` (default
+    $2M/day median) is the crude proxy that keeps names whose spreads make
+    the pattern untradeable out of the funnel; ``max_spread_bps`` is the
+    direct test, applied only for symbols present in ``spreads_bps``. Bars
+    carry no quote data today, so that guard is inert until a quote feed
+    lands — stated rather than silently assumed.
+
+    Raising ``min_dollar_volume`` buys tradability and costs breadth: the
+    small and micro caps most likely to oscillate are exactly the ones a
+    high floor removes. That trade-off is the operator's to make, which is
+    why it is an argument and not a constant.
+    """
+    flags: list[SurveillanceFlag] = []
+    min_sessions = max(vr_window + vr_lag + 1, touch_window + band_window, range_window)
+    for symbol, grp in _per_symbol(bars).items():
+        if len(grp) < min_sessions:
+            continue
+        closes = np.asarray(grp["close"], dtype=float)
+        volumes = np.asarray(grp["volume"], dtype=float)
+        if closes.min() <= 0:
+            continue
+
+        dollar_volume = float(np.median((closes * volumes)[-touch_window:]))
+        if dollar_volume < min_dollar_volume:
+            continue
+        spread = None if spreads_bps is None else spreads_bps.get(symbol)
+        if spread is not None and float(spread) > max_spread_bps:
+            continue
+
+        # Grouped per symbol above, so every window here is already this
+        # symbol's OWN session sequence — the calendar-mixing hazard that the
+        # wide feature panel has cannot arise in this shape.
+        close = pd.Series(closes)
+        log_ret = pd.Series(np.diff(np.log(closes)))
+        var_1 = float(log_ret.tail(vr_window).var())
+        ret_k = pd.Series(log_ret.rolling(vr_lag).sum()).dropna()
+        var_k = float(ret_k.tail(vr_window).var())
+        if var_1 <= 0:
+            continue
+        variance_ratio = var_k / (vr_lag * var_1)
+        if variance_ratio > max_variance_ratio:
+            continue
+
+        mid = pd.Series(close.rolling(band_window).mean())
+        sd = pd.Series(close.rolling(band_window).std())
+        usable = pd.Series(mid.notna() & (sd > 0))
+
+        def _excursions(touching: pd.Series, usable: pd.Series = usable) -> int:
+            """Distinct excursions: a touch whose previous session was inside
+            the band. Ten sessions pinned outside a band is one, not ten."""
+            touched = touching & usable
+            started = touched & ~touched.shift(1, fill_value=False)
+            return int(started.tail(touch_window).sum())
+
+        upper_touches = _excursions(pd.Series(close >= mid + band_sigma * sd))
+        lower_touches = _excursions(pd.Series(close <= mid - band_sigma * sd))
+        if min(upper_touches, lower_touches) < min_band_touches:
+            continue
+
+        window = closes[-range_window:]
+        low, high = float(window.min()), float(window.max())
+        span = high - low
+        if span <= 0:
+            continue
+        position = (float(closes[-1]) - low) / span
+        if position > max_range_position:
+            continue
+
+        depth = 1.0 - position / max_range_position
+        oscillation = min(min(upper_touches, lower_touches) / (2.0 * min_band_touches), 1.0)
+        flags.append(
+            SurveillanceFlag(
+                symbol=symbol,
+                detector="range_bound",
+                severity=_sev(0.4 + 0.3 * oscillation + 0.3 * depth),
+                details={
+                    "variance_ratio": round(variance_ratio, 3),
+                    "upper_touches": upper_touches,
+                    "lower_touches": lower_touches,
+                    "range_position": round(position, 3),
+                    "range_low": round(low, 4),
+                    "range_high": round(high, 4),
+                    "dollar_volume": round(dollar_volume, 0),
+                    "min_dollar_volume": min_dollar_volume,
+                },
+                ts=as_of,
+            )
+        )
     return flags
 
 
@@ -361,6 +655,9 @@ class DetectorInputs:
     bars: pd.DataFrame
     as_of: datetime
     sector_etf_map: Mapping[str, str] = field(default_factory=dict)
+    # symbol -> quoted spread in bps, for range_bound's tradability guard.
+    # Empty until a quote feed exists; the guard is then simply not applied.
+    spreads_bps: Mapping[str, float] = field(default_factory=dict)
     earnings: Sequence[EarningsEvent] = ()
     filings: Sequence[Filing] = ()
     insider_txs: Sequence[InsiderTx] = ()
@@ -374,6 +671,9 @@ def run_detectors(inputs: DetectorInputs) -> list[SurveillanceFlag]:
         flags += price_zscore(inputs.bars, as_of=inputs.as_of)
         flags += volume_spike(inputs.bars, as_of=inputs.as_of)
         flags += range_break(inputs.bars, as_of=inputs.as_of)
+        flags += range_bound(
+            inputs.bars, as_of=inputs.as_of, spreads_bps=inputs.spreads_bps or None
+        )
         if inputs.sector_etf_map:
             flags += rel_strength(
                 inputs.bars, as_of=inputs.as_of, sector_etf_map=inputs.sector_etf_map
