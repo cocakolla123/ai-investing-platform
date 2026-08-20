@@ -14,10 +14,27 @@ from dynamo.risk.liquidity import (
 CFG = RiskConfig()
 
 
+NO_FLOOR = RiskConfig(min_adv_dollar=0.0)
+
+
 def test_max_entry_weight_formula() -> None:
     # 3 days x 10% x $1M ADV / $100k equity = 3.0 (uncapped here; sizing clamps)
     assert math.isclose(max_entry_weight(1_000_000.0, 100_000.0, CFG), 3.0)
-    assert math.isclose(max_entry_weight(10_000.0, 100_000.0, CFG), 0.03)
+    assert math.isclose(max_entry_weight(10_000.0, 100_000.0, NO_FLOOR), 0.03)
+
+
+def test_absolute_adv_floor_binds_where_the_relative_cap_cannot() -> None:
+    """The relative cap scales with equity, so a small account could always
+    satisfy it: at $1,000 of equity a name trading $267/day cleared a full
+    8% position. Microstructure does not scale with the account."""
+    thin = 267.0
+    assert max_entry_weight(thin, 1_000.0, NO_FLOOR) >= CFG.per_position_cap
+    assert max_entry_weight(thin, 1_000.0, CFG) == 0.0
+    # The floor is absolute: a large account is refused the same name.
+    assert max_entry_weight(thin, 10_000_000.0, CFG) == 0.0
+    # It binds at the boundary, not above it.
+    assert max_entry_weight(CFG.min_adv_dollar - 1.0, 100_000.0, CFG) == 0.0
+    assert max_entry_weight(CFG.min_adv_dollar, 100_000.0, CFG) > 0.0
 
 
 def test_max_entry_weight_fails_closed() -> None:

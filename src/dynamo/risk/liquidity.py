@@ -42,11 +42,26 @@ class LiquidityReport:
 def max_entry_weight(
     adv_dollar_20d: float, equity: float, config: RiskConfig
 ) -> float:
-    """Largest openable weight: <= max_days x participation x ADV / equity.
+    """Largest openable weight: <= max_days x participation x ADV / equity,
+    and 0 below the absolute ``min_adv_dollar`` floor.
 
     Unusable inputs give 0 — an illiquid or unknown name cannot be bought.
+
+    The relative cap alone is vacuous for a small account: it scales with
+    equity, so at $1,000 of equity it cleared a full position in a name
+    trading a few hundred dollars a day. ``config.min_adv_dollar`` is the
+    absolute floor that does not scale, because microstructure does not
+    scale either.
+
+    STILL MISSING, stated rather than left to be discovered: there is no
+    **price floor** (a $0.40 name with a 1-cent spread pays 2.5% per side)
+    and no **spread limit** anywhere in ``dynamo.risk``. Both need inputs
+    the risk engine is not given today — last price and a quote — so both
+    are plumbing changes to ``RiskInputs``, not one-line additions here.
     """
     if not (math.isfinite(adv_dollar_20d) and adv_dollar_20d > 0.0):
+        return 0.0
+    if adv_dollar_20d < config.min_adv_dollar:
         return 0.0
     if not (math.isfinite(equity) and equity > 0.0):
         return 0.0

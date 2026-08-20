@@ -155,7 +155,11 @@ class TestRiskLayerContract:
         from dynamo.domain.models.risk import RiskConfig
         from dynamo.risk.liquidity import consolidated_equivalent_adv, max_entry_weight
 
-        cfg = RiskConfig()
+        # The absolute min_adv_dollar floor is disabled here on purpose:
+        # this test is about the UNITS contract (the tape ratio), and the
+        # floor would zero both sides of the ratio. The floor has its own
+        # test in tests/unit/risk/test_liquidity.py.
+        cfg = RiskConfig(min_adv_dollar=0.0)
         equity = 1_000_000.0
         iex_observed = 66_000.0
 

@@ -71,6 +71,21 @@ class RiskConfig(BaseModel):
     disaster_stop_pct: float = 0.25
     liquidity_adv_participation: float = 0.10
     liquidity_max_days: float = 3.0
+    # ABSOLUTE liquidity floor, in consolidated-equivalent dollars per day.
+    #
+    # The participation cap above is purely RELATIVE — it asks "can I exit
+    # this position in 3 days at 10% of the tape?", which a small account
+    # can always answer yes to. At $1,000 of equity it permitted a full
+    # position in a name trading a few hundred dollars a day, where the
+    # quoted spread is a large fraction of any edge and "3 days to exit" is
+    # fiction because there is no continuous book to participate in.
+    # Relative caps scale with account size; market microstructure does
+    # not, so this floor has to be absolute. $1M/day is roughly where US
+    # equity spreads stop being measured in whole percent.
+    #
+    # NOT a substitute for a price floor or a spread limit; see
+    # dynamo.risk.liquidity for what those would need.
+    min_adv_dollar: float = 1_000_000.0
     correlation_cluster_threshold: float = 0.7
     conviction_tilt_min: float = 0.5
     conviction_tilt_max: float = 1.5
