@@ -329,6 +329,17 @@ class Settings(BaseSettings):
     social_min_mentions: int = 10
     social_lookback_days: int = 14
 
+    # --- Risk limits (doc 06 §11: versioned, not source-edited) -----------
+    # Path to a YAML/JSON file of RiskConfig field overrides. Relative paths
+    # anchor to home_dir like the kill switch. Unset -> the documented
+    # defaults in domain/models/risk.py, reported as version "default".
+    # A path that does not exist is a REFUSAL, not a fallback: running on
+    # defaults while believing an override is in force is the failure mode.
+    risk_config_path: str = Field(default="", alias="DYNAMO_RISK_CONFIG")
+    # doc 06 §2 risk bucket: low | medium | high (0.6x / 1.0x / 1.4x on the
+    # per-name risk budget; never on gross_cap, cash_floor or any *_hard).
+    risk_bucket: str = Field(default="", alias="DYNAMO_RISK_BUCKET")
+
     # --- Paths ---
     # Every relative path below is resolved against ``home_dir`` (see
     # :func:`dynamo_home`), NOT the process CWD. The kill switch is the reason:

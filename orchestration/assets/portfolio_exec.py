@@ -156,7 +156,8 @@ def _latest_risk_verdict(dynamo: DynamoResource) -> tuple[str, Any] | None:
 def risk_verdict_asset(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     import numpy as np
 
-    from dynamo.domain.models.risk import LadderRung, RiskConfig
+    from dynamo.config.risk_config import load_risk_config
+    from dynamo.domain.models.risk import LadderRung
     from dynamo.risk.engine import RiskEngine, RiskEngineInputs
     from dynamo.risk.ladder import LadderState
     from dynamo.risk.regime import RegimeHistory
@@ -267,7 +268,7 @@ def risk_verdict_asset(context: AssetExecutionContext, dynamo: DynamoResource) -
             adv_dollar_20d=adv,
             regime_history=regime_history,
             prev_ladder=prev_ladder,
-            config=RiskConfig(),
+            config=load_risk_config(dynamo.settings()),
             as_of=utcnow(),
             session_index=n - 1,
             quarantined=quarantined,

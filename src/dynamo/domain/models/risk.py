@@ -46,10 +46,19 @@ class LadderRung(StrEnum):
 
 
 class RiskConfig(BaseModel):
-    """All thresholds; Medium preset defaults. Promotion-gated production logic."""
+    """All thresholds; Medium preset defaults. Promotion-gated production logic.
+
+    ``version`` identifies WHICH set of thresholds ran (doc 06 §11 requires the
+    config be versioned). ``"default"`` means the shipped values below with no
+    overrides; anything else is a content hash stamped by
+    ``dynamo.config.risk_config.build_risk_config``. It is carried on the risk
+    verdict so ``/risk/limits`` can report what actually ran rather than what
+    the defaults happen to be.
+    """
 
     model_config = ConfigDict(frozen=True)
 
+    version: str = "default"
     bucket: RiskBucket = RiskBucket.MEDIUM
     per_position_cap: float = 0.08
     per_position_hard: float = 0.15
@@ -154,6 +163,9 @@ class RiskVerdict(Frozen):
     vetoes: tuple[Veto, ...] = ()
     metrics: RiskMetrics
     degraded: bool = False  # True when inputs were incomplete -> no new risk
+    # The thresholds this verdict was computed under. Reported by
+    # /risk/limits so the API describes what RAN, not RiskConfig() defaults.
+    config: RiskConfig | None = None
 
 
 class SizedPosition(Frozen):

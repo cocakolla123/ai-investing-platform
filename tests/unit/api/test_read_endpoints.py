@@ -76,7 +76,12 @@ def test_performance_computes_sharpe_and_drawdown(client) -> None:
 def test_risk_endpoints(client) -> None:
     limits = client.get("/risk/limits").json()["data"]
     assert limits["verdict"]["cash_floor"] == 0.05
-    assert limits["config"]["per_position_cap"] == 0.08
+    # /risk/limits reports the config that RAN, not RiskConfig() defaults
+    # (the default per_position_cap is 0.08 — reporting that here would be
+    # the exact bug doc 06 §11 describes).
+    assert limits["config"]["per_position_cap"] == 0.04
+    assert limits["config_source"] == "verdict"
+    assert limits["config_version"] == "cfg-abc123def456"
     metrics = client.get("/risk/metrics").json()["data"]
     assert metrics["metrics"]["var95_1d"] == 0.012
     assert metrics["regime"]["regime"] == "neutral"
@@ -126,3 +131,15 @@ def test_metrics_endpoint_mounted(client) -> None:
     resp = client.get("/metrics")
     assert resp.status_code == 200
     assert "python_info" in resp.text
+
+
+def test_risk_limits_says_so_when_the_verdict_predates_config_stamping(
+    client, deps
+) -> None:
+    """Old verdicts carry no config; the API must not quietly show defaults
+    as though they were what ran."""
+    assert deps.risk.verdict is not None
+    deps.risk.verdict["payload"].pop("config")
+    limits = client.get("/risk/limits").json()["data"]
+    assert limits["config_source"] == "defaults_unrecorded"
+    assert limits["config_version"] == "unknown"

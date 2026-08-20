@@ -28,13 +28,23 @@ _CAP_KEYS = (
 
 @router.get("/limits")
 def get_limits(deps: DepsDep) -> AsOf[dict[str, Any]]:
-    """Latest risk-verdict caps rendered against the configured RiskConfig."""
+    """Latest risk-verdict caps, and the RiskConfig they were computed under.
+
+    ``config`` is the config carried ON the verdict — what actually ran. This
+    used to report ``RiskConfig().model_dump()``, i.e. the shipped defaults,
+    which is exactly wrong whenever an override is in force. Verdicts written
+    before the config was stamped carry none; ``config_source`` says so
+    rather than quietly substituting defaults.
+    """
     latest = deps.risk.latest_risk_verdict()
     payload = latest["payload"] if latest else {}
+    ran = payload.get("config")
     return AsOf(
         data={
             "verdict": {k: payload.get(k) for k in _CAP_KEYS},
-            "config": RiskConfig().model_dump(),
+            "config": ran if ran else RiskConfig().model_dump(),
+            "config_source": "verdict" if ran else "defaults_unrecorded",
+            "config_version": (ran or {}).get("version", "unknown"),
         },
         as_of=latest["as_of"] if latest else None,
     )

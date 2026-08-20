@@ -165,6 +165,8 @@ class FakeRiskStore:
                 "cash_floor": 0.05,
                 "metrics": {"var95_1d": 0.012},
                 "clusters": {"AAPL": "c1"},
+                # The config the verdict RAN under (doc 06 §11), not defaults.
+                "config": {"version": "cfg-abc123def456", "per_position_cap": 0.04},
             },
         }
         # /risk/stress reads the risk_scenarios table (doc 06 §6), not the

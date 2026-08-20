@@ -69,6 +69,7 @@ def _fills_window(dynamo: DynamoResource, day: date) -> list[tuple[str, str, dat
 @op
 def intraday_evaluate_entries(context: OpExecutionContext, dynamo: DynamoResource) -> None:
     """Promotions + breakout triggers → sizing cascade → standard order path."""
+    from dynamo.config.risk_config import load_risk_config
     from dynamo.domain.models.portfolio import (
         DecisionContext,
         Order,
@@ -77,7 +78,6 @@ def intraday_evaluate_entries(context: OpExecutionContext, dynamo: DynamoResourc
         OrderType,
     )
     from dynamo.domain.models.research import CommitteeVerdict, Signal, Sleeve
-    from dynamo.domain.models.risk import RiskConfig
     from dynamo.execution.client_order_id import client_order_id
     from dynamo.execution.errors import ExecutionError
     from dynamo.execution.order_manager import marketable_limit_price
@@ -226,7 +226,7 @@ def intraday_evaluate_entries(context: OpExecutionContext, dynamo: DynamoResourc
         live_quotes=live_quotes,
         verdicts=verdicts,
         sizing_candidates=sizing_candidates,
-        config=RiskConfig(),
+        config=load_risk_config(settings),
         context=SizingContext(
             equity=state.equity,
             existing_weights=state.weights,

@@ -219,6 +219,7 @@ class RiskEngine:
             vetoes=vetoes,
             metrics=metrics,
             degraded=True,
+            config=cfg,  # what RAN, so /risk/limits stops reporting defaults
         )
 
     # --------------------------------------------------------------- full path
@@ -417,4 +418,5 @@ class RiskEngine:
             vetoes=tuple(vetoes),
             metrics=metrics,
             degraded=False,
+            config=cfg,  # what RAN, so /risk/limits stops reporting defaults
         )
