@@ -940,6 +940,32 @@ class MarketDataRepository:
             result = conn.execute(stmt)
         return _reported_rowcount(result.rowcount, len(rows))
 
+    def seed_instrument_etf_flags(self, flags: Mapping[str, bool]) -> int:
+        """Upsert ``instruments.is_etf`` (mirrors :meth:`seed_instrument_sectors`).
+
+        Additive in the same way — only ``is_etf`` is written — so it composes
+        with the CIK/sector/industry seeds in any order. The column read
+        ``false`` on all 11,505 rows before this existed, which told
+        ``dynamo.research.quant.catalog.asset_class_of`` that the entire
+        universe was operating companies and skewed the asset-class-aware
+        coverage denominator: funds were charged for issuer features (insider,
+        earnings, short-interest-vs-float) they can never have.
+        """
+        if not flags:
+            return 0
+        t = schema.instruments
+        rows = [
+            {"symbol": symbol, "name": symbol, "is_etf": bool(is_etf)}
+            for symbol, is_etf in sorted(flags.items())
+        ]
+        stmt = pg_insert(t).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["symbol"], set_={"is_etf": stmt.excluded.is_etf}
+        )
+        with self._engine.begin() as conn:
+            result = conn.execute(stmt)
+        return _reported_rowcount(result.rowcount, len(rows))
+
     def close_membership(
         self,
         symbol: str,
