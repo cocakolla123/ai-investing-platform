@@ -438,3 +438,19 @@ class DynamoResource(ConfigurableResource):
     def bars_window(self, symbols: list[str] | None, as_of: date, days: int) -> Any:
         """Canonical bars frame for the trailing ``days`` calendar days."""
         return self.market_repo().bars_frame(symbols, as_of - timedelta(days=days), as_of)
+
+    def instrument_ciks(self) -> dict[str, str]:
+        """symbol -> CIK for every instrument that carries one.
+
+        The EDGAR Form 4 sweep uses this to decide which ownership documents
+        are worth downloading at all (~1,000 are filed market-wide per day,
+        against a 10 req/s budget).
+        """
+        from sqlalchemy import select
+
+        from dynamo.persistence import schema
+
+        t = schema.instruments
+        with self.engine().connect() as conn:
+            rows = conn.execute(select(t.c.symbol, t.c.cik)).all()
+        return {str(sym): str(cik) for sym, cik in rows if cik}

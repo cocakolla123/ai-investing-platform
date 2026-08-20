@@ -97,14 +97,35 @@ def corporate_actions(context: AssetExecutionContext, dynamo: DynamoResource) ->
 
 @dagster_asset(group_name=INGESTION_GROUP, partitions_def=daily_partitions)
 def insider_tx(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
-    """Form 4 insider transactions from EDGAR (hourly schedule, daily partition)."""
+    """Form 4 insider transactions from EDGAR (hourly schedule, daily partition).
+
+    Filtered to the CIKs of the tracked universe, and filtered BEFORE the
+    ownership XML is fetched. The unfiltered path took the first
+    ``max_insider_filings`` (50) Form 4s of the day out of ~1,000 filed
+    market-wide — i.e. an arbitrary 5% of an arbitrary slice of the market,
+    almost none of it names the platform trades. ``insider_cluster`` needs
+    two insiders buying the SAME symbol inside 14 days, which that sample
+    could only ever produce by luck.
+
+    Falls back to the whole market when no instrument carries a CIK, so a
+    fresh database still ingests something rather than silently nothing.
+    """
     as_of = as_of_from_partition(context.partition_key)
     edgar = dynamo.edgar()
     if edgar is None:  # pragma: no cover - EDGAR needs no key
         return _skipped("edgar not configured")
-    since = datetime.combine(as_of - timedelta(days=1), time.min, tzinfo=UTC)
-    rows = dynamo.market_repo().upsert_insider_tx(edgar.insider_transactions(since))
-    return MaterializeResult(metadata={"rows": rows})
+    since = as_of - timedelta(days=1)
+    ciks = dynamo.instrument_ciks()
+    if not ciks:
+        context.log.warning(
+            "insider_tx: no instrument carries a CIK — sweeping the whole market; "
+            "run `python -m dynamo.cli.reference ciks` to scope this"
+        )
+    txs = edgar.insider_transactions_in_range(
+        since, as_of, ciks=list(ciks.values()) or None
+    )
+    rows = dynamo.market_repo().upsert_insider_tx(txs)
+    return MaterializeResult(metadata={"rows": rows, "scoped_to_ciks": len(ciks)})
 
 
 @dagster_asset(group_name=INGESTION_GROUP, partitions_def=daily_partitions)
