@@ -188,3 +188,77 @@ def test_live_section_signature_is_the_parity_contract(wired: Any) -> None:
         "## Macro digest",
         "## Journal hits",
     ]
+
+
+# --------------------------------------------------------------------------
+# argument-set parity between the two call sites
+# --------------------------------------------------------------------------
+#
+# The section-signature test above compares the RENDERED output, which only
+# catches a divergence that changes a heading. It does not catch the class of
+# bug that has now bitten twice in one day: one caller passing an argument the
+# other does not, where the missing one degrades to its default and renders as
+# a plausible "none". So compare the calls themselves.
+
+
+def _dossier_call_kwargs(func: object) -> set[str]:
+    """Keyword names of the ``assemble_dossier_context(...)`` call in ``func``."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(func).lstrip())  # type: ignore[arg-type]
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "assemble_dossier_context"
+        ):
+            assert not node.args, "the dossier context takes keyword arguments only"
+            return {kw.arg for kw in node.keywords if kw.arg is not None}
+    raise AssertionError(f"no assemble_dossier_context(...) call found in {func!r}")
+
+
+def test_live_and_replay_pass_the_same_dossier_arguments() -> None:
+    """``build_deep_dive_contexts`` (live) and ``build_replay_contexts``
+    (replay) must hand the dossier the same argument set.
+
+    A backtest that debates on evidence the nightly run never assembles is
+    not a backtest of the nightly run. The divergence is invisible in output
+    diffs because every dossier section has a default that renders as "none".
+    """
+    from dynamo.replay.committee import build_replay_contexts
+
+    live = _dossier_call_kwargs(build_deep_dive_contexts)
+    replay = _dossier_call_kwargs(build_replay_contexts)
+    assert live == replay, (
+        f"dossier argument sets diverged: live-only={sorted(live - replay)}, "
+        f"replay-only={sorted(replay - live)}"
+    )
+
+
+def test_the_shared_argument_set_is_the_one_the_dossier_offers() -> None:
+    """Pin the set itself, so ADDING a dossier parameter is a deliberate act
+    on both sides rather than something one caller quietly picks up."""
+    from dynamo.research.dossier import assemble_dossier_context
+
+    live = _dossier_call_kwargs(build_deep_dive_contexts)
+    assert live == {
+        "instrument",
+        "quant_score",
+        "price_stats",
+        "fundamentals",
+        "peers",
+        "news_items",
+        "market_news_items",
+        "macro_digest_text",
+        "journal_hits",
+        "earnings_call_excerpt",
+    }
+    # Every name passed must be a real parameter — a typo would silently
+    # become an unexpected-keyword TypeError only on a code path that runs.
+    accepted = set(assemble_dossier_context.__annotations__) - {"return"}
+    assert live <= accepted
+    # `filing_excerpts` is offered and passed by NEITHER caller. That is a
+    # known, shared gap (nothing extracts filing sections yet), not a
+    # divergence — and it stays shared because the test above compares sets.
+    assert accepted - live == {"filing_excerpts"}
