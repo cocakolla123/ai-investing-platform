@@ -35,19 +35,29 @@ Scope, stated rather than discovered later
   Sweeping every form type would be ~10x the volume for rows no detector
   reads. One index request per form per day; no per-filing fetch.
 * **earnings** — Finnhub's free ``/calendar/earnings`` serves **from
-  2026-07-01 onward only** (earlier windows return an empty calendar) and
-  truncates a response at 1,500 events, so this chunks weekly. Historical
-  EPS *actuals* before that date are not obtainable free at universe scale:
-  Alpha Vantage has them per symbol at 25 requests/day, which is 53 days of
-  quota for 1,315 names. ``earnings_surprise`` therefore fires on the
-  actuals inside the served window and on everything that lands from now on;
-  it does not get a synthetic history.
+  2026-07-01 onward only** (earlier windows return an empty calendar; the
+  first day that actually carries events is 2026-07-15) and truncates a
+  response at 1,500 events without paginating or saying so, hence
+  ``--chunk-days`` and the INCOMPLETE report. Historical EPS *actuals* before
+  that floor are not obtainable free at universe scale: Alpha Vantage has
+  them per symbol at 25 requests/day, i.e. 53 days of quota for 1,315 names.
+  ``earnings_surprise`` therefore fires on the actuals inside the served
+  window and on everything that lands from now on; it does not get a
+  synthetic history.
 
 Every write is an upsert on the table's natural key
 (``filings.accession_no``; ``insider_tx`` on
 ``(accession_no, symbol, insider_name, tx_type)``; ``earnings_events`` on
 ``(symbol, event_date)``), so re-running any command converges rather than
-duplicating. ZERO LLM calls; real EDGAR/Finnhub network by design.
+duplicating.
+
+A multi-hour sweep WILL meet an EDGAR 500. Aborting throws away the hours
+already spent; swallowing it leaves a hole in the table that reads as a quiet
+day. Both EDGAR sweeps therefore skip the day, keep going, and **exit
+non-zero naming every day to re-run** — the same discipline as the truncated
+Finnhub window. A zero exit means the window is complete.
+
+ZERO LLM calls; real EDGAR/Finnhub network by design.
 """
 
 from __future__ import annotations
