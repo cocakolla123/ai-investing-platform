@@ -92,6 +92,25 @@ class HasSeverity(Protocol):
 #:   dominated the old ordering purely because its severity formula
 #:   saturates fastest; on its own it is the weakest reason to spend a
 #:   triage call.
+#:
+#: MEASURED, not just argued (pilot, 18 sessions x 1,248 names, forward
+#: 20-session excess return vs SPY; see ``docs/wide_campaign_design.md``):
+#:
+#:     range_bound   +1.35%   <- best, and the sleeper/oscillator pattern
+#:     range_break   +0.41%
+#:     price_zscore  -0.28%
+#:     volume_spike  -3.03%   <- CONTRA-INDICATIVE, and the loudest detector
+#:
+#: The ordering the a-priori weights above encode is the ordering the pilot
+#: found, which is reassuring but not yet licence to act: the effective
+#: sample is n ~ 4-5 independent periods (overlapping 20-session windows),
+#: and the panel carries measured survivorship bias (99.87% of symbols
+#: survive to the last bar) that lands hardest on exactly the flagged set.
+#: So ``volume_spike`` is NOT inverted or zeroed here on -3.03% alone --
+#: an inverted detector that is really just noise would be a new bug with a
+#: confident-looking justification. The wide campaign's discovery A/B
+#: (``docs/runbook_wide_campaign.md``) is the run sized to settle it; revisit
+#: this weight with those numbers, not these.
 DEFAULT_DETECTOR_WEIGHTS: Mapping[str, float] = {
     "range_break": 1.0,
     "filing_event": 1.0,
