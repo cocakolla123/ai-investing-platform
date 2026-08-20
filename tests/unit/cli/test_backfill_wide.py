@@ -407,13 +407,26 @@ def _bars_frame(symbol: str, closes: list[float], volumes: list[int]) -> pd.Data
     )
 
 
+# price_zscore now requires a tradable name (D1/D2/D5): a $1M/day
+# consolidated-equivalent floor, which on these source='alpaca' rows means
+# ~$66k/day printed. The old fixture traded $10k/day — genuinely untradable,
+# so the detector was right to drop it. Base volume is realistic instead, and
+# the 20x spike ratio volume_spike keys off is unchanged.
+BASE_VOLUME = 200_000
+SPIKE_VOLUME = BASE_VOLUME * 20
+
+
+def _spike_volumes() -> list[int]:
+    return [BASE_VOLUME] * 70 + [SPIKE_VOLUME]
+
+
 def test_surveillance_sweep_writes_real_flags(
     wired: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # 70 flat sessions then a +40% jump on 20x volume: price_zscore,
     # volume_spike and range_break should all fire.
     closes = [10.0 + 0.01 * (i % 3) for i in range(70)] + [14.0]
-    volumes = [1_000] * 70 + [20_000]
+    volumes = _spike_volumes()
     wired["repo"] = FakeRepo(
         members=[
             UniverseMembership(
@@ -444,7 +457,7 @@ def test_surveillance_sweep_dry_run_writes_nothing(wired: Any) -> None:
                 symbol="SPIKE", tier=Tier.SURVEILLANCE, valid_from=date(2024, 1, 1), reason="wide"
             )
         ],
-        bars=_bars_frame("SPIKE", closes, [1_000] * 70 + [20_000]),
+        bars=_bars_frame("SPIKE", closes, _spike_volumes()),
     )
     assert backfill.main(["surveillance-sweep", "--as-of", "2026-08-14", "--dry-run"]) == 0
     assert wired["repo"].flags == []
@@ -460,7 +473,7 @@ def test_surveillance_sweep_applies_the_liquidity_floor(
                 symbol="SPIKE", tier=Tier.SURVEILLANCE, valid_from=date(2024, 1, 1), reason="wide"
             )
         ],
-        bars=_bars_frame("SPIKE", closes, [1_000] * 70 + [20_000]),
+        bars=_bars_frame("SPIKE", closes, _spike_volumes()),
     )
     rc = backfill.main(
         [

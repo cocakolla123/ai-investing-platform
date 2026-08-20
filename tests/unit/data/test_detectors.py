@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from dynamo.data.detectors import (
     RANGE_BOUND_MIN_DOLLAR_VOLUME,
@@ -313,3 +314,152 @@ def test_run_detectors_passes_the_spread_map_through_to_range_bound() -> None:
         DetectorInputs(bars=bars, as_of=AS_OF, spreads_bps={"OSC": 500.0})
     )
     assert [f for f in wide if f.detector == "range_bound"] == []
+
+
+# --------------------------------------------------------------------------
+# price_zscore eligibility guards (D1 unadjusted actions, D2 dead sigma,
+# D5 source-aware liquidity). Measured against the first whole-market sweep:
+# 61 flags on 2026-08-18, of which 7 described a real tradable event.
+# --------------------------------------------------------------------------
+
+
+def zbars(
+    symbol: str,
+    closes: list[float],
+    *,
+    volume: int = 100_000,
+    source: str | None = None,
+) -> pd.DataFrame:
+    """Bars for the price_zscore guards, with an optional feed label."""
+    frame = make_bars(symbol, closes, [volume] * len(closes))
+    if source is not None:
+        frame = frame.assign(source=source)
+    return frame
+
+
+def test_price_zscore_ignores_an_unadjusted_reverse_split() -> None:
+    """D1: RCON printed 0.0226 -> 3.19 on 2026-08-17 (a 1-for-141 reverse
+    split) and reached the detectors as a +14,015% trading signal."""
+    closes = [c * 0.0226 / 100.0 for c in noisy_flat(70)]
+    closes.append(3.19)
+    flags = price_zscore(zbars("RCON", closes, volume=5_000_000), as_of=AS_OF)
+
+    assert [f.detector for f in flags] == ["data_quality"]
+    assert not [f for f in flags if f.detector == "price_zscore"]
+    detail = flags[0].details
+    assert detail["check"] == "unadjusted_price_move"
+    assert detail["direction"] == "reverse_split_shaped"
+    assert float(detail["price_ratio"]) > 100
+
+
+def test_price_zscore_ignores_an_unadjusted_forward_split() -> None:
+    """A 2-for-1 forward split halves the close — only -50%, which no ceiling
+    on |return| would catch. The band is symmetric in PRICE RATIO for exactly
+    this reason."""
+    closes = noisy_flat(70)
+    closes.append(closes[-1] / 2.0)
+    flags = price_zscore(zbars("SPLT", closes, volume=5_000_000), as_of=AS_OF)
+
+    assert [f.detector for f in flags] == ["data_quality"]
+    assert flags[0].details["direction"] == "forward_split_shaped"
+    assert float(flags[0].details["price_ratio"]) == pytest.approx(0.5, abs=0.01)
+
+
+def test_split_shaped_move_never_reaches_the_trading_branch() -> None:
+    """The ceiling is tested FIRST and unconditionally: no combination of the
+    other knobs can route a split back into a trading signal."""
+    closes = noisy_flat(70)
+    closes.append(closes[-1] * 141.0)
+    flags = price_zscore(
+        zbars("RCON", closes, volume=50_000_000),
+        as_of=AS_OF,
+        k=0.0001,               # would flag anything
+        sigma_floor=0.0,        # no floor
+        min_abs_return=0.0,     # no numerator floor
+        min_dollar_volume=0.0,  # no liquidity gate
+    )
+    assert {f.detector for f in flags} == {"data_quality"}
+
+
+def test_price_zscore_ignores_a_tiny_move_on_dead_volatility() -> None:
+    """D2: AACP moved +0.4% and scored 10.4 sigma because its 60-day sigma was
+    0.038%. 18% of the sweep's price_zscore flags were this shape."""
+    dead = [100.0 * (1 + (0.00002 if i % 2 else -0.00002)) for i in range(70)]
+    dead.append(dead[-1] * 1.004)  # +0.4%
+    bars = zbars("AACP", dead, volume=100_000)
+
+    # Without the guards this is a > 4 sigma event.
+    unguarded = price_zscore(bars, as_of=AS_OF, sigma_floor=0.0, min_abs_return=0.0)
+    assert [f.detector for f in unguarded] == ["price_zscore"]
+    assert float(unguarded[0].details["z"]) > 4.0
+
+    assert price_zscore(bars, as_of=AS_OF) == []
+
+
+def test_sigma_floor_alone_kills_the_dead_sigma_case() -> None:
+    """The two D2 guards are independent — each must work without the other,
+    since a caller can lower either."""
+    dead = [100.0 * (1 + (0.00002 if i % 2 else -0.00002)) for i in range(70)]
+    dead.append(dead[-1] * 1.004)
+    bars = zbars("AACP", dead)
+    assert price_zscore(bars, as_of=AS_OF, min_abs_return=0.0) == []
+    assert price_zscore(bars, as_of=AS_OF, sigma_floor=0.0) == []
+
+
+def test_price_zscore_still_flags_a_genuine_move_on_a_liquid_name() -> None:
+    """The guards must not cost the real signal. A 4-sigma move on a liquid
+    name with ordinary volatility still flags."""
+    closes = [100.0]
+    for i in range(70):  # ~2%/session noise -> sigma ~0.02
+        closes.append(closes[-1] * (1 + (0.02 if i % 2 else -0.02)))
+    closes.append(closes[-1] * 1.09)  # +9%, well past 4 * 0.02
+    flags = price_zscore(zbars("REAL", closes, volume=200_000), as_of=AS_OF)
+
+    assert [f.detector for f in flags] == ["price_zscore"]
+    assert float(flags[0].details["z"]) > 4.0
+    assert flags[0].details["sigma_floored"] == "false"
+    assert 0 < flags[0].severity <= 1
+
+
+def test_price_zscore_requires_tradable_liquidity() -> None:
+    """39 of the 61 flagged symbols had a median daily dollar volume of
+    exactly zero — no position could be opened in them at any size."""
+    closes = noisy_flat(70)
+    closes.append(closes[-1] * 1.10)
+
+    assert price_zscore(zbars("THIN", closes, volume=0), as_of=AS_OF) == []
+    liquid_flags = price_zscore(zbars("FAT", closes, volume=100_000), as_of=AS_OF)
+    assert [f.detector for f in liquid_flags] == ["price_zscore"]
+
+
+def test_liquidity_gate_reads_the_bar_source() -> None:
+    """D5: the floor is consolidated-equivalent dollars. The SAME printed
+    volume clears it on a consolidated feed and fails on an IEX-only one,
+    because those two numbers do not mean the same thing."""
+    closes = noisy_flat(70)
+    closes.append(closes[-1] * 1.10)
+    # $100 x 5,000 = $500k printed: clears $1M consolidated-equivalent only
+    # after IEX's ~6.6% share is scaled up (~$7.6M).
+    assert price_zscore(zbars("IEXNAME", closes, volume=5_000, source="alpaca"), as_of=AS_OF)
+    # $100 x 5,000 = $500k on the consolidated tape is genuinely below $1M.
+    assert price_zscore(zbars("TAPENAME", closes, volume=5_000, source="tiingo"), as_of=AS_OF) == []
+
+
+def test_missing_source_column_assumes_consolidated() -> None:
+    """Frames without a source column (every legacy caller) are read the
+    conservative way: assume the feed already sees the whole tape, which
+    under-states liquidity and fails toward rejecting."""
+    closes = noisy_flat(70)
+    closes.append(closes[-1] * 1.10)
+    bars = zbars("PLAIN", closes, volume=5_000)
+    assert "source" not in bars.columns
+    assert price_zscore(bars, as_of=AS_OF) == []
+
+
+def test_data_quality_flags_are_not_price_zscore_flags() -> None:
+    """The routed flag carries a different detector name so downstream can
+    keep it out of the trading funnel entirely."""
+    from dynamo.data.detectors import DATA_QUALITY_DETECTOR
+
+    assert DATA_QUALITY_DETECTOR == "data_quality"
+    assert DATA_QUALITY_DETECTOR != "price_zscore"

@@ -101,3 +101,110 @@ class TestCryptoEligibility:
         ]
         selected = select_deep_dives(candidates, cap=1)
         assert [c.symbol for c in selected] == ["ETH/USD"]  # event beats staleness
+
+
+class TestTiebreakIsNoLongerAlphabetical:
+    """The old `sorted(..., key=(priority, symbol))` meant that on any night
+    with more candidates than slots — every night — a name beginning with A
+    was structurally more likely to be analyzed than one beginning with W."""
+
+    def test_within_a_band_urgency_beats_the_alphabet(self) -> None:
+        candidates = [
+            # Alphabetically first, but barely qualifying on every axis.
+            DeepDiveCandidate(symbol="AAAA", move_sigma=2.01, last_verdict_age_days=1),
+            # Alphabetically last, reporting earnings tomorrow after a 6-sigma
+            # move and a 60-percentile quant-rank jump.
+            DeepDiveCandidate(
+                symbol="ZZZZ",
+                earnings_in_sessions=1,
+                move_sigma=6.0,
+                quant_rank_jump_pctiles=60.0,
+                has_new_filing=True,
+                last_verdict_age_days=1,
+            ),
+        ]
+        assert [c.symbol for c in select_deep_dives(candidates, cap=1)] == ["ZZZZ"]
+
+    def test_staleness_band_takes_the_stalest_not_the_earliest_letter(self) -> None:
+        candidates = [stale("AAAA", age=15), stale("ZZZZ", age=400)]
+        assert [c.symbol for c in select_deep_dives(candidates, cap=1)] == ["ZZZZ"]
+        # Never reviewed is maximally stale and beats any finite age.
+        never = [stale("AAAA", age=999), stale("ZZZZ", age=None)]
+        assert [c.symbol for c in select_deep_dives(never, cap=1)] == ["ZZZZ"]
+
+    def test_earnings_proximity_orders_the_event_band(self) -> None:
+        candidates = [
+            DeepDiveCandidate(symbol="AAAA", earnings_in_sessions=2, last_verdict_age_days=1),
+            DeepDiveCandidate(symbol="ZZZZ", earnings_in_sessions=0, last_verdict_age_days=1),
+        ]
+        assert [c.symbol for c in select_deep_dives(candidates, cap=1)] == ["ZZZZ"]
+
+    def test_symbol_remains_the_final_deterministic_tiebreak(self) -> None:
+        """Two genuinely identical candidates still have to break somehow."""
+        candidates = [stale("ZZZZ", age=30), stale("AAAA", age=30)]
+        assert [c.symbol for c in select_deep_dives(candidates, cap=1)] == ["AAAA"]
+
+
+class TestPromotionReserve:
+    def test_promotions_cannot_claim_the_whole_nightly_budget(self) -> None:
+        """Measured before the fix: ~18 promotions a night against 8 slots,
+        so Tier-1 names — the ones actually held — got zero dives."""
+        candidates = [promoted(f"P{i:02d}") for i in range(18)]
+        candidates += [stale(f"CORE{i:02d}", age=30) for i in range(10)]
+        selected = select_deep_dives(candidates, cap=8, promotion_slots=5)
+        symbols = [c.symbol for c in selected]
+        assert len(symbols) == 8
+        assert len([s for s in symbols if s.startswith("P")]) == 5
+        assert len([s for s in symbols if s.startswith("CORE")]) == 3
+
+    def test_unused_reserve_falls_back_to_promotions(self) -> None:
+        """A reserve must not waste slots on a night with nothing else to do."""
+        candidates = [promoted(f"P{i}") for i in range(8)]
+        selected = select_deep_dives(candidates, cap=8, promotion_slots=5)
+        assert len(selected) == 8
+
+    def test_unused_promotion_slots_fall_through_to_the_rest(self) -> None:
+        candidates = [promoted("P1"), *[stale(f"S{i}", age=30) for i in range(10)]]
+        selected = select_deep_dives(candidates, cap=8, promotion_slots=5)
+        assert len(selected) == 8
+        assert selected[0].symbol == "P1"
+
+    def test_no_reserve_is_the_old_behavior(self) -> None:
+        candidates = [promoted(f"P{i}") for i in range(10)] + [stale("S", age=30)]
+        selected = select_deep_dives(candidates, cap=8)
+        assert all(c.newly_promoted for c in selected)
+
+
+class TestDiversityLayer:
+    def test_sector_round_robin_stops_one_sector_taking_the_slate(self) -> None:
+        candidates = [stale(f"BANK{i:02d}", age=100 - i) for i in range(10)]
+        candidates += [stale("MINER", age=20), stale("BIOTECH", age=20)]
+        sectors = {f"BANK{i:02d}": "Financials" for i in range(10)}
+        sectors |= {"MINER": "Materials", "BIOTECH": "Health Care"}
+        selected = [c.symbol for c in select_deep_dives(candidates, cap=3, sectors=sectors)]
+        assert len([s for s in selected if s.startswith("BANK")]) == 1
+        assert {"MINER", "BIOTECH"} <= set(selected)
+
+    def test_cooldown_excludes_recently_debated_names(self) -> None:
+        from datetime import date
+
+        candidates = [stale("RECENT", age=100), stale("NEVER", age=20)]
+        history = [(date(2026, 8, 16), ["RECENT"]), (date(2026, 8, 17), ["RECENT"])]
+        selected = select_deep_dives(
+            candidates, cap=1, history=history, cooldown_sessions=2
+        )
+        assert [c.symbol for c in selected] == ["NEVER"]
+
+    def test_still_deterministic_with_the_diversity_layer_on(self) -> None:
+        candidates = [
+            promoted("PRM"),
+            stale("S1", age=30),
+            stale("S2", age=40),
+            DeepDiveCandidate(symbol="EVT", move_sigma=3.0, last_verdict_age_days=1),
+        ]
+        sectors = {"PRM": "Energy", "S1": "Energy", "S2": "Financials", "EVT": "Materials"}
+        first = select_deep_dives(candidates, cap=3, sectors=sectors, promotion_slots=1)
+        second = select_deep_dives(
+            list(reversed(candidates)), cap=3, sectors=sectors, promotion_slots=1
+        )
+        assert [c.symbol for c in first] == [c.symbol for c in second]

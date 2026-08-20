@@ -40,8 +40,44 @@ class Settings(BaseSettings):
     model_screen: str = "claude-haiku-4-5"
     model_analyst: str = "claude-sonnet-5"
     model_arbiter: str = "claude-opus-5"
+
+    # --- Discovery funnel throughput (doc 02 §2, doc 03 §1) ---------------
+    # These five numbers are ONE budget, not five independent knobs. The
+    # constraint, and the reasoning behind each default, is in
+    # dynamo.research.funnel; test_funnel.py asserts the shipped defaults
+    # satisfy it, so changing one of them in isolation fails the suite.
+    #
+    #   triage_cap * material_rate  <=  deep_dive_promotion_slots
+    #   16 * 0.30 = 4.8  <=  5.   (16 is the largest cap that fits)
+    #
+    # Before: triage 60/night x ~30% material = ~18 promotions/night against
+    # 8 deep dives, all 8 claimable by promotions. The queue grew ~10/night,
+    # ~540 names sat in Tier 3 against a 30-day window, ~44% of promotions
+    # expired unanalyzed, and Tier 1 got zero dives on any night with 8+
+    # promotions — i.e. every night.
     deep_dive_cap_per_night: int = 8
-    tier2_triage_cap_per_night: int = 60
+    # Of those 8, at most this many go to brand-new promotions. The other 3
+    # cover events and staleness on the existing universe: ~55 Tier-1 names
+    # against a 14-day staleness trigger need ~4/night to stay fresh, so 3
+    # is a deliberate (documented) under-provision in favor of discovery.
+    # Unused promotion slots are NOT wasted — they fall through to events
+    # and staleness, and unused event/stale slots fall back to promotions.
+    deep_dive_promotion_slots: int = 5
+    # Observed rate at which Haiku triage returns "material". Not a target:
+    # if the real rate moves, this is the number to update, and the funnel
+    # test will then tell you the triage cap no longer fits.
+    triage_material_rate: float = 0.30
+    tier2_triage_cap_per_night: int = 16
+    # Sessions a symbol sits out after being triaged. Shorter than the
+    # deep-dive slate's 5 because triage is cheap and its job is breadth;
+    # not 0 because a range_break flag persists for days and would
+    # otherwise re-consume a slot every night.
+    tier2_triage_cooldown_sessions: int = 3
+    # Tier-3 promotion window. NOT a throughput lever — with arrivals under
+    # the service rate the queue is bounded by one night's promotions, so
+    # this governs how long a name keeps full quant treatment after its
+    # dive, nothing more.
+    tier3_promotion_window_days: int = 30
 
     # --- Research backend selection (ADR-0014) ---
     # "api" (default): AnthropicClient — per-token billing, Message Batches at

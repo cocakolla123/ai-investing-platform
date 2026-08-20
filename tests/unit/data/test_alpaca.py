@@ -6,15 +6,20 @@ from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
+from alpaca.data.enums import Adjustment
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.trading.client import TradingClient
 
-from dynamo.data.alpaca_data import AlpacaMarketData
+from dynamo.data.alpaca_data import DAILY_BAR_ADJUSTMENT, AlpacaMarketData
 from dynamo.data.ratelimit import TokenBucket
 
 
 class FakeDataClient:
+    def __init__(self) -> None:
+        self.bars_request: Any = None
+
     def get_stock_bars(self, request: Any) -> Any:
+        self.bars_request = request
         bar = SimpleNamespace(
             timestamp=datetime(2026, 7, 31, 4, 0, tzinfo=UTC),
             open=10.0, high=11.0, low=9.5, close=10.5, volume=1234,
@@ -66,7 +71,7 @@ def make_adapter() -> AlpacaMarketData:
     )
 
 
-def test_daily_bars_mapping_raw_unadjusted() -> None:
+def test_daily_bars_mapping() -> None:
     adapter = make_adapter()
     assert adapter.source == "alpaca"
     bars = list(adapter.daily_bars(["ACME"], date(2026, 7, 30), date(2026, 7, 31)))
@@ -75,8 +80,53 @@ def test_daily_bars_mapping_raw_unadjusted() -> None:
     assert b.symbol == "ACME"
     assert b.close == 10.5
     assert b.volume == 1234
-    assert b.adj_close is None  # Tiingo owns adjustment (doc 02 §5)
+    # Tiingo owns the FULLY adjusted close (doc 02 §5); these are split-only.
+    assert b.adj_close is None
     assert b.source == "alpaca"
+
+
+def test_daily_bars_are_requested_split_adjusted() -> None:
+    """D1: raw closes made corporate actions look like price moves — RCON's
+    1-for-141 reverse split reached the detectors as +14,015%. The wide feed
+    now asks Alpaca to adjust for splits."""
+    fake = FakeDataClient()
+    adapter = AlpacaMarketData(
+        "key",
+        "secret",
+        data_client=cast(StockHistoricalDataClient, fake),
+        trading_client=cast(TradingClient, FakeTradingClient()),
+        bucket=TokenBucket(rate=10_000.0, capacity=10_000.0),
+    )
+    list(adapter.daily_bars(["ACME"], date(2026, 7, 30), date(2026, 7, 31)))
+    assert fake.bars_request.adjustment == Adjustment.SPLIT
+    assert DAILY_BAR_ADJUSTMENT == Adjustment.SPLIT
+
+
+def test_daily_bars_adjustment_is_overridable_for_the_raw_series() -> None:
+    """The raw series stays reachable: the dual-source close check compares
+    unadjusted closes, so it must be able to ask for them."""
+    fake = FakeDataClient()
+    adapter = AlpacaMarketData(
+        "key",
+        "secret",
+        data_client=cast(StockHistoricalDataClient, fake),
+        trading_client=cast(TradingClient, FakeTradingClient()),
+        bucket=TokenBucket(rate=10_000.0, capacity=10_000.0),
+    )
+    list(
+        adapter.daily_bars(
+            ["ACME"], date(2026, 7, 30), date(2026, 7, 31), adjustment=Adjustment.RAW
+        )
+    )
+    assert fake.bars_request.adjustment == Adjustment.RAW
+
+
+def test_dividends_are_not_adjusted_away() -> None:
+    """Split-only, deliberately: Adjustment.ALL would back out dividends and
+    make quality.dual_source_close_check fire on every historical ex-date for
+    a difference that is not an error."""
+    assert DAILY_BAR_ADJUSTMENT != Adjustment.ALL
+    assert DAILY_BAR_ADJUSTMENT != Adjustment.DIVIDEND
 
 
 def test_latest_quotes_midpoint_and_fallback() -> None:

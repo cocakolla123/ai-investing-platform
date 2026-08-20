@@ -135,13 +135,47 @@ def data_quality(context: AssetExecutionContext, dynamo: DynamoResource) -> Mate
 # --------------------------------------------------------------------------
 
 
+def _instrument_sectors(dynamo: DynamoResource) -> dict[str, str]:
+    """symbol -> GICS sector from ``instruments`` (blank sectors dropped)."""
+    inst = schema.instruments
+    frame = _read_df(dynamo, select(inst.c.symbol, inst.c.sector))
+    return {
+        str(r["symbol"]): str(r["sector"])
+        for r in frame.to_dict(orient="records")
+        if r["sector"]
+    }
+
+
+def _triage_history(dynamo: DynamoResource, as_of: date, sessions: int) -> list[Any]:
+    """Prior sessions and the symbols triaged on each, ascending.
+
+    One entry per calendar day in the window, INCLUDING days that triaged
+    nothing: ``select_shortlist``'s cooldown counts entries, so a run of
+    quiet days must still age a symbol out of its cooldown.
+    """
+    a = schema.agent_opinions
+    frame = _read_df(
+        dynamo,
+        select(a.c.symbol, a.c.as_of).where(
+            a.c.role == "triage", a.c.as_of >= as_of - timedelta(days=sessions)
+        ),
+    )
+    by_day: dict[date, list[str]] = {}
+    for row in frame.to_dict(orient="records"):
+        by_day.setdefault(_pydate(row["as_of"]), []).append(str(row["symbol"]))
+    return [
+        (day, sorted(set(by_day.get(day, []))))
+        for day in (as_of - timedelta(days=n) for n in range(sessions, 0, -1))
+    ]
+
+
 def _triage_flags(
     context: AssetExecutionContext | OpExecutionContext,
     dynamo: DynamoResource,
     flags: Sequence[Any],
     as_of: date,
 ) -> int:
-    """Haiku triage over flagged symbols; material -> Tier-3 promotion."""
+    """Haiku triage over the best-ranked flagged symbols; material -> Tier 3."""
     model = dynamo.research_model()
     if model is None or not flags:
         if flags:
@@ -149,18 +183,44 @@ def _triage_flags(
         return 0
     from dynamo.data.universe import UniverseManager
     from dynamo.llm.schemas import TRIAGE_SCHEMA
+    from dynamo.research.flag_ranking import group_by_symbol, select_for_triage
     from dynamo.research.prompt_loader import load_prompt
 
     settings = dynamo.settings()
     repo = dynamo.market_repo()
     prompt = load_prompt("triage")
-    manager = UniverseManager(repo)
+    manager = UniverseManager(
+        repo,
+        default_promotion_days=settings.tier3_promotion_window_days,
+        include_crypto=bool(settings.crypto_enabled),
+    )
 
-    by_symbol: dict[str, list[Any]] = {}
-    for f in sorted(flags, key=lambda f: -f.severity):
-        by_symbol.setdefault(f.symbol, []).append(f)
+    # Ranking stage (dynamo.research.flag_ranking). This used to be
+    # `sorted(flags, key=-severity)[:cap]`, which ranked by a number the
+    # detectors compute on incompatible scales: volume_spike saturates at
+    # 1.0 past 6x median volume while range_break emits a constant 0.6, so
+    # a routine volume blip outranked every 52-week breakout, every night.
+    # Percentile-within-detector makes them comparable; the shared
+    # shortlist layer then applies cooldown and sector round-robin so one
+    # macro move cannot consume the whole cap.
+    cap = settings.tier2_triage_cap_per_night
+    selected = select_for_triage(
+        flags,
+        cap,
+        sectors=_instrument_sectors(dynamo),
+        history=_triage_history(dynamo, as_of, settings.tier2_triage_cooldown_sessions * 4),
+        cooldown_sessions=settings.tier2_triage_cooldown_sessions,
+    )
+    by_symbol = group_by_symbol(flags, selected)
+    context.log.info(
+        "tier2 triage: %d flags on %d symbols -> %d selected (cap %d)",
+        len(flags),
+        len({f.symbol for f in flags}),
+        len(selected),
+        cap,
+    )
     triaged = 0
-    for symbol, sym_flags in list(by_symbol.items())[: settings.tier2_triage_cap_per_night]:
+    for symbol, sym_flags in by_symbol.items():
         flag_text = "\n".join(
             f"- {f.detector} severity={f.severity:.2f} "
             f"details={json.dumps(f.details, sort_keys=True, default=str)}"
@@ -729,8 +789,38 @@ def select_deep_dive_symbols(dynamo: DynamoResource, as_of: date) -> list[str]:
         )
         for sym in sorted(active_set)
     ]
-    selected = select_deep_dives(candidates, dynamo.settings().deep_dive_cap_per_night)
+    settings = dynamo.settings()
+    selected = select_deep_dives(
+        candidates,
+        settings.deep_dive_cap_per_night,
+        # Without this reserve, ~18 promotions a night claimed all 8 slots
+        # and the core universe was never re-examined (doc 03 §1 /
+        # dynamo.research.funnel).
+        promotion_slots=settings.deep_dive_promotion_slots,
+        sectors=_instrument_sectors(dynamo),
+        history=_deep_dive_history(dynamo, as_of, settings.replay_shortlist_cooldown_sessions * 4),
+        cooldown_sessions=settings.replay_shortlist_cooldown_sessions,
+        rotation_slots=settings.replay_shortlist_rotation_slots,
+        rotation_lookback_sessions=settings.replay_shortlist_rotation_lookback_sessions,
+        crypto_slots=settings.replay_shortlist_crypto_slots,
+    )
     return [c.symbol for c in selected]
+
+
+def _deep_dive_history(dynamo: DynamoResource, as_of: date, sessions: int) -> list[Any]:
+    """Prior sessions and the symbols the committee debated on each."""
+    v = schema.committee_verdicts
+    frame = _read_df(
+        dynamo,
+        select(v.c.symbol, v.c.as_of).where(v.c.as_of >= as_of - timedelta(days=sessions)),
+    )
+    by_day: dict[date, list[str]] = {}
+    for row in frame.to_dict(orient="records"):
+        by_day.setdefault(_pydate(row["as_of"]), []).append(str(row["symbol"]))
+    return [
+        (day, sorted(set(by_day.get(day, []))))
+        for day in (as_of - timedelta(days=n) for n in range(sessions, 0, -1))
+    ]
 
 
 @dagster_asset(group_name=RESEARCH_GROUP, deps=["tier2_scan", "quant_features_scores"])
@@ -742,6 +832,106 @@ def deep_dive_selection(
     symbols = select_deep_dive_symbols(dynamo, as_of)
     context.log.info("deep dive selection for %s: %s", as_of, symbols)
     return MaterializeResult(metadata={"selected": len(symbols), "symbols": symbols})
+
+
+# --------------------------------------------------------------------------
+# universe lifecycle (doc 02 §2 exit paths) — nightly, code-only
+# --------------------------------------------------------------------------
+
+
+@dagster_asset(group_name=RESEARCH_GROUP, deps=["deep_dive_selection"])
+def universe_lifecycle(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """Close lapsed promotions, and file Tier-1 add/demote recommendations.
+
+    Three things that existed in :class:`UniverseManager` but had no
+    production caller, so none of them ever happened:
+
+    - ``expire_promotions`` — Tier-3 windows lapsed by interval semantics,
+      which is correct but invisible. Calling it records the expiry and
+      defensively closes any promotion written without a ``valid_to``.
+    - ``recommend_addition`` / ``recommend_demotion`` — the human-approval
+      queue behind ``dashboard/pages/7_Ops.py`` and
+      ``api/routers/admin.py`` is fed by these alerts and nothing else, so
+      it was permanently empty. Tier 1 is the one thing the platform may
+      never change on its own (doc 02 §2), so the ONLY way a discovered
+      name can become permanent is for a recommendation to reach a human.
+
+    Promotion criterion: a name whose Tier-3 window is closing and whose
+    committee conviction held up across repeat dives has earned a *proposal*
+    for core membership — sustained interest, not one good night. The
+    demotion criterion is deliberately absent for now (see below).
+    """
+    from dynamo.data.universe import UniverseManager
+
+    as_of = utcnow().date()
+    settings = dynamo.settings()
+    repo = dynamo.market_repo()
+    manager = UniverseManager(
+        repo,
+        default_promotion_days=settings.tier3_promotion_window_days,
+        include_crypto=bool(settings.crypto_enabled),
+    )
+
+    lapsed = manager.expire_promotions(as_of)
+
+    # Sustained interest: promoted names the committee debated at least
+    # twice inside the promotion window and never rated a SELL. Repeat
+    # conviction is the signal; a single dive is not.
+    window_start = as_of - timedelta(days=settings.tier3_promotion_window_days)
+    promoted = {
+        m.symbol for m in repo.universe_at(as_of) if int(m.tier) == 3
+    }
+    recommended: list[str] = []
+    if promoted:
+        v = schema.committee_verdicts
+        verdicts = _read_df(
+            dynamo,
+            select(v.c.symbol, v.c.as_of, v.c.action).where(v.c.as_of >= window_start),
+        )
+        by_symbol: dict[str, list[str]] = {}
+        for row in verdicts.to_dict(orient="records"):
+            symbol = str(row["symbol"])
+            if symbol in promoted:
+                by_symbol.setdefault(symbol, []).append(str(row["action"]).upper())
+        now = utcnow()
+        for symbol, actions in sorted(by_symbol.items()):
+            if len(actions) >= 2 and not any(a.startswith("SELL") for a in actions):
+                manager.recommend_addition(
+                    symbol,
+                    f"{len(actions)} committee verdicts in the last "
+                    f"{settings.tier3_promotion_window_days}d, none SELL",
+                    now=now,
+                )
+                recommended.append(symbol)
+
+    context.log.info(
+        "universe lifecycle %s: %d promotions expired, %d core additions recommended",
+        as_of,
+        len(lapsed),
+        len(recommended),
+    )
+    return MaterializeResult(
+        metadata={
+            "expired_promotions": len(lapsed),
+            "recommended_additions": len(recommended),
+            "symbols_recommended": recommended,
+            "funnel": _funnel_budget(settings).diagnosis(),
+        }
+    )
+
+
+def _funnel_budget(settings: Any) -> Any:
+    from dynamo.research.funnel import FunnelBudget
+
+    return FunnelBudget(
+        triage_cap_per_night=settings.tier2_triage_cap_per_night,
+        triage_material_rate=settings.triage_material_rate,
+        deep_dive_cap_per_night=settings.deep_dive_cap_per_night,
+        deep_dive_promotion_slots=settings.deep_dive_promotion_slots,
+        promotion_window_days=settings.tier3_promotion_window_days,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1495,6 +1685,7 @@ RESEARCH_ASSETS = [
     regime_state,
     macro_digest,
     deep_dive_selection,
+    universe_lifecycle,
     watchlist_asset,
 ]
 COMMITTEE_JOBS = [committee_job, committee_advance_job, committee_sync_job]
