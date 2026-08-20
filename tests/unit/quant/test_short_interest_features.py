@@ -238,3 +238,36 @@ def test_a_crypto_pair_is_not_charged_for_missing_short_interest() -> None:
     assert "short_interest_change" in etf
     assert "short_interest_pct_float" not in etf
     assert set(SHORT_INTEREST_FEATURES) <= equity
+
+
+def test_the_latest_cycle_is_one_whole_row_not_a_column_wise_merge() -> None:
+    """A pandas trap worth a test. ``groupby("symbol").last()`` skips NaN per
+    COLUMN, so a cycle reporting no days-to-cover would inherit the previous
+    cycle's figure while its shares_short came from the current one — a row
+    stitched from two different fortnights, and nothing would look wrong.
+
+    Here the newer cycle omits both optional fields. days_to_cover must be
+    recomputed from the NEW cycle (2.0), never the old cycle's published 9.0,
+    and the change must be NaN rather than the old cycle's move.
+    """
+    cycles = [
+        _cycle(
+            "AAA",
+            date(2026, 7, 15),
+            shares_short=5_000_000.0,
+            previous=4_000_000.0,
+            avg_daily_volume=500_000.0,
+            days_to_cover=9.0,
+        ),
+        _cycle(
+            "AAA",
+            date(2026, 7, 31),
+            shares_short=1_000_000.0,
+            previous=None,
+            avg_daily_volume=500_000.0,
+            days_to_cover=None,
+        ),
+    ]
+    raw = _raw(cycles)
+    assert float(raw.loc["AAA", "days_to_cover"]) == 2.0
+    assert np.isnan(float(raw.loc["AAA", "short_interest_change"]))

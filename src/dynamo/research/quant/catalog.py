@@ -1576,7 +1576,14 @@ def _news_count_60d(ctx: FeatureContext) -> pd.Series:
 
 
 def _short_interest_latest(ctx: FeatureContext) -> pd.DataFrame:
-    """The most recent PUBLISHED cycle per symbol, indexed by symbol."""
+    """The most recent PUBLISHED cycle per symbol, indexed by symbol.
+
+    One WHOLE ROW per symbol, not a column-wise last-non-null. ``groupby(
+    "symbol").last()`` would look right and be wrong: it skips NaN per column,
+    so a cycle that reports no ``days_to_cover`` would silently inherit the
+    previous cycle's figure while ``shares_short`` came from the current one —
+    a Frankenstein row stitched from two different fortnights.
+    """
     si = ctx.inputs.short_interest
     required = {"symbol", "settlement_date", "publication_date", "shares_short"}
     empty = pd.DataFrame(columns=pd.Index(sorted(required)))
@@ -1589,7 +1596,8 @@ def _short_interest_latest(ctx: FeatureContext) -> pd.DataFrame:
     if visible.empty:
         return empty
     ordered = visible.sort_values(["symbol", "settlement_date", "publication_date"])
-    return cast(pd.DataFrame, ordered.groupby("symbol").last())
+    latest = ordered.drop_duplicates(subset="symbol", keep="last")
+    return cast(pd.DataFrame, latest.set_index("symbol"))
 
 
 def _short_interest_column(latest: pd.DataFrame, name: str) -> pd.Series:
