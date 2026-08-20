@@ -160,9 +160,7 @@ def test_published_settlement_dates_hides_a_cycle_that_has_not_been_disseminated
             {"partitions": ["2026-06-30"]},
         ]
     }
-    client = _client(
-        httpx.MockTransport(lambda request: httpx.Response(200, json=partitions))
-    )
+    client = _client(httpx.MockTransport(lambda request: httpx.Response(200, json=partitions)))
     assert client.settlement_dates()[0] == date(2026, 7, 31)
 
     too_early = client.published_settlement_dates(date(2026, 8, 5))

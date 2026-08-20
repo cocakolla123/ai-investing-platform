@@ -134,9 +134,7 @@ class EvaluationRegistry:
     ) -> bool:
         return self._key(config_hash, test_start, test_end) in self._seen
 
-    def claim(
-        self, config_hash: str, test_start: pd.Timestamp, test_end: pd.Timestamp
-    ) -> None:
+    def claim(self, config_hash: str, test_start: pd.Timestamp, test_end: pd.Timestamp) -> None:
         key = self._key(config_hash, test_start, test_end)
         if key in self._seen:
             raise ConfigFrozenError(

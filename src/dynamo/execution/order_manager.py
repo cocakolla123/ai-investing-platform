@@ -184,9 +184,7 @@ class OrderManager:
                 side=side,
                 qty=round(abs(delta) * current.equity / price, 4),
                 order_type=OrderType.MARKETABLE_LIMIT,
-                limit_price=round(
-                    marketable_limit_price(side, price, spreads.get(symbol, 0.0)), 4
-                ),
+                limit_price=round(marketable_limit_price(side, price, spreads.get(symbol, 0.0)), 4),
                 # Crypto rejects DAY at Alpaca — GTC is the sleeve's only tif
                 # (ADR-0013); the broker enforces this again at request build.
                 tif="gtc" if is_crypto_symbol(symbol) else "day",

@@ -429,9 +429,7 @@ def test_quant_retrain_proposal_skipped_without_bundle_or_train_end() -> None:
     from orchestration.assets.learning_ops import quant_retrain_proposal
 
     assert (
-        quant_retrain_proposal(
-            bundle=None, new_sessions=99, as_of=date(2026, 8, 1), now=NOW
-        )
+        quant_retrain_proposal(bundle=None, new_sessions=99, as_of=date(2026, 8, 1), now=NOW)
         is None
     )
     assert (

@@ -31,7 +31,8 @@ def frame_with_nans(seed: int = 5) -> pd.DataFrame:
     values[0, 1] = np.nan
     values[2, 3] = np.nan
     out = pd.DataFrame(
-        values, index=pd.Index(UNIVERSE, name="symbol"),
+        values,
+        index=pd.Index(UNIVERSE, name="symbol"),
         columns=pd.Index(["ret_20d", "rsi_14", "earnings_yield", "vol_cc_20d"]),
     )
     return out
@@ -130,9 +131,7 @@ def panel_fixtures() -> tuple[Any, Any, dict[str, str], list[str], list[date]]:
     bars = make_bars([*universe, "XLK", "SPY"], n_sessions=60)
     inputs = FeatureInputs(bars=bars, sector_map={"AAA": "XLK", "BBB": "XLK"})
     sector_map = {"AAA": "XLK", "BBB": "XLK", "CCC": "SPY"}
-    sessions = [
-        cast(pd.Timestamp, t).date() for t in pd.bdate_range("2024-01-02", periods=60)
-    ]
+    sessions = [cast(pd.Timestamp, t).date() for t in pd.bdate_range("2024-01-02", periods=60)]
     return inputs, bars, sector_map, universe, sessions
 
 
@@ -146,16 +145,26 @@ def test_build_panel_warm_cache_skips_the_loader(tmp_path: Path) -> None:
 
     cache = PanelFeatureCache(tmp_path, universe)
     cold = qt.build_panel(
-        loader, bars, sector_map, universe, sessions,
-        horizon_sessions=20, cache=cache,
+        loader,
+        bars,
+        sector_map,
+        universe,
+        sessions,
+        horizon_sessions=20,
+        cache=cache,
     )
     n_feature_sessions = len(cold.sessions)
     assert len(calls) == n_feature_sessions  # cold: every session built
 
     calls.clear()
     warm = qt.build_panel(
-        loader, bars, sector_map, universe, sessions,
-        horizon_sessions=20, cache=cache,
+        loader,
+        bars,
+        sector_map,
+        universe,
+        sessions,
+        horizon_sessions=20,
+        cache=cache,
     )
     assert calls == []  # warm: zero gateway loads
     pd.testing.assert_frame_equal(
@@ -163,9 +172,7 @@ def test_build_panel_warm_cache_skips_the_loader(tmp_path: Path) -> None:
         cast(pd.DataFrame, cold.features),
         check_exact=True,
     )
-    pd.testing.assert_frame_equal(
-        cast(pd.DataFrame, warm.labels), cast(pd.DataFrame, cold.labels)
-    )
+    pd.testing.assert_frame_equal(cast(pd.DataFrame, warm.labels), cast(pd.DataFrame, cold.labels))
     assert warm.sessions == cold.sessions
 
 
@@ -177,9 +184,7 @@ def test_build_panel_without_cache_always_builds(tmp_path: Path) -> None:
         calls.append(d)
         return inputs
 
-    first = qt.build_panel(
-        loader, bars, sector_map, universe, sessions, horizon_sessions=20
-    )
+    first = qt.build_panel(loader, bars, sector_map, universe, sessions, horizon_sessions=20)
     n = len(first.sessions)
     qt.build_panel(loader, bars, sector_map, universe, sessions, horizon_sessions=20)
     assert len(calls) == 2 * n  # no cache object -> no reuse
@@ -201,8 +206,14 @@ def test_build_panel_writes_incrementally_and_reports_hits(tmp_path: Path) -> No
     cache.put = counting_put  # type: ignore[method-assign]
     lines: list[str] = []
     panel = qt.build_panel(
-        lambda d: inputs, bars, sector_map, universe, sessions,
-        horizon_sessions=20, cache=cache, progress=lines.append,
+        lambda d: inputs,
+        bars,
+        sector_map,
+        universe,
+        sessions,
+        horizon_sessions=20,
+        cache=cache,
+        progress=lines.append,
     )
     assert seen_on_disk == list(range(1, len(panel.sessions) + 1))
     assert any("0 cache hits" in line for line in lines)
@@ -210,8 +221,13 @@ def test_build_panel_writes_incrementally_and_reports_hits(tmp_path: Path) -> No
     lines.clear()
     qt.build_panel(
         lambda d: pytest.fail("warm run must not load"),  # type: ignore[arg-type]
-        bars, sector_map, universe, sessions,
-        horizon_sessions=20, cache=cache, progress=lines.append,
+        bars,
+        sector_map,
+        universe,
+        sessions,
+        horizon_sessions=20,
+        cache=cache,
+        progress=lines.append,
     )
     n = len(panel.sessions)
     assert f"feature cache served {n}/{n} sessions" in "\n".join(lines)
@@ -223,8 +239,13 @@ def test_stale_cache_entries_are_rebuilt_not_reused(tmp_path: Path) -> None:
     inputs, bars, sector_map, universe, sessions = panel_fixtures()
     old = PanelFeatureCache(tmp_path, universe, fingerprint="0ld" + "0" * 61)
     qt.build_panel(
-        lambda d: inputs, bars, sector_map, universe, sessions,
-        horizon_sessions=20, cache=old,
+        lambda d: inputs,
+        bars,
+        sector_map,
+        universe,
+        sessions,
+        horizon_sessions=20,
+        cache=old,
     )
     calls: list[date] = []
 
@@ -234,8 +255,13 @@ def test_stale_cache_entries_are_rebuilt_not_reused(tmp_path: Path) -> None:
 
     fresh = PanelFeatureCache(tmp_path, universe)  # current fingerprint
     panel = qt.build_panel(
-        loader, bars, sector_map, universe, sessions,
-        horizon_sessions=20, cache=fresh,
+        loader,
+        bars,
+        sector_map,
+        universe,
+        sessions,
+        horizon_sessions=20,
+        cache=fresh,
     )
     assert len(calls) == len(panel.sessions)  # zero stale hits
 

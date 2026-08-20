@@ -105,8 +105,13 @@ def test_crypto_bars_upserts_bars_and_crypto_instruments(
                 yield Bar(
                     symbol=symbol,
                     ts=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
-                    open=1.0, high=2.0, low=0.5, close=1.5,
-                    volume=100, adj_close=1.5, source="alpaca_crypto",
+                    open=1.0,
+                    high=2.0,
+                    low=0.5,
+                    close=1.5,
+                    volume=100,
+                    adj_close=1.5,
+                    source="alpaca_crypto",
                 )
 
     from orchestration.assets.ingestion import crypto_bars

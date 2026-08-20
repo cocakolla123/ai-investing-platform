@@ -67,7 +67,7 @@ class FakeCorporateActionRepo:
 
     def corporate_actions_by_type(self) -> dict[str, int]:
         counts: dict[str, int] = {}
-        for (_, _, kind, _) in self.rows:
+        for _, _, kind, _ in self.rows:
             counts[kind] = counts.get(kind, 0) + 1
         return counts
 
@@ -94,9 +94,7 @@ def test_corporate_actions_loads_and_is_idempotent(
     monkeypatch.setattr(repair, "_repo", lambda url: repo)
 
     for _ in range(2):
-        monkeypatch.setattr(
-            repair, "_alpaca_market", lambda s: FakeCorporateActionAdapter([batch])
-        )
+        monkeypatch.setattr(repair, "_alpaca_market", lambda s: FakeCorporateActionAdapter([batch]))
         argv = ["corporate-actions", "--start", "2025-01-01", "--end", "2025-12-31"]
         assert repair.main(argv) == 0
 
@@ -155,9 +153,7 @@ def test_corporate_actions_rejects_an_inverted_range(
     patched: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(repair, "_repo", lambda url: FakeCorporateActionRepo())
-    assert (
-        repair.main(["corporate-actions", "--start", "2026-01-01", "--end", "2025-01-01"]) == 1
-    )
+    assert repair.main(["corporate-actions", "--start", "2026-01-01", "--end", "2025-01-01"]) == 1
 
 
 # -- D3: backdate-universe --------------------------------------------------
@@ -181,9 +177,7 @@ class FakeUniverseRepo:
     def first_bar_dates(self, *, source: str | None = None) -> dict[str, date]:
         return dict(self._first_bar)
 
-    def rebase_universe_valid_from(
-        self, rebases: list[tuple[str, date, date]]
-    ) -> tuple[int, int]:
+    def rebase_universe_valid_from(self, rebases: list[tuple[str, date, date]]) -> tuple[int, int]:
         self.rebase_calls.append(list(rebases))
         moved = {(s, old): new for s, old, new in rebases}
         for i, m in enumerate(self.members):
@@ -268,12 +262,7 @@ def test_backdate_universe_reports_visibility_at_the_replay_start(
         {"OLD": date(2024, 1, 2), "IPO": date(2026, 7, 1)},
     )
     monkeypatch.setattr(repair, "_repo", lambda url: repo)
-    assert (
-        repair.main(
-            ["backdate-universe", "--tier", "2", "--report-as-of", "2026-03-03"]
-        )
-        == 0
-    )
+    assert repair.main(["backdate-universe", "--tier", "2", "--report-as-of", "2026-03-03"]) == 0
     assert "1 tier-2 symbols visible at 2026-03-03" in capsys.readouterr().out
 
 
@@ -324,9 +313,7 @@ def test_census_cross_check_separates_splits_from_price_moves(
     frame = pd.concat(
         [series("SPLIT", [100.0, 100.0, 50.0, 50.0]), series("MOVER", [80.0, 80.0, 40.0, 40.0])]
     )
-    monkeypatch.setattr(
-        repair, "_repo", lambda url: FakeCensusRepo(frame, {("SPLIT", SPLIT_DAY)})
-    )
+    monkeypatch.setattr(repair, "_repo", lambda url: FakeCensusRepo(frame, {("SPLIT", SPLIT_DAY)}))
     assert repair.main(["census", "--corporate-actions"]) == 1
     out = capsys.readouterr().out
     assert "1 of 2 candidates fall on a real split ex-date" in out

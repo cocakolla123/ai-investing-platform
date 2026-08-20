@@ -84,9 +84,7 @@ class FinnhubClient:
                     url=entry.get("url") or None,
                 )
 
-    def news_range(
-        self, symbols: Sequence[str], start: date, end: date
-    ) -> Iterable[NewsItem]:
+    def news_range(self, symbols: Sequence[str], start: date, end: date) -> Iterable[NewsItem]:
         """Historical company news over ``[start, end]`` (backfill path).
 
         Same ``/company-news`` endpoint as :meth:`news` but with an explicit

@@ -82,9 +82,7 @@ def default_chain(underlying: str = "AAPL", spot: float = 100.0) -> list[OptionC
     for pct in (0.90, 0.95, 1.00, 1.05, 1.10):
         strike = round(spot * pct, 2)
         for right in (OptionRight.CALL, OptionRight.PUT):
-            rows.append(
-                make_chain_row(underlying, MONTHLY_EXPIRY, strike, right)
-            )
+            rows.append(make_chain_row(underlying, MONTHLY_EXPIRY, strike, right))
     return rows
 
 
@@ -102,12 +100,8 @@ def make_inputs(
     now: datetime = NOW,
 ) -> OptionsSizingInputs:
     verdicts = verdicts if verdicts is not None else {"AAPL": make_verdict()}
-    chains = (
-        chains if chains is not None else {sym: default_chain(sym) for sym in verdicts}
-    )
-    spot_prices = (
-        spot_prices if spot_prices is not None else dict.fromkeys(verdicts, 100.0)
-    )
+    chains = chains if chains is not None else {sym: default_chain(sym) for sym in verdicts}
+    spot_prices = spot_prices if spot_prices is not None else dict.fromkeys(verdicts, 100.0)
     iv_ranks = iv_ranks if iv_ranks is not None else dict.fromkeys(verdicts, 0.4)
     return OptionsSizingInputs(
         verdicts=verdicts,
@@ -211,9 +205,7 @@ class FakeOptionOrderStore:
 
     def set_broker_order_id(self, client_order_id: str, broker_order_id: str) -> None:
         order = self.orders[client_order_id]
-        self.orders[client_order_id] = order.model_copy(
-            update={"broker_order_id": broker_order_id}
-        )
+        self.orders[client_order_id] = order.model_copy(update={"broker_order_id": broker_order_id})
 
     def set_decision_context(self, client_order_id: str, decision_context_id: str) -> None:
         order = self.orders[client_order_id]

@@ -111,8 +111,8 @@ class KalshiBroker:
     ) -> None:
         cfg = settings or get_settings()
         self._api_key_id = cfg.kalshi_api_key_id
-        self._signer = signer if signer is not None else load_rsa_signer(
-            cfg.kalshi_private_key_path
+        self._signer = (
+            signer if signer is not None else load_rsa_signer(cfg.kalshi_private_key_path)
         )
         self._client = client or httpx.Client(timeout=30.0)
         self._sleep = sleep
@@ -157,9 +157,7 @@ class KalshiBroker:
         broker_id = str(remote.get("broker_order_id", ""))
         if not broker_id:
             raise BrokerRejection(client_order_id, "unknown order at kalshi")
-        self._request(
-            "DELETE", f"/portfolio/orders/{broker_id}", client_order_id=client_order_id
-        )
+        self._request("DELETE", f"/portfolio/orders/{broker_id}", client_order_id=client_order_id)
 
     def get_order(self, client_order_id: str) -> dict[str, Any]:
         payload = self._request(

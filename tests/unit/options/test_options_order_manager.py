@@ -78,9 +78,7 @@ class TestStateMachine:
             manager.transition(coid, OrderState.FILLED)
 
     def test_terminal_state_is_absorbing(self) -> None:
-        manager, _store, _trades, _clock, _broker = make_options_manager(
-            gate=PermissiveGate()
-        )
+        manager, _store, _trades, _clock, _broker = make_options_manager(gate=PermissiveGate())
         coid = ready_order(manager)
         manager.cancel(coid, "operator cancel")
         with pytest.raises(IllegalTransition):
@@ -89,9 +87,7 @@ class TestStateMachine:
 
 class TestSubmission:
     def test_no_submission_without_decision_context(self) -> None:
-        manager, _store, _trades, _clock, broker = make_options_manager(
-            gate=PermissiveGate()
-        )
+        manager, _store, _trades, _clock, broker = make_options_manager(gate=PermissiveGate())
         order = manager.propose([make_decision()], AS_OF)[0]
         manager.request_approval(order.client_order_id)
         with pytest.raises(MissingDecisionContext):
@@ -145,9 +141,7 @@ class TestCollateralAtSubmission:
     (or cannot be verified) refuses the order."""
 
     def covered_call(self):
-        return make_decision(
-            OptionStructure.COVERED_CALL, contracts=2, collateral_shares=200.0
-        )
+        return make_decision(OptionStructure.COVERED_CALL, contracts=2, collateral_shares=200.0)
 
     def csp(self):
         return make_decision(
@@ -159,7 +153,8 @@ class TestCollateralAtSubmission:
 
     def test_covered_call_shares_gone_by_submission(self) -> None:
         manager, _s, _t, _c, broker = make_options_manager(
-            gate=PermissiveGate(), shares=150.0  # was 200 at proposal
+            gate=PermissiveGate(),
+            shares=150.0,  # was 200 at proposal
         )
         coid = ready_order(manager, self.covered_call())
         with pytest.raises(CollateralShortfall):
@@ -167,26 +162,20 @@ class TestCollateralAtSubmission:
         assert not broker.knows(coid)
 
     def test_covered_call_with_shares_submits(self) -> None:
-        manager, store, _t, _c, _b = make_options_manager(
-            gate=PermissiveGate(), shares=200.0
-        )
+        manager, store, _t, _c, _b = make_options_manager(gate=PermissiveGate(), shares=200.0)
         coid = ready_order(manager, self.covered_call())
         manager.submit(coid)
         assert store.orders[coid].state == OrderState.SUBMITTED
 
     def test_csp_cash_gone_by_submission(self) -> None:
-        manager, _s, _t, _c, broker = make_options_manager(
-            gate=PermissiveGate(), cash=9_000.0
-        )
+        manager, _s, _t, _c, broker = make_options_manager(gate=PermissiveGate(), cash=9_000.0)
         coid = ready_order(manager, self.csp())
         with pytest.raises(CollateralShortfall):
             manager.submit(coid)
         assert not broker.knows(coid)
 
     def test_csp_with_cash_submits(self) -> None:
-        manager, store, _t, _c, _b = make_options_manager(
-            gate=PermissiveGate(), cash=10_000.0
-        )
+        manager, store, _t, _c, _b = make_options_manager(gate=PermissiveGate(), cash=10_000.0)
         coid = ready_order(manager, self.csp())
         manager.submit(coid)
         assert store.orders[coid].state == OrderState.SUBMITTED
@@ -234,9 +223,7 @@ class TestGateIntegration:
 class TestSyncOrders:
     def test_fills_during_downtime_are_recorded_once(self) -> None:
         broker = MockOptionsBroker(script=[OptionsScriptStep(behavior="accept")])
-        manager, store, trades, _clock, broker = make_options_manager(
-            broker, gate=PermissiveGate()
-        )
+        manager, store, trades, _clock, broker = make_options_manager(broker, gate=PermissiveGate())
         coid = ready_order(manager)
         manager.submit(coid)
         broker.force_fill(coid, price=2.50)  # filled while we were away
@@ -276,9 +263,7 @@ class TestReconciliation:
     def _reconciler(self, broker: MockOptionsBroker):
         alerts: list[tuple[str, str]] = []
         store = RecordingStore()
-        reconciler = OptionsReconciler(
-            broker, store, lambda name, msg: alerts.append((name, msg))
-        )
+        reconciler = OptionsReconciler(broker, store, lambda name, msg: alerts.append((name, msg)))
         return reconciler, store, alerts
 
     def test_clean_when_positions_match(self) -> None:

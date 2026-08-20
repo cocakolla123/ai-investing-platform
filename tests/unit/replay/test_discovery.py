@@ -180,9 +180,7 @@ def surveillance(sessions: list[date]) -> pd.DataFrame:
 
 @pytest.fixture()
 def panel(sessions: list[date], surveillance: pd.DataFrame) -> SurveillancePanel:
-    gw = FakeSurveillanceGateway(
-        sessions[-1], pd.DataFrame(), pd.DataFrame(), surveillance
-    )
+    gw = FakeSurveillanceGateway(sessions[-1], pd.DataFrame(), pd.DataFrame(), surveillance)
     return SurveillancePanel.load(gw, list(TIER2), span_days=RUN_SESSIONS)
 
 
@@ -205,9 +203,7 @@ def test_panel_reads_the_whole_window_in_one_query(
     """The reason the panel exists. Measured on the real database a per-day
     read is 9s over 3.09M rows; 115 of them is 17 minutes of round trips
     re-reading the same rows."""
-    gw = FakeSurveillanceGateway(
-        sessions[-1], pd.DataFrame(), pd.DataFrame(), surveillance
-    )
+    gw = FakeSurveillanceGateway(sessions[-1], pd.DataFrame(), pd.DataFrame(), surveillance)
     panel = SurveillancePanel.load(gw, list(TIER2), span_days=RUN_SESSIONS)
     assert gw.surveillance_reads == 1
     assert set(panel.symbols) == set(TIER2)
@@ -216,9 +212,7 @@ def test_panel_reads_the_whole_window_in_one_query(
     assert gw.surveillance_reads == 1, "slicing must never hit the database"
 
 
-def test_slice_is_the_point_in_time_bound(
-    panel: SurveillancePanel, sessions: list[date]
-) -> None:
+def test_slice_is_the_point_in_time_bound(panel: SurveillancePanel, sessions: list[date]) -> None:
     """The panel holds bars from the whole run window, so every later
     session's data is physically present when an early day is sliced. The
     slice is what makes it invisible."""
@@ -232,9 +226,7 @@ def test_slice_is_the_point_in_time_bound(
     assert any(_last(f) == late for f in panel.slice(late).per_symbol.values())
 
 
-def test_slice_respects_the_lookback_floor(
-    panel: SurveillancePanel, sessions: list[date]
-) -> None:
+def test_slice_respects_the_lookback_floor(panel: SurveillancePanel, sessions: list[date]) -> None:
     day = sessions[-1]
     frames = panel.slice(day, lookback_days=30).per_symbol
     for frame in frames.values():
@@ -246,9 +238,7 @@ def test_a_broken_bound_raises_instead_of_leaking() -> None:
     """The slice's index arithmetic cannot return a later bar today. The
     assertion exists so that if a future edit breaks it, the run stops rather
     than quietly trading on tomorrow's close."""
-    future = pd.DataFrame(
-        {"ts": [pd.Timestamp("2026-07-01", tz="UTC")], "close": [1.0]}
-    )
+    future = pd.DataFrame({"ts": [pd.Timestamp("2026-07-01", tz="UTC")], "close": [1.0]})
     with pytest.raises(ReplayLeakageError, match="panel slice"):
         SurveillancePanel._assert_bounded({"X": future}, date(2026, 6, 30))
 
@@ -304,9 +294,7 @@ def test_tradability_is_judged_on_pre_as_of_bars_only() -> None:
     # Not vacuous: the same filter admits it once the volume is in its past.
     # LIQUIDITY_WINDOW_SESSIONS trailing sessions must clear the floor, so
     # step well past the cutoff rather than one day past it.
-    later = panel.slice(
-        cutoff + timedelta(days=180), min_dollar_volume=1_000_000.0, min_price=1.0
-    )
+    later = panel.slice(cutoff + timedelta(days=180), min_dollar_volume=1_000_000.0, min_price=1.0)
     assert "LATE" in later.symbols
 
 
@@ -494,9 +482,7 @@ def test_zero_day_window_promotes_into_nothing() -> None:
 # --------------------------------------------------------------------------
 
 
-def _discovery(
-    panel: SurveillancePanel, *, mode: str = "code", **kwargs: Any
-) -> ReplayDiscovery:
+def _discovery(panel: SurveillancePanel, *, mode: str = "code", **kwargs: Any) -> ReplayDiscovery:
     defaults: dict[str, Any] = {
         "run_id": "replay-test",
         "mode": mode,
@@ -579,9 +565,7 @@ def test_same_config_twice_promotes_identically(
         discovery = _discovery(panel)
         out = []
         for day in sessions[-RUN_SESSIONS:]:
-            gw = FakeSurveillanceGateway(
-                day, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-            )
+            gw = FakeSurveillanceGateway(day, pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
             out.append(flag_rows("replay-test", discovery.run_day(gw, day, [])))
         return out
 
@@ -618,9 +602,7 @@ def test_summary_reports_the_campaign_acceptance_counters(
 ) -> None:
     discovery = _discovery(panel)
     for day in sessions[-RUN_SESSIONS:]:
-        gw = FakeSurveillanceGateway(
-            day, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-        )
+        gw = FakeSurveillanceGateway(day, pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
         discovery.run_day(gw, day, [])
     stats = discovery.summary()
     assert stats["mode"] == "code"
@@ -682,10 +664,7 @@ class PassThroughDiscovery:
 
 
 def _decisions_without_run_id(result: Any) -> list[dict[str, Any]]:
-    return [
-        {k: v for k, v in row.items() if k not in ("id", "run_id")}
-        for row in result.decisions
-    ]
+    return [{k: v for k, v in row.items() if k not in ("id", "run_id")} for row in result.decisions]
 
 
 def _run(config: ReplayConfig, frames: Any, discovery: Any = None) -> Any:
@@ -715,9 +694,7 @@ def test_a_discovery_that_promotes_nothing_changes_nothing(
     `code` vs `off` comparison measures the plumbing rather than discovery."""
     sessions = runner_frames[0]
     window = sessions[-RUN_SESSIONS:]
-    control = ReplayConfig(
-        start=window[0], end=window[-1], label="control", horizon_sessions=3
-    )
+    control = ReplayConfig(start=window[0], end=window[-1], label="control", horizon_sessions=3)
     treated = control.model_copy(update={"discovery_mode": "code"})
     assert control.run_id != treated.run_id  # different experiments, by design
 

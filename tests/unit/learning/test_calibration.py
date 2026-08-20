@@ -58,9 +58,7 @@ def test_anti_perfect_forecaster_scores_one(outcomes: list[bool]) -> None:
 
 
 @given(observations, st.randoms(use_true_random=False))
-def test_permutation_invariance(
-    items: list[CalibrationObservation], rng: random.Random
-) -> None:
+def test_permutation_invariance(items: list[CalibrationObservation], rng: random.Random) -> None:
     shuffled = list(items)
     rng.shuffle(shuffled)
     assert brier_score(shuffled) == pytest.approx(brier_score(items))

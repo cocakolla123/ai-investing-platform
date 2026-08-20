@@ -77,9 +77,10 @@ def test_fold_windows_match_config() -> None:
     # test starts exactly train + purge sessions in
     assert f0.test_start == sessions[SMALL.train_sessions + SMALL.purge_sessions]
     # roll: next fold's test starts roll sessions later
-    assert folds[1].test_start == sessions[
-        SMALL.train_sessions + SMALL.purge_sessions + SMALL.roll_sessions
-    ]
+    assert (
+        folds[1].test_start
+        == sessions[SMALL.train_sessions + SMALL.purge_sessions + SMALL.roll_sessions]
+    )
 
 
 def test_too_few_sessions_yields_no_folds() -> None:

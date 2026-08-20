@@ -214,9 +214,7 @@ _NEUTRAL_SCORE = 0.0
 
 
 def _default_regime(d: date) -> RegimeState:
-    return RegimeState(
-        as_of=d, regime=Regime.NEUTRAL, composite_score=_NEUTRAL_SCORE
-    )
+    return RegimeState(as_of=d, regime=Regime.NEUTRAL, composite_score=_NEUTRAL_SCORE)
 
 
 class BacktestEngine:
@@ -276,8 +274,15 @@ class BacktestEngine:
             # 1. Fill yesterday's target at TODAY's open (never same-bar).
             if pending is not None:
                 cash, fill_batch, traded = self._execute(
-                    pending, pending_equity, pending_closes, opens_row, d,
-                    cash, shares, avg_cost, data,
+                    pending,
+                    pending_equity,
+                    pending_closes,
+                    opens_row,
+                    d,
+                    cash,
+                    shares,
+                    avg_cost,
+                    data,
                 )
                 fills.extend(fill_batch)
                 turnover = traded / pending_equity / 2.0 if pending_equity > 0 else 0.0
@@ -523,9 +528,7 @@ class BacktestEngine:
         as_of = datetime(d.year, d.month, d.day)
         vetoes: tuple[Veto, ...] = ()
         if effects.kill_switch:
-            vetoes = (
-                Veto(symbol="*", rule="kill_switch", reason="ladder dd20: full stop"),
-            )
+            vetoes = (Veto(symbol="*", rule="kill_switch", reason="ladder dd20: full stop"),)
         return RiskVerdict(
             as_of=as_of,
             regime=regime,

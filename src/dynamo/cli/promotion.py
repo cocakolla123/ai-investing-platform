@@ -172,12 +172,16 @@ def main(argv: list[str] | None = None) -> int:
             dirty = bool(
                 subprocess.run(
                     ["git", "status", "--porcelain"],
-                    capture_output=True, text=True, check=True,
+                    capture_output=True,
+                    text=True,
+                    check=True,
                 ).stdout.strip()
             )
             commit = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             ).stdout.strip()
             return not dirty, commit
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -219,9 +223,7 @@ def main(argv: list[str] | None = None) -> int:
 
     evidence = json.loads(Path(args.evidence).read_text())
     clean_tree, commit = git_state()
-    approval, approval_valid, approval_detail = load_promotion_approval(
-        args.approval, args.target
-    )
+    approval, approval_valid, approval_detail = load_promotion_approval(args.approval, args.target)
     if args.approval is not None and not approval_valid:
         # Loud and instructive: an unverifiable approval is a refusal, never a
         # downgrade to "unapproved" that a later stage might paper over.
@@ -269,8 +271,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"refused: {exc}")
         return 2
 
-    print(f"stage {result.stage} ({result.stage_name}): "
-          f"{'PASS' if result.passed else 'FAIL'}  trial #{result.trial_count}")
+    print(
+        f"stage {result.stage} ({result.stage_name}): "
+        f"{'PASS' if result.passed else 'FAIL'}  trial #{result.trial_count}"
+    )
     for line in result.details:
         print(f"  {line}")
     if result.record is not None:

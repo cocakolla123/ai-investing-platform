@@ -100,9 +100,7 @@ class EdgarClient:
         """Iterate full-text-search hits with pagination (capped)."""
         page_size = 100
         for page in range(self._max_pages):
-            payload = self._get(
-                self._search_base, params={**params, "from": page * page_size}
-            )
+            payload = self._get(self._search_base, params={**params, "from": page * page_size})
             hits = payload.get("hits", {}).get("hits", [])
             yield from hits
             if len(hits) < page_size:
@@ -181,9 +179,7 @@ class EdgarClient:
             "enddt": end.isoformat(),
         }
 
-    def filings_in_range(
-        self, form: str, start: date, end: date
-    ) -> Iterator[Filing]:
+    def filings_in_range(self, form: str, start: date, end: date) -> Iterator[Filing]:
         """Filings of ONE root form filed in ``[start, end]``, one per accession.
 
         ``form_type`` comes from ``root_forms`` so an 8-K stays an 8-K
@@ -248,9 +244,7 @@ class EdgarClient:
             if adsh in seen:
                 continue
             seen.add(adsh)
-            if wanted is not None and not any(
-                str(c).lstrip("0") in wanted for c in hit_ciks
-            ):
+            if wanted is not None and not any(str(c).lstrip("0") in wanted for c in hit_ciks):
                 continue
             cik = str(int(hit_ciks[0]))
             url = f"{self._archives_base}/{cik}/{adsh.replace('-', '')}/{filename}"

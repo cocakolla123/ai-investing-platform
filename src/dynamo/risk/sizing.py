@@ -240,8 +240,7 @@ def size_positions(
 
         if candidate.cluster_id is not None:
             available = max(
-                config.cluster_cap * tighten
-                - cluster_used.get(candidate.cluster_id, 0.0),
+                config.cluster_cap * tighten - cluster_used.get(candidate.cluster_id, 0.0),
                 0.0,
             )
             if weight > available:
@@ -279,9 +278,7 @@ def size_positions(
             if candidate_is_crypto:
                 crypto_used += weight
             if candidate.sector is not None:
-                sector_used[candidate.sector] = (
-                    sector_used.get(candidate.sector, 0.0) + weight
-                )
+                sector_used[candidate.sector] = sector_used.get(candidate.sector, 0.0) + weight
             if candidate.cluster_id is not None:
                 cluster_used[candidate.cluster_id] = (
                     cluster_used.get(candidate.cluster_id, 0.0) + weight

@@ -192,9 +192,7 @@ def _symbol_metrics(
         else:
             m["rev_accel"] = _nan()
         old = ttm_sum(facts, sym, "Revenues", as_of, offset_quarters=12)
-        m["rev_cagr_3y"] = (
-            (rev / old) ** (1.0 / 3.0) - 1.0 if old > 0 and rev > 0 else _nan()
-        )
+        m["rev_cagr_3y"] = (rev / old) ** (1.0 / 3.0) - 1.0 if old > 0 and rev > 0 else _nan()
     else:
         m["rev_yoy"] = m["rev_accel"] = m["rev_cagr_3y"] = _nan()
 
@@ -262,9 +260,7 @@ _METRIC_ORIENTATION: dict[str, tuple[str, bool]] = {
 }
 
 
-def _sector_percentiles(
-    values: pd.Series, sectors: pd.Series, higher_is_better: bool
-) -> pd.Series:
+def _sector_percentiles(values: pd.Series, sectors: pd.Series, higher_is_better: bool) -> pd.Series:
     out = pd.Series(np.nan, index=values.index, dtype=float)
     for _, idx in sectors.groupby(sectors).groups.items():
         grp = values.loc[list(idx)].dropna()

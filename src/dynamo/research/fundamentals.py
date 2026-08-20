@@ -161,9 +161,7 @@ FLOW_TAGS: tuple[str, ...] = (
 
 # Concepts that cannot legitimately be negative: if the period rewrite makes
 # one negative, the inference was wrong and the metric must not be rendered.
-NON_NEGATIVE_TAGS: frozenset[str] = frozenset(
-    (*REVENUE_TAGS, *COGS_TAGS, *CAPEX_TAGS)
-)
+NON_NEGATIVE_TAGS: frozenset[str] = frozenset((*REVENUE_TAGS, *COGS_TAGS, *CAPEX_TAGS))
 
 _MODE_QUARTERLY = "quarterly"
 _MODE_ANNUAL = "annual"
@@ -206,9 +204,7 @@ class FundamentalsSnapshot(Frozen):
     @property
     def has_data(self) -> bool:
         return any(
-            line.value is not None or line.values
-            for group in self.groups
-            for line in group.lines
+            line.value is not None or line.values for group in self.groups for line in group.lines
         )
 
 
@@ -483,9 +479,7 @@ def _year_shape(quarters: Mapping[int, float]) -> str:
     if len({v > 0 for v in values}) > 1:
         return SHAPE_DISCRETE  # sign flip: not a cumulative or annual pattern
     q1, q2, q3, q4 = (abs(v) for v in values)
-    cumulative = (
-        q4 >= 2.5 * q1 and q2 >= 1.5 * q1 and q3 >= 1.2 * q2 and q4 >= 1.05 * q3
-    )
+    cumulative = q4 >= 2.5 * q1 and q2 >= 1.5 * q1 and q3 >= 1.2 * q2 and q4 >= 1.05 * q3
     if cumulative:
         return SHAPE_CUMULATIVE
     # Annual totals are compared against the MEDIAN of the first three
@@ -573,14 +567,10 @@ def normalized_facts(
                     "tag": tag,
                     "period_end": period,
                     "value": value,
-                    "filed_at": _ts(
-                        sub.loc[sub["period_end"] == period, "filed_at"].max()
-                    ),
+                    "filed_at": _ts(sub.loc[sub["period_end"] == period, "filed_at"].max()),
                 }
             )
-        if not derived or (
-            tag in NON_NEGATIVE_TAGS and any(v < 0 for v in derived.values())
-        ):
+        if not derived or (tag in NON_NEGATIVE_TAGS and any(v < 0 for v in derived.values())):
             modes[tag] = _MODE_NONE  # the rewrite produced nonsense — say nothing
     frame = facts
     if drop_index:
@@ -615,9 +605,7 @@ def _derive_quarters(
     for key in sorted(by_year):
         quarters = by_year[key]
         complete = len(quarters) == 4
-        shape = (
-            _year_shape({q: v for q, (_, v) in quarters.items()}) if complete else tag_shape
-        )
+        shape = _year_shape({q: v for q, (_, v) in quarters.items()}) if complete else tag_shape
         for q, (stamp, value) in quarters.items():
             if shape == SHAPE_ANNUAL_AT_Q4:
                 if q != 4:
@@ -653,9 +641,7 @@ def _merge_passthrough(
     out = dict(derived)
     if not passthrough:
         return out
-    scale = (
-        float(pd.Series([abs(v) for v in derived.values()]).median()) if derived else 0.0
-    )
+    scale = float(pd.Series([abs(v) for v in derived.values()]).median()) if derived else 0.0
     for period, value in passthrough.items():
         if scale > 0.0 and abs(value) >= 2.5 * scale:
             continue
@@ -829,9 +815,7 @@ def _valuation_for(
     revenue = ttm(norm, symbol, REVENUE_TAGS, as_of)
     net_income = ttm(norm, symbol, NET_INCOME_TAGS, as_of)
     equity_tag = first_available_tag(norm.frame, symbol, EQUITY_TAGS, as_of)
-    equity = (
-        latest_row(norm.frame, symbol, equity_tag, as_of) if equity_tag is not None else None
-    )
+    equity = latest_row(norm.frame, symbol, equity_tag, as_of) if equity_tag is not None else None
     fcf = _fcf(norm, symbol, as_of, None if revenue is None else revenue.value)
     return _Valuation(
         market_cap=market_cap,
@@ -867,8 +851,10 @@ def _cfo(
     value = ttm(norm, symbol, CFO_TAGS, as_of)
     if value is None:
         return None
-    if revenue is not None and revenue > 0 and (
-        abs(value.value) > MAX_CFO_REVENUE_MULTIPLE * revenue
+    if (
+        revenue is not None
+        and revenue > 0
+        and (abs(value.value) > MAX_CFO_REVENUE_MULTIPLE * revenue)
     ):
         return None
     return value
@@ -1093,9 +1079,7 @@ def _build(
             "" if eps is None else eps.source_ref,
         ),
     ]
-    income.extend(
-        _margin_trend_lines(norm, symbol, stamp, revenue_tag_periods=4)
-    )
+    income.extend(_margin_trend_lines(norm, symbol, stamp, revenue_tag_periods=4))
 
     # --- balance sheet ---
     balance: list[FundamentalLine] = []
@@ -1219,9 +1203,7 @@ def _build(
         ("fcf_yield", valuation_self.fcf_yield, "fcf_ttm"),
     ):
         unit = PCT if key == "fcf_yield" else MULTIPLE
-        valuation.append(
-            _line(key, unit, value, f"derived:market_cap / {basis}")
-        )
+        valuation.append(_line(key, unit, value, f"derived:market_cap / {basis}"))
         peer_values = [
             float(peer_value)
             for peer in peers

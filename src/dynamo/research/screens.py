@@ -107,9 +107,7 @@ COMPONENT_INPUTS: Mapping[str, tuple[tuple[str, bool], ...]] = {
 class SleeperConfig:
     """Tunables, all with the priors that were written down before testing."""
 
-    weights: Mapping[str, float] = field(
-        default_factory=lambda: dict(SLEEPER_COMPONENT_WEIGHTS)
-    )
+    weights: Mapping[str, float] = field(default_factory=lambda: dict(SLEEPER_COMPONENT_WEIGHTS))
     # "Positive but not extreme": the 60-session return band that scores full
     # marks. Below 0% scores nothing; above ~2x the ceiling scores nothing.
     momentum_floor: float = 0.02
@@ -141,9 +139,7 @@ def _band_score(values: pd.Series, floor: float, ceiling: float) -> pd.Series:
     """
     r = cast(
         pd.Series,
-        cast(pd.Series, pd.to_numeric(values, errors="coerce")).replace(
-            [np.inf, -np.inf], np.nan
-        ),
+        cast(pd.Series, pd.to_numeric(values, errors="coerce")).replace([np.inf, -np.inf], np.nan),
     )
     below = (r / floor).clip(lower=0.0, upper=1.0) if floor > 0 else r * 0.0 + 1.0
     above = (1.0 - (r - ceiling) / ceiling).clip(lower=0.0, upper=1.0)
@@ -183,17 +179,13 @@ def _component_scores(features: pd.DataFrame, config: SleeperConfig) -> pd.DataF
         )
     if "max_session_share_60d" in features.columns:
         momentum_parts.append(
-            _pct_rank(
-                cast(pd.Series, features["max_session_share_60d"]), higher_is_better=False
-            )
+            _pct_rank(cast(pd.Series, features["max_session_share_60d"]), higher_is_better=False)
         )
     out["quiet_momentum"] = _mean_of_available(momentum_parts, index)
     return pd.DataFrame(out, index=index)
 
 
-def sleeper_scores(
-    features: pd.DataFrame, config: SleeperConfig | None = None
-) -> pd.DataFrame:
+def sleeper_scores(features: pd.DataFrame, config: SleeperConfig | None = None) -> pd.DataFrame:
     """Score a RAW feature frame for the sleeper thesis. UNVALIDATED.
 
     ``features`` is a ``build_raw_features``-shaped frame indexed by symbol

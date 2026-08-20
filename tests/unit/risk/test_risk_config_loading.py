@@ -60,9 +60,7 @@ def test_a_yaml_override_changes_the_limit(tmp_path: Path) -> None:
 
 def test_a_json_override_works_too(tmp_path: Path) -> None:
     (tmp_path / "risk.json").write_text(json.dumps({"cash_floor": 0.20}))
-    assert load_risk_config(
-        _settings(tmp_path, DYNAMO_RISK_CONFIG="risk.json")
-    ).cash_floor == 0.20
+    assert load_risk_config(_settings(tmp_path, DYNAMO_RISK_CONFIG="risk.json")).cash_floor == 0.20
 
 
 def test_an_override_is_versioned_by_its_content(tmp_path: Path) -> None:
@@ -91,9 +89,10 @@ def test_a_relative_path_anchors_to_home_not_the_cwd(
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
-    assert load_risk_config(
-        _settings(tmp_path, DYNAMO_RISK_CONFIG="risk.yaml")
-    ).per_position_cap == 0.03
+    assert (
+        load_risk_config(_settings(tmp_path, DYNAMO_RISK_CONFIG="risk.yaml")).per_position_cap
+        == 0.03
+    )
 
 
 # --- refusals ------------------------------------------------------------
@@ -120,9 +119,10 @@ def test_a_non_mapping_file_is_refused(tmp_path: Path) -> None:
 
 def test_an_empty_file_is_simply_no_overrides(tmp_path: Path) -> None:
     (tmp_path / "risk.yaml").write_text("")
-    assert load_risk_config(
-        _settings(tmp_path, DYNAMO_RISK_CONFIG="risk.yaml")
-    ).version == DEFAULT_VERSION
+    assert (
+        load_risk_config(_settings(tmp_path, DYNAMO_RISK_CONFIG="risk.yaml")).version
+        == DEFAULT_VERSION
+    )
 
 
 def test_an_unknown_bucket_is_refused(tmp_path: Path) -> None:

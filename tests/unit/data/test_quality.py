@@ -90,8 +90,11 @@ def test_gap_check_vs_xnys_calendar() -> None:
     complete = closes_frame(
         "ACME",
         {
-            "2026-07-27": 1.0, "2026-07-28": 1.0, "2026-07-29": 1.0,
-            "2026-07-30": 1.0, "2026-07-31": 1.0,
+            "2026-07-27": 1.0,
+            "2026-07-28": 1.0,
+            "2026-07-29": 1.0,
+            "2026-07-30": 1.0,
+            "2026-07-31": 1.0,
         },
     )
     assert gap_check(complete, date(2026, 7, 27), date(2026, 7, 31)) == []
@@ -131,8 +134,7 @@ def test_runner_writes_quarantine_rows() -> None:
 def test_runner_raises_systemic_alert_over_threshold() -> None:
     store = FakeStore()
     issues = [
-        QualityIssue(check="gap", symbol=f"SYM{i}", reason="missing", details={})
-        for i in range(21)
+        QualityIssue(check="gap", symbol=f"SYM{i}", reason="missing", details={}) for i in range(21)
     ]
     flagged = run_quality_checks(store, issues, now=AS_OF, systemic_threshold=20)
     assert flagged == 21

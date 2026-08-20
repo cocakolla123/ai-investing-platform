@@ -96,9 +96,7 @@ def test_the_composite_is_the_weighted_mean_of_its_components() -> None:
             float(row[name]) * weight for name, weight in SLEEPER_COMPONENT_WEIGHTS.items()
         )
         assert float(row["sleeper_score"]) == pytest.approx(expected)
-    assert float(scored.loc["BEST", "sleeper_score"]) > float(
-        scored.loc["WORST", "sleeper_score"]
-    )
+    assert float(scored.loc["BEST", "sleeper_score"]) > float(scored.loc["WORST", "sleeper_score"])
     assert float(scored.loc["BEST", "components_present"]) == 5.0
 
 
@@ -112,12 +110,8 @@ def test_low_attention_rewards_the_name_nobody_is_writing_about() -> None:
             }
         )
     )
-    assert float(scored.loc["QUIET", "low_attention"]) > float(
-        scored.loc["LOUD", "low_attention"]
-    )
-    assert float(scored.loc["QUIET", "sleeper_score"]) > float(
-        scored.loc["LOUD", "sleeper_score"]
-    )
+    assert float(scored.loc["QUIET", "low_attention"]) > float(scored.loc["LOUD", "low_attention"])
+    assert float(scored.loc["QUIET", "sleeper_score"]) > float(scored.loc["LOUD", "sleeper_score"])
 
 
 def test_momentum_is_banded_so_the_biggest_gainer_does_not_win() -> None:
@@ -163,8 +157,7 @@ def test_a_move_earned_over_many_sessions_beats_the_same_move_gapped() -> None:
 
 def test_scores_are_deterministic_and_order_independent() -> None:
     rows = {
-        f"S{i:02d}": _sleeper(ret_60d=0.05 + i / 100.0, news_count_60d=float(i))
-        for i in range(12)
+        f"S{i:02d}": _sleeper(ret_60d=0.05 + i / 100.0, news_count_60d=float(i)) for i in range(12)
     }
     frame = _frame(rows)
 
@@ -205,9 +198,7 @@ def test_a_name_with_no_fundamentals_is_discounted_not_zeroed() -> None:
     assert not np.isnan(float(scored.loc["NO_XBRL", "sleeper_score"]))
     # Scored on four components, it must still beat the name that is bad on
     # everything — a zero for "unknown" would have buried it instead.
-    assert float(scored.loc["NO_XBRL", "sleeper_score"]) > float(
-        scored.loc["DUD", "sleeper_score"]
-    )
+    assert float(scored.loc["NO_XBRL", "sleeper_score"]) > float(scored.loc["DUD", "sleeper_score"])
 
 
 def test_a_name_without_the_thesis_components_drops_out_entirely() -> None:

@@ -132,8 +132,7 @@ class TelegramNotifier:
             log.info("notify_sent", name=name, severity=severity)
             return True
         # Never log the token: _url() contains it, body may echo the request.
-        log.warning("notify_rejected", name=name, severity=severity, status=status,
-                    body=body[:200])
+        log.warning("notify_rejected", name=name, severity=severity, status=status, body=body[:200])
         return False
 
 
@@ -149,9 +148,7 @@ class AlertDispatcher:
     record: Callable[..., None]
     notifier: Any  # dynamo.domain.ports.Notifier
 
-    def __call__(
-        self, severity: str, name: str, message: str, *, ackable: bool = True
-    ) -> bool:
+    def __call__(self, severity: str, name: str, message: str, *, ackable: bool = True) -> bool:
         self.record(severity=severity, name=name, message=message, ackable=ackable)
         try:
             return bool(self.notifier.send(severity=severity, name=name, message=message))
@@ -171,9 +168,7 @@ def build_notifier(settings: Any) -> Any:
     chat_id = str(getattr(settings, "telegram_chat_id", "") or "")
     if not token or not chat_id:
         missing = [
-            n
-            for n, v in (("TELEGRAM_BOT_TOKEN", token), ("TELEGRAM_CHAT_ID", chat_id))
-            if not v
+            n for n, v in (("TELEGRAM_BOT_TOKEN", token), ("TELEGRAM_CHAT_ID", chat_id)) if not v
         ]
         return DisabledNotifier(reason=f"unset: {', '.join(missing)}")
     return TelegramNotifier(

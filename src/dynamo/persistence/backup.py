@@ -117,8 +117,11 @@ class DockerExec:
 
     def wrap(self, target: DbTarget, argv: Sequence[str]) -> list[str]:
         return [
-            self.docker, "exec", "-i",
-            "-e", f"PGPASSWORD={target.password}",
+            self.docker,
+            "exec",
+            "-i",
+            "-e",
+            f"PGPASSWORD={target.password}",
             self.container,
             *argv,
         ]
@@ -151,22 +154,30 @@ def dump_argv(target: DbTarget, executor: Executor) -> list[str]:
     compressed."""
     inner = target if isinstance(executor, LocalExec) else executor.rewrite(target)
     return executor.wrap(
-        target, ["pg_dump", "-Fc", "--no-owner", "--no-acl", *inner.psql_flags, "-d",
-                 inner.database]
+        target,
+        ["pg_dump", "-Fc", "--no-owner", "--no-acl", *inner.psql_flags, "-d", inner.database],
     )
 
 
 def restore_argv(target: DbTarget, executor: Executor, *, jobs: int = 1) -> list[str]:
     inner = target if isinstance(executor, LocalExec) else executor.rewrite(target)
-    argv = ["pg_restore", "--no-owner", "--no-acl", "--exit-on-error", *inner.psql_flags,
-            "-d", inner.database]
+    argv = [
+        "pg_restore",
+        "--no-owner",
+        "--no-acl",
+        "--exit-on-error",
+        *inner.psql_flags,
+        "-d",
+        inner.database,
+    ]
     if jobs > 1:
         argv += ["-j", str(jobs)]
     return executor.wrap(target, argv)
 
 
-def psql_argv(target: DbTarget, executor: Executor, sql: str, *, database: str | None = None
-              ) -> list[str]:
+def psql_argv(
+    target: DbTarget, executor: Executor, sql: str, *, database: str | None = None
+) -> list[str]:
     inner = target if isinstance(executor, LocalExec) else executor.rewrite(target)
     db = database or inner.database
     return executor.wrap(
@@ -344,9 +355,7 @@ def backup_is_stale(last: datetime | None, now: datetime, hours: float = STALE_A
     return (now - last).total_seconds() > hours * 3600.0
 
 
-def backup_drill_ok(
-    engine: Any, now: datetime, *, valid_days: int = DRILL_VALID_DAYS
-) -> bool:
+def backup_drill_ok(engine: Any, now: datetime, *, valid_days: int = DRILL_VALID_DAYS) -> bool:
     """``Readiness.backup_drill_ok`` (doc 00 §5.4) — quarterly drill, from the
     metric the drill itself writes. No drill on record means False: the live
     gate fails closed."""

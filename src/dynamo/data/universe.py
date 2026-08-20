@@ -35,15 +35,60 @@ DEFAULT_SEED_PATH = "config/universe_seed.txt"
 # (~500-600 names, doc 02 §2) is grown from here via the seed file and
 # approved recommendations.
 STARTER_STOCKS: tuple[str, ...] = (
-    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "BRK.B", "JPM", "V",
-    "UNH", "JNJ", "XOM", "PG", "MA", "HD", "COST", "ABBV", "MRK", "AVGO",
-    "PEP", "KO", "WMT", "BAC", "CRM", "AMD", "ORCL", "NFLX", "LIN", "DIS",
-    "ADBE", "TMO", "CSCO", "ACN", "MCD", "ABT", "INTU", "CAT", "IBM", "TXN",
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "GOOGL",
+    "AMZN",
+    "META",
+    "TSLA",
+    "BRK.B",
+    "JPM",
+    "V",
+    "UNH",
+    "JNJ",
+    "XOM",
+    "PG",
+    "MA",
+    "HD",
+    "COST",
+    "ABBV",
+    "MRK",
+    "AVGO",
+    "PEP",
+    "KO",
+    "WMT",
+    "BAC",
+    "CRM",
+    "AMD",
+    "ORCL",
+    "NFLX",
+    "LIN",
+    "DIS",
+    "ADBE",
+    "TMO",
+    "CSCO",
+    "ACN",
+    "MCD",
+    "ABT",
+    "INTU",
+    "CAT",
+    "IBM",
+    "TXN",
 )
 
 # ~10 ETFs: broad index, sector SPDRs sample, treasuries (doc 02 §2 curated set).
 STARTER_ETFS: tuple[str, ...] = (
-    "SPY", "QQQ", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "TLT",
+    "SPY",
+    "QQQ",
+    "IWM",
+    "DIA",
+    "XLK",
+    "XLF",
+    "XLE",
+    "XLV",
+    "XLI",
+    "TLT",
 )
 
 # Crypto sleeve starter pairs (ADR-0013): Alpaca-supported, canonical
@@ -51,7 +96,11 @@ STARTER_ETFS: tuple[str, ...] = (
 # (settings.crypto_enabled -> UniverseManager(include_crypto=...)). Mirrors
 # the settings.crypto_universe default.
 CRYPTO_STARTERS: tuple[str, ...] = (
-    "BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "LINK/USD",
+    "BTC/USD",
+    "ETH/USD",
+    "SOL/USD",
+    "AVAX/USD",
+    "LINK/USD",
 )
 
 
@@ -128,9 +177,7 @@ class UniverseManager:
 
     def _seed_symbols(self) -> list[tuple[str, str]]:
         """See :func:`seed_symbol_origins` (shared with the backfill CLI)."""
-        return seed_symbol_origins(
-            include_crypto=self._include_crypto, seed_path=self._seed_path
-        )
+        return seed_symbol_origins(include_crypto=self._include_crypto, seed_path=self._seed_path)
 
     def seed_core(self, as_of: date) -> int:
         """Seed Tier 1 once; idempotent (no-op when Tier 1 already populated)."""
@@ -298,24 +345,43 @@ class UniverseManager:
 # ``instruments.sector`` by ``backfill universe`` so sector-relative labels,
 # dossier sector context, and the risk engine's sector caps all work.
 STARTER_SECTORS: dict[str, str] = {
-    "AAPL": "Information Technology", "MSFT": "Information Technology",
-    "NVDA": "Information Technology", "AMD": "Information Technology",
-    "AVGO": "Information Technology", "ADBE": "Information Technology",
-    "ORCL": "Information Technology", "CRM": "Information Technology",
-    "CSCO": "Information Technology", "IBM": "Information Technology",
-    "INTU": "Information Technology", "ACN": "Information Technology",
+    "AAPL": "Information Technology",
+    "MSFT": "Information Technology",
+    "NVDA": "Information Technology",
+    "AMD": "Information Technology",
+    "AVGO": "Information Technology",
+    "ADBE": "Information Technology",
+    "ORCL": "Information Technology",
+    "CRM": "Information Technology",
+    "CSCO": "Information Technology",
+    "IBM": "Information Technology",
+    "INTU": "Information Technology",
+    "ACN": "Information Technology",
     "TXN": "Information Technology",
-    "GOOGL": "Communication Services", "META": "Communication Services",
-    "NFLX": "Communication Services", "DIS": "Communication Services",
-    "AMZN": "Consumer Discretionary", "TSLA": "Consumer Discretionary",
-    "HD": "Consumer Discretionary", "MCD": "Consumer Discretionary",
-    "PG": "Consumer Staples", "KO": "Consumer Staples",
-    "PEP": "Consumer Staples", "COST": "Consumer Staples",
+    "GOOGL": "Communication Services",
+    "META": "Communication Services",
+    "NFLX": "Communication Services",
+    "DIS": "Communication Services",
+    "AMZN": "Consumer Discretionary",
+    "TSLA": "Consumer Discretionary",
+    "HD": "Consumer Discretionary",
+    "MCD": "Consumer Discretionary",
+    "PG": "Consumer Staples",
+    "KO": "Consumer Staples",
+    "PEP": "Consumer Staples",
+    "COST": "Consumer Staples",
     "WMT": "Consumer Staples",
-    "UNH": "Health Care", "JNJ": "Health Care", "ABBV": "Health Care",
-    "MRK": "Health Care", "TMO": "Health Care", "ABT": "Health Care",
-    "JPM": "Financials", "BAC": "Financials", "V": "Financials",
-    "MA": "Financials", "BRK.B": "Financials",
+    "UNH": "Health Care",
+    "JNJ": "Health Care",
+    "ABBV": "Health Care",
+    "MRK": "Health Care",
+    "TMO": "Health Care",
+    "ABT": "Health Care",
+    "JPM": "Financials",
+    "BAC": "Financials",
+    "V": "Financials",
+    "MA": "Financials",
+    "BRK.B": "Financials",
     "XOM": "Energy",
     "CAT": "Industrials",
     "LIN": "Materials",
@@ -340,11 +406,7 @@ def default_sector_etf_map(sectors: Mapping[str, str]) -> dict[str, str]:
         "Real Estate": "XLRE",
         "Communication Services": "XLC",
     }
-    return {
-        symbol: spdr[sector]
-        for symbol, sector in sectors.items()
-        if sector in spdr
-    }
+    return {symbol: spdr[sector] for symbol, sector in sectors.items() if sector in spdr}
 
 
 def seed_symbols_documented() -> Sequence[str]:

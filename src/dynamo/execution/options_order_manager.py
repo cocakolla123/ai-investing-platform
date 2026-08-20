@@ -327,9 +327,7 @@ class OptionsOrderManager:
                 raise CollateralShortfall(
                     f"{order.client_order_id}: no shares lookup — cannot verify coverage"
                 )
-            validate_covered_call_collateral(
-                order.contracts, self._shares_lookup(order.underlying)
-            )
+            validate_covered_call_collateral(order.contracts, self._shares_lookup(order.underlying))
         elif order.structure is OptionStructure.CASH_SECURED_PUT:
             if self._cash_lookup is None:
                 raise CollateralShortfall(
@@ -386,8 +384,8 @@ class OptionsReconciler:
             ours, theirs = internal.get(occ), broker.get(occ)
             if ours == theirs:
                 continue
-            kind = "position_qty" if ours is not None and theirs is not None else (
-                "unknown_position"
+            kind = (
+                "position_qty" if ours is not None and theirs is not None else ("unknown_position")
             )
             divergences.append(
                 Divergence(opt_scope(occ), kind, ours, theirs, "option position mismatch")

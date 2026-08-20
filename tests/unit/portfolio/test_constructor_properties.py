@@ -30,14 +30,9 @@ TOL = 1e-9
 
 @st.composite
 def scenario(draw):
-    symbols = draw(
-        st.lists(st.sampled_from(POOL), min_size=2, max_size=8, unique=True)
-    )
+    symbols = draw(st.lists(st.sampled_from(POOL), min_size=2, max_size=8, unique=True))
     held = draw(st.lists(st.sampled_from(symbols), max_size=4, unique=True))
-    weights = {
-        s: draw(st.floats(0.01, 0.12, allow_nan=False, allow_infinity=False))
-        for s in held
-    }
+    weights = {s: draw(st.floats(0.01, 0.12, allow_nan=False, allow_infinity=False)) for s in held}
     actions = {
         s: draw(st.sampled_from(list(Action)))
         for s in draw(st.lists(st.sampled_from(symbols), max_size=6, unique=True))
@@ -47,25 +42,18 @@ def scenario(draw):
     verdict = make_verdict(
         regime=draw(st.sampled_from(list(Regime))),
         ladder=draw(
-            st.sampled_from(
-                [LadderRung.NORMAL, LadderRung.DD5, LadderRung.DD8, LadderRung.DD10]
-            )
+            st.sampled_from([LadderRung.NORMAL, LadderRung.DD5, LadderRung.DD8, LadderRung.DD10])
         ),
         new_risk=draw(st.booleans()),
         gross_cap=draw(st.floats(0.3, 1.0)),
         cash_floor=draw(st.floats(0.0, 0.4)),
-        per_position_cap={
-            s: draw(st.floats(0.0, 0.15)) for s in symbols
-        },
+        per_position_cap={s: draw(st.floats(0.0, 0.15)) for s in symbols},
         sector_caps={"tech": draw(st.floats(0.05, 0.5)), "energy": 0.4},
         vetoed=vetoed,
     )
     quality = draw(st.floats(0.0, 100.0))
     inputs = advisory(
-        watchlist=[
-            make_row(s, rank=i + 1, quality=quality)
-            for i, s in enumerate(sorted(symbols))
-        ],
+        watchlist=[make_row(s, rank=i + 1, quality=quality) for i, s in enumerate(sorted(symbols))],
         verdicts=[make_cverdict(s, a) for s, a in sorted(actions.items())],
         signals=[make_signal(s) for s in sorted(signal_symbols)],
         symbols=symbols,
@@ -88,7 +76,11 @@ def test_never_violates_verdict_constraints(sc):
     inputs, verdict, weights, turnover_used = sc
     state = make_state(weights)
     target = RuleBasedConstructor().construct(
-        inputs, verdict, state, ConstructionConfig(), risk_config=RiskConfig(),
+        inputs,
+        verdict,
+        state,
+        ConstructionConfig(),
+        risk_config=RiskConfig(),
         turnover_used_mtd=turnover_used,
     )
 
@@ -131,9 +123,7 @@ def test_determinism_under_input_shuffles(sc, seed):
     constructor = RuleBasedConstructor()
     cfg = ConstructionConfig()
 
-    baseline = constructor.construct(
-        inputs, verdict, state, cfg, turnover_used_mtd=turnover_used
-    )
+    baseline = constructor.construct(inputs, verdict, state, cfg, turnover_used_mtd=turnover_used)
 
     rng = random.Random(seed)
     watchlist = list(inputs.watchlist)
@@ -153,9 +143,7 @@ def test_determinism_under_input_shuffles(sc, seed):
         adv_dollar_20d=inputs.adv_dollar_20d,
         sector_by_symbol=inputs.sector_by_symbol,
     )
-    again = constructor.construct(
-        shuffled, verdict, state, cfg, turnover_used_mtd=turnover_used
-    )
+    again = constructor.construct(shuffled, verdict, state, cfg, turnover_used_mtd=turnover_used)
     assert baseline.model_dump_json() == again.model_dump_json()
 
 

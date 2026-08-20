@@ -400,7 +400,6 @@ def test_flags_per_day_summary() -> None:
     assert report.distinct_flagged == 5
 
 
-
 def test_a_constant_spread_is_inconclusive_not_infinitely_confident() -> None:
     """The guard that makes the tests above mean something.
 

@@ -261,10 +261,22 @@ def test_empty_inputs_are_total() -> None:
 
 def test_learning_metric_rows_namespaced_and_scoped() -> None:
     rows = [
-        _exp(1, conviction=0.8, label="win", pnl=2.0, exit_day=date(2026, 8, 3),
-             benchmark_excess_pct=1.0),
-        _exp(2, conviction=0.4, label="loss", pnl=-1.0, exit_day=date(2026, 8, 4),
-             failure_primary="quant_model"),
+        _exp(
+            1,
+            conviction=0.8,
+            label="win",
+            pnl=2.0,
+            exit_day=date(2026, 8, 3),
+            benchmark_excess_pct=1.0,
+        ),
+        _exp(
+            2,
+            conviction=0.4,
+            label="loss",
+            pnl=-1.0,
+            exit_day=date(2026, 8, 4),
+            failure_primary="quant_model",
+        ),
     ]
     generation_rows = [{"generation": 1, "value_of_learning": 0.02, "n_test": 31}]
     metric_rows = learning_metric_rows(rows, {"buy": 8, "no_action": 2}, generation_rows)
@@ -280,5 +292,4 @@ def test_learning_metric_rows_namespaced_and_scoped() -> None:
     assert by_key[("learning.failure_count", "failure_class", "quant_model")] == 1.0
     assert by_key[("learning.bucket_n", "conviction_bucket", "0.8-0.9")] == 1.0
     # deterministic: same inputs, identical rows in identical order
-    assert metric_rows == learning_metric_rows(rows, {"buy": 8, "no_action": 2},
-                                               generation_rows)
+    assert metric_rows == learning_metric_rows(rows, {"buy": 8, "no_action": 2}, generation_rows)

@@ -117,9 +117,7 @@ def compute_position_stops(
             kind = StopKind.DISASTER
             reason = f"disaster stop -{config.disaster_stop_pct:.0%} from entry"
         specs.append(
-            StopOrderSpec(
-                symbol=inputs.symbol, kind=kind, stop_price=level, reason=reason
-            )
+            StopOrderSpec(symbol=inputs.symbol, kind=kind, stop_price=level, reason=reason)
         )
     else:
         # Long-term sleeve (or no usable ATR): disaster stop from entry;
@@ -133,9 +131,7 @@ def compute_position_stops(
             kind = StopKind.TRAILING
             reason = "ratchet holds prior stop (stops only tighten)"
         specs.append(
-            StopOrderSpec(
-                symbol=inputs.symbol, kind=kind, stop_price=level, reason=reason
-            )
+            StopOrderSpec(symbol=inputs.symbol, kind=kind, stop_price=level, reason=reason)
         )
 
     if (

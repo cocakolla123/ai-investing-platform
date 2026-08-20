@@ -75,10 +75,14 @@ def test_replay_committee_mode_requires_max_usd(capsys: pytest.CaptureFixture[st
         replay_cli.main(
             [
                 "run",
-                "--start", "2026-06-01",
-                "--end", "2026-06-10",
-                "--mode", "committee",
-                "--run-label", "x",
+                "--start",
+                "2026-06-01",
+                "--end",
+                "2026-06-10",
+                "--mode",
+                "committee",
+                "--run-label",
+                "x",
             ]
         )
     assert exc.value.code == 2
@@ -90,11 +94,16 @@ def test_replay_committee_max_usd_must_be_positive() -> None:
         replay_cli.main(
             [
                 "run",
-                "--start", "2026-06-01",
-                "--end", "2026-06-10",
-                "--mode", "committee",
-                "--run-label", "x",
-                "--max-usd", "0",
+                "--start",
+                "2026-06-01",
+                "--end",
+                "2026-06-10",
+                "--mode",
+                "committee",
+                "--run-label",
+                "x",
+                "--max-usd",
+                "0",
             ]
         )
 
@@ -113,11 +122,16 @@ def test_replay_committee_refuses_without_api_key(
     rc = replay_cli.main(
         [
             "run",
-            "--start", "2026-06-01",
-            "--end", "2026-06-10",
-            "--mode", "committee",
-            "--run-label", "x",
-            "--max-usd", "5.0",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--mode",
+            "committee",
+            "--run-label",
+            "x",
+            "--max-usd",
+            "5.0",
         ]
     )
     assert rc == 2
@@ -129,9 +143,7 @@ def test_estimate_prints_projection_without_any_api_call(
 ) -> None:
     """The estimator is pure math over on-disk prompt sizes + the pricing
     table — no client is constructed, no request object even built."""
-    rc = replay_cli.main(
-        ["estimate", "--start", "2026-06-01", "--end", "2026-06-10"]
-    )
+    rc = replay_cli.main(["estimate", "--start", "2026-06-01", "--end", "2026-06-10"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "NO API calls" in out
@@ -146,9 +158,12 @@ def test_estimate_scales_with_deep_dive_cap(
         rc = replay_cli.main(
             [
                 "estimate",
-                "--start", "2026-06-01",
-                "--end", "2026-06-10",
-                "--deep-dives-per-day", cap,
+                "--start",
+                "2026-06-01",
+                "--end",
+                "2026-06-10",
+                "--deep-dives-per-day",
+                cap,
                 # Exact 2x scaling only holds without the flat per-session
                 # macro-digest overhead (Phase 4) — drop it here.
                 "--no-macro-digest",
@@ -176,12 +191,18 @@ def test_replay_run_quant_bundle_flags_parse_with_safe_defaults() -> None:
     args = parser.parse_args(
         [
             "run",
-            "--start", "2026-06-01",
-            "--end", "2026-06-10",
-            "--run-label", "x",
-            "--quant-model-version", "campaign-v1",
-            "--quant-score-max-age-days", "7",
-            "--code-version", "abc123",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--run-label",
+            "x",
+            "--quant-model-version",
+            "campaign-v1",
+            "--quant-score-max-age-days",
+            "7",
+            "--code-version",
+            "abc123",
         ]
     )
     assert args.quant_model_version == "campaign-v1"
@@ -202,14 +223,21 @@ def test_replay_portfolio_flags_parse_with_safe_defaults() -> None:
     args = parser.parse_args(
         [
             "run",
-            "--start", "2026-02-02",
-            "--end", "2026-07-31",
-            "--run-label", "1k",
-            "--mode", "portfolio",
-            "--source-run-id", "replay-abc123def456",
+            "--start",
+            "2026-02-02",
+            "--end",
+            "2026-07-31",
+            "--run-label",
+            "1k",
+            "--mode",
+            "portfolio",
+            "--source-run-id",
+            "replay-abc123def456",
             "--whole-shares",
-            "--min-order-notional", "25",
-            "--commission-per-order", "1.0",
+            "--min-order-notional",
+            "25",
+            "--commission-per-order",
+            "1.0",
         ]
     )
     assert args.mode == "portfolio"
@@ -226,10 +254,14 @@ def test_replay_portfolio_mode_requires_source_run_id(
         replay_cli.main(
             [
                 "run",
-                "--start", "2026-06-01",
-                "--end", "2026-06-10",
-                "--mode", "portfolio",
-                "--run-label", "x",
+                "--start",
+                "2026-06-01",
+                "--end",
+                "2026-06-10",
+                "--mode",
+                "portfolio",
+                "--run-label",
+                "x",
             ]
         )
     assert exc.value.code == 2
@@ -279,11 +311,16 @@ def test_replay_portfolio_mode_never_constructs_an_llm_client(
     rc = replay_cli.main(
         [
             "run",
-            "--start", "2026-06-01",
-            "--end", "2026-06-10",
-            "--mode", "portfolio",
-            "--source-run-id", "replay-src",
-            "--run-label", "x",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--mode",
+            "portfolio",
+            "--source-run-id",
+            "replay-src",
+            "--run-label",
+            "x",
             "--skip-preflight",
         ]
     )
@@ -307,14 +344,22 @@ def test_replay_discovery_flags_parse_with_off_by_default() -> None:
     args = parser.parse_args(
         [
             "run",
-            "--start", "2026-06-01",
-            "--end", "2026-06-10",
-            "--run-label", "x",
-            "--discovery", "code",
-            "--discovery-min-dollar-volume", "5e6",
-            "--discovery-min-price", "3",
-            "--discovery-promotions-per-day", "40",
-            "--discovery-promotion-days", "15",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--run-label",
+            "x",
+            "--discovery",
+            "code",
+            "--discovery-min-dollar-volume",
+            "5e6",
+            "--discovery-min-price",
+            "3",
+            "--discovery-promotions-per-day",
+            "40",
+            "--discovery-promotion-days",
+            "15",
         ]
     )
     assert replay_cli._discovery_kwargs(args) == {
@@ -350,10 +395,14 @@ def test_haiku_discovery_is_refused_outside_committee_mode(
     rc = replay_cli.main(
         [
             "run",
-            "--start", "2026-06-01",
-            "--end", "2026-06-10",
-            "--run-label", "x",
-            "--discovery", "haiku",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--run-label",
+            "x",
+            "--discovery",
+            "haiku",
         ]
     )
     assert rc == 2
@@ -365,8 +414,17 @@ def test_haiku_discovery_is_refused_outside_committee_mode(
 def test_replay_rejects_unknown_mode() -> None:
     with pytest.raises(SystemExit):
         replay_cli._build_parser().parse_args(
-            ["run", "--start", "2026-06-01", "--end", "2026-06-10",
-             "--mode", "yolo", "--run-label", "x"]
+            [
+                "run",
+                "--start",
+                "2026-06-01",
+                "--end",
+                "2026-06-10",
+                "--mode",
+                "yolo",
+                "--run-label",
+                "x",
+            ]
         )
 
 
@@ -489,8 +547,14 @@ def test_backfill_bars_allow_missing_tiingo_restores_graceful_skip(
     )
     rc = backfill_cli.main(
         [
-            "bars", "--start", "2026-01-01", "--end", "2026-02-01",
-            "--symbols", "AAA", "--allow-missing-tiingo",
+            "bars",
+            "--start",
+            "2026-01-01",
+            "--end",
+            "2026-02-01",
+            "--symbols",
+            "AAA",
+            "--allow-missing-tiingo",
         ]
     )
     assert rc == 0
@@ -515,15 +579,19 @@ def test_backfill_bars_upserts_range_per_symbol(monkeypatch: pytest.MonkeyPatch)
             calls.append((list(symbols), start, end))
             yield {"symbol": symbols[0]}
 
-    monkeypatch.setattr(
-        backfill_cli, "_settings", lambda: FakeSettings(tiingo_api_key="k")
-    )
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings(tiingo_api_key="k"))
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr(backfill_cli, "_tiingo", lambda s: FakeTiingo())
     rc = backfill_cli.main(
         [
-            "bars", "--start", "2025-01-01", "--end", "2026-01-01",
-            "--symbols", "AAA", "BBB",
+            "bars",
+            "--start",
+            "2025-01-01",
+            "--end",
+            "2026-01-01",
+            "--symbols",
+            "AAA",
+            "BBB",
         ]
     )
     assert rc == 0
@@ -543,14 +611,10 @@ def test_backfill_bars_universe_resolves_symbols(monkeypatch: pytest.MonkeyPatch
             seen.extend(symbols)
             return iter(())
 
-    monkeypatch.setattr(
-        backfill_cli, "_settings", lambda: FakeSettings(tiingo_api_key="k")
-    )
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings(tiingo_api_key="k"))
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr(backfill_cli, "_tiingo", lambda s: FakeTiingo())
-    rc = backfill_cli.main(
-        ["bars", "--start", "2025-01-01", "--end", "2026-01-01", "--universe"]
-    )
+    rc = backfill_cli.main(["bars", "--start", "2025-01-01", "--end", "2026-01-01", "--universe"])
     assert rc == 0
     assert seen == ["AAA", "BBB"]
 
@@ -567,9 +631,7 @@ def test_backfill_fundamentals_uses_cik_map(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr(backfill_cli, "_edgar", lambda s: FakeEdgar())
-    monkeypatch.setattr(
-        backfill_cli, "_cik_map", lambda repo, symbols: {"AAA": "0000000001"}
-    )
+    monkeypatch.setattr(backfill_cli, "_cik_map", lambda repo, symbols: {"AAA": "0000000001"})
     rc = backfill_cli.main(["fundamentals", "--symbols", "AAA", "NOCIK"])
     assert rc == 0
     assert fetched == ["0000000001"]  # NOCIK skipped with a message
@@ -587,9 +649,7 @@ def test_backfill_macro_fetches_vintages_for_default_series(
             calls.append((series_id, start, realtime_start))
             yield {"series_id": series_id}
 
-    monkeypatch.setattr(
-        backfill_cli, "_settings", lambda: FakeSettings(fred_api_key="k")
-    )
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings(fred_api_key="k"))
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr(backfill_cli, "_fred", lambda s: FakeFred())
     rc = backfill_cli.main(["macro", "--start", "2020-01-01"])
@@ -608,9 +668,7 @@ def test_backfill_macro_custom_series(monkeypatch: pytest.MonkeyPatch) -> None:
             calls.append(series_id)
             return iter(())
 
-    monkeypatch.setattr(
-        backfill_cli, "_settings", lambda: FakeSettings(fred_api_key="k")
-    )
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings(fred_api_key="k"))
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr(backfill_cli, "_fred", lambda s: FakeFred())
     rc = backfill_cli.main(["macro", "--start", "2024-01-01", "--series", "VIXCLS"])
@@ -682,12 +740,20 @@ def test_backfill_universe_backdates_and_verifies(
     # Pre-existing 2026-08 seed rows (approved_by='seed') + one human add.
     for sym in ("AAA", "SPY", "BTC/USD"):
         repo.rows[(sym, date(2026, 8, 1))] = UniverseMembership(
-            symbol=sym, tier=Tier.CORE, valid_from=date(2026, 8, 1),
-            valid_to=None, reason="core seed", approved_by="seed",
+            symbol=sym,
+            tier=Tier.CORE,
+            valid_from=date(2026, 8, 1),
+            valid_to=None,
+            reason="core seed",
+            approved_by="seed",
         )
     repo.rows[("HUMAN", date(2026, 8, 5))] = UniverseMembership(
-        symbol="HUMAN", tier=Tier.CORE, valid_from=date(2026, 8, 5),
-        valid_to=None, reason="approved add", approved_by="user",
+        symbol="HUMAN",
+        tier=Tier.CORE,
+        valid_from=date(2026, 8, 5),
+        valid_to=None,
+        reason="approved add",
+        approved_by="user",
     )
     monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
@@ -747,9 +813,7 @@ def test_backfill_universe_excludes_crypto_when_disabled(
         seen.append(include_crypto)
         return [("AAA", "built-in starter list")]
 
-    monkeypatch.setattr(
-        backfill_cli, "_settings", lambda: FakeSettings(crypto_enabled=False)
-    )
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings(crypto_enabled=False))
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr("dynamo.data.universe.seed_symbol_origins", fake_origins)
     assert backfill_cli.main(["universe", "--as-of", "2024-12-01"]) == 0
@@ -797,15 +861,20 @@ def test_backfill_news_upserts_range_and_skips_crypto(
             calls.append((list(symbols), start, end))
             yield {"id": f"finnhub:{symbols[0]}"}
 
-    monkeypatch.setattr(
-        backfill_cli, "_settings", lambda: FakeSettings(finnhub_api_key="k")
-    )
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings(finnhub_api_key="k"))
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr(backfill_cli, "_finnhub", lambda s: FakeFinnhub())
     rc = backfill_cli.main(
         [
-            "news", "--start", "2026-01-01", "--end", "2026-08-01",
-            "--symbols", "AAA", "BTC/USD", "BBB",
+            "news",
+            "--start",
+            "2026-01-01",
+            "--end",
+            "2026-08-01",
+            "--symbols",
+            "AAA",
+            "BTC/USD",
+            "BBB",
         ]
     )
     out = capsys.readouterr().out
@@ -865,9 +934,7 @@ def test_backfill_transcripts_allow_missing_extra_skips(
     monkeypatch.setattr(
         backfill_cli, "_repo", lambda url: pytest.fail("must not touch the database")
     )
-    rc = backfill_cli.main(
-        ["transcripts", "--symbols", "AAA", "--allow-missing-extra"]
-    )
+    rc = backfill_cli.main(["transcripts", "--symbols", "AAA", "--allow-missing-extra"])
     assert rc == 0
     assert "skipping" in capsys.readouterr().out
 
@@ -888,9 +955,7 @@ def test_backfill_transcripts_upserts_and_links(
     repo = FakeRepo()
     monkeypatch.setattr(backfill_cli, "_defeatbeta", lambda: provider)
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
-    rc = backfill_cli.main(
-        ["transcripts", "--symbols", "AAA", "BTC/USD", "--since", "2024-06-01"]
-    )
+    rc = backfill_cli.main(["transcripts", "--symbols", "AAA", "BTC/USD", "--since", "2024-06-01"])
     assert rc == 0
     assert provider.calls == [(["AAA"], date(2024, 6, 1))]  # crypto filtered out
     assert repo.transcripts == [transcript]
@@ -910,8 +975,13 @@ def test_backfill_crypto_bars_parses_args() -> None:
     assert args.symbols is None
     args = backfill_cli._build_parser().parse_args(
         [
-            "crypto-bars", "--start", "2024-01-01", "--end", "2026-08-01",
-            "--symbols", "BTC/USD",
+            "crypto-bars",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2026-08-01",
+            "--symbols",
+            "BTC/USD",
         ]
     )
     assert args.symbols == ["BTC/USD"]
@@ -937,9 +1007,7 @@ def test_backfill_crypto_bars_defaults_to_settings_universe(
     monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr(backfill_cli, "_alpaca_crypto", lambda s: FakeCrypto())
-    rc = backfill_cli.main(
-        ["crypto-bars", "--start", "2024-01-01", "--end", "2026-08-01"]
-    )
+    rc = backfill_cli.main(["crypto-bars", "--start", "2024-01-01", "--end", "2026-08-01"])
     out = capsys.readouterr().out
     assert rc == 0
     assert calls == [(["BTC/USD", "ETH/USD"], date(2024, 1, 1), date(2026, 8, 1))]
@@ -961,8 +1029,13 @@ def test_backfill_crypto_bars_explicit_symbols(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(backfill_cli, "_alpaca_crypto", lambda s: FakeCrypto())
     rc = backfill_cli.main(
         [
-            "crypto-bars", "--start", "2024-01-01", "--end", "2026-08-01",
-            "--symbols", "SOL/USD",
+            "crypto-bars",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2026-08-01",
+            "--symbols",
+            "SOL/USD",
         ]
     )
     assert rc == 0
@@ -989,9 +1062,7 @@ def test_backfill_fundamentals_seed_ciks(
     monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings())
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr(backfill_cli, "_edgar", lambda s: FakeEdgar())
-    monkeypatch.setattr(
-        backfill_cli, "_cik_map", lambda repo, symbols: {"AAA": "0000000001"}
-    )
+    monkeypatch.setattr(backfill_cli, "_cik_map", lambda repo, symbols: {"AAA": "0000000001"})
     rc = backfill_cli.main(["fundamentals", "--symbols", "AAA", "NOMAP", "--seed-ciks"])
     out = capsys.readouterr().out
     assert rc == 0
@@ -1017,8 +1088,14 @@ def _preflight_error() -> Any:
 def test_replay_run_parses_skip_preflight() -> None:
     args = replay_cli._build_parser().parse_args(
         [
-            "run", "--start", "2026-06-01", "--end", "2026-06-10",
-            "--run-label", "x", "--skip-preflight",
+            "run",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--run-label",
+            "x",
+            "--skip-preflight",
         ]
     )
     assert args.skip_preflight is True
@@ -1065,9 +1142,9 @@ def test_selection_flags_default_to_none_so_settings_apply() -> None:
     }
     # …and an explicit flag beats the Settings default.
     args.crypto_slots = 0
-    assert replay_cli._selection_kwargs(args, FakeSelectionSettings())[
-        "shortlist_crypto_slots"
-    ] == 0
+    assert (
+        replay_cli._selection_kwargs(args, FakeSelectionSettings())["shortlist_crypto_slots"] == 0
+    )
 
 
 def test_selection_flags_reach_the_replay_config(
@@ -1106,14 +1183,26 @@ def test_selection_flags_reach_the_replay_config(
     monkeypatch.setattr(runner_mod, "ReplayRunner", FakeRunner)
     rc = replay_cli.main(
         [
-            "run", "--start", "2026-06-01", "--end", "2026-06-10",
-            "--run-label", "x", "--skip-preflight",
-            "--min-feature-coverage", "0.5",
-            "--candidate-percentile", "0.45",
-            "--crypto-slots", "0",
-            "--cooldown-sessions", "9",
-            "--rotation-slots", "2",
-            "--rotation-lookback-sessions", "25",
+            "run",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--run-label",
+            "x",
+            "--skip-preflight",
+            "--min-feature-coverage",
+            "0.5",
+            "--candidate-percentile",
+            "0.45",
+            "--crypto-slots",
+            "0",
+            "--cooldown-sessions",
+            "9",
+            "--rotation-slots",
+            "2",
+            "--rotation-lookback-sessions",
+            "25",
         ]
     )
     assert rc == 0
@@ -1166,7 +1255,13 @@ def test_require_shipping_bundle_flag_reaches_preflight(
 
     monkeypatch.setattr(runner_mod, "ReplayRunner", FakeRunner)
     base = [
-        "run", "--start", "2026-06-01", "--end", "2026-06-10", "--run-label", "x",
+        "run",
+        "--start",
+        "2026-06-01",
+        "--end",
+        "2026-06-10",
+        "--run-label",
+        "x",
     ]
     assert replay_cli.main([*base, "--no-require-shipping-bundle"]) == 0
     assert seen["require_shipping_bundle"] is False
@@ -1232,8 +1327,14 @@ def test_replay_skip_preflight_records_skip_in_run_metadata(
     monkeypatch.setattr(runner_mod, "ReplayRunner", FakeRunner)
     rc = replay_cli.main(
         [
-            "run", "--start", "2026-06-01", "--end", "2026-06-10",
-            "--run-label", "x", "--skip-preflight",
+            "run",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--run-label",
+            "x",
+            "--skip-preflight",
         ]
     )
     assert rc == 0
@@ -1273,8 +1374,17 @@ def test_replay_committee_preflight_runs_before_any_client(
     monkeypatch.setattr(preflight_mod, "run_preflight", failing_preflight)
     rc = replay_cli.main(
         [
-            "run", "--start", "2026-06-01", "--end", "2026-06-10",
-            "--mode", "committee", "--run-label", "x", "--max-usd", "5.0",
+            "run",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--mode",
+            "committee",
+            "--run-label",
+            "x",
+            "--max-usd",
+            "5.0",
         ]
     )
     assert rc == 1
@@ -1305,9 +1415,7 @@ def test_estimate_macro_digest_overhead_included_unless_disabled(
     capsys: pytest.CaptureFixture[str], shipped_defaults: None
 ) -> None:
     def total(extra: list[str]) -> float:
-        rc = replay_cli.main(
-            ["estimate", "--start", "2026-06-01", "--end", "2026-06-10", *extra]
-        )
+        rc = replay_cli.main(["estimate", "--start", "2026-06-01", "--end", "2026-06-10", *extra])
         assert rc == 0
         out = capsys.readouterr().out
         line = next(ln for ln in out.splitlines() if "projected total:" in ln)
@@ -1322,9 +1430,12 @@ def test_run_parser_accepts_phase4_flags() -> None:
     args = replay_cli._build_parser().parse_args(
         [
             "run",
-            "--start", "2026-06-01",
-            "--end", "2026-06-10",
-            "--run-label", "x",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--run-label",
+            "x",
             "--acknowledge-model-knowledge",
             "--no-macro-digest",
             "--no-within-run-learning",
@@ -1371,9 +1482,7 @@ def test_backfill_news_retries_on_rate_limit_then_succeeds(
                 raise RateLimited("finnhub", "429", retry_after_s=7.0)
             yield {"id": f"finnhub:{symbols[0]}"}
 
-    monkeypatch.setattr(
-        backfill_cli, "_settings", lambda: FakeSettings(finnhub_api_key="k")
-    )
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings(finnhub_api_key="k"))
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr(backfill_cli, "_finnhub", lambda s: FlakyFinnhub())
     monkeypatch.setattr("dynamo.cli.backfill.time.sleep", sleeps.append)
@@ -1397,9 +1506,7 @@ def test_backfill_news_gives_up_after_retries_and_reports(
         def news_range(self, symbols: Any, start: date, end: date) -> Any:
             raise RateLimited("finnhub", "429")
 
-    monkeypatch.setattr(
-        backfill_cli, "_settings", lambda: FakeSettings(finnhub_api_key="k")
-    )
+    monkeypatch.setattr(backfill_cli, "_settings", lambda: FakeSettings(finnhub_api_key="k"))
     monkeypatch.setattr(backfill_cli, "_repo", lambda url: repo)
     monkeypatch.setattr(backfill_cli, "_finnhub", lambda s: AlwaysLimited())
     monkeypatch.setattr("dynamo.cli.backfill.time.sleep", lambda s: None)
@@ -1488,9 +1595,7 @@ def _committee_harness(
         def record_spend(self, run_id: str, delta_usd: float) -> None:
             pass
 
-    monkeypatch.setattr(
-        "dynamo.persistence.repositories.replay.ReplayRepository", FakeReplayRepo
-    )
+    monkeypatch.setattr("dynamo.persistence.repositories.replay.ReplayRepository", FakeReplayRepo)
     monkeypatch.setattr(
         "dynamo.persistence.repositories.experience.ExperienceRepository",
         lambda engine: object(),
@@ -1525,11 +1630,16 @@ def _committee_harness(
 def _committee_argv(*extra: str) -> list[str]:
     return [
         "run",
-        "--start", "2026-03-16",
-        "--end", "2026-03-20",
-        "--mode", "committee",
-        "--run-label", "x",
-        "--max-usd", "5.0",
+        "--start",
+        "2026-03-16",
+        "--end",
+        "2026-03-20",
+        "--mode",
+        "committee",
+        "--run-label",
+        "x",
+        "--max-usd",
+        "5.0",
         "--skip-preflight",
         *extra,
     ]
@@ -1687,9 +1797,12 @@ def test_estimate_backend_flag_overrides_settings(
     rc = replay_cli.main(
         [
             "estimate",
-            "--start", "2026-03-16",
-            "--end", "2026-03-27",
-            "--backend", "claude_code",
+            "--start",
+            "2026-03-16",
+            "--end",
+            "2026-03-27",
+            "--backend",
+            "claude_code",
         ]
     )
     assert rc == 0
@@ -1715,10 +1828,14 @@ def test_replay_ballast_flag_parses_and_defaults_off() -> None:
     args = parser.parse_args(
         [
             "run",
-            "--start", "2026-06-01",
-            "--end", "2026-06-10",
-            "--run-label", "x",
-            "--ballast", "SPY",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--run-label",
+            "x",
+            "--ballast",
+            "SPY",
         ]
     )
     assert args.ballast == "SPY"
@@ -1732,12 +1849,18 @@ def test_replay_committee_mode_refuses_ballast(
     rc = replay_cli.main(
         [
             "run",
-            "--start", "2026-06-01",
-            "--end", "2026-06-10",
-            "--mode", "committee",
-            "--run-label", "x",
-            "--max-usd", "5",
-            "--ballast", "SPY",
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-10",
+            "--mode",
+            "committee",
+            "--run-label",
+            "x",
+            "--max-usd",
+            "5",
+            "--ballast",
+            "SPY",
         ]
     )
     assert rc == 2

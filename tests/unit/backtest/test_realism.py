@@ -165,6 +165,4 @@ def test_commission_added_per_executed_order_and_hits_equity() -> None:
     for f in with_fee.fills:
         assert f.cost == pytest.approx(base_costs[(f.session, f.symbol, f.side)] + fee)
     # d1 (first fill day): 3 buys -> equity exactly 3 x fee lower.
-    assert with_fee.equity_curve.iloc[1] == pytest.approx(
-        baseline.equity_curve.iloc[1] - 3 * fee
-    )
+    assert with_fee.equity_curve.iloc[1] == pytest.approx(baseline.equity_curve.iloc[1] - 3 * fee)

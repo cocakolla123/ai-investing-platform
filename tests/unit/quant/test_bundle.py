@@ -66,15 +66,9 @@ def _factory(objective: str):
 def saved(tmp_path_factory: pytest.TempPathFactory) -> dict:
     directory = tmp_path_factory.mktemp("bundles")
     features, labels = _panel()
-    ranker = fit_final_model(
-        features, labels, task="rank", model_factory=_factory("regression")
-    )
-    downside = fit_final_model(
-        features, labels, task="downside", model_factory=_factory("binary")
-    )
-    vol = fit_final_model(
-        features, labels, task="vol", model_factory=_factory("regression")
-    )
+    ranker = fit_final_model(features, labels, task="rank", model_factory=_factory("regression"))
+    downside = fit_final_model(features, labels, task="downside", model_factory=_factory("binary"))
+    vol = fit_final_model(features, labels, task="vol", model_factory=_factory("regression"))
     path = save_bundle(
         directory,
         VERSION,
@@ -203,24 +197,18 @@ def test_loader_is_reexported_for_the_preflight_hook() -> None:
 
 def test_fit_final_model_learns_the_planted_signal() -> None:
     features, labels = _panel()
-    ranker = fit_final_model(
-        features, labels, task="rank", model_factory=_factory("regression")
-    )
+    ranker = fit_final_model(features, labels, task="rank", model_factory=_factory("regression"))
     from typing import cast
 
     pred = pd.Series(np.asarray(ranker.predict(features)), index=features.index)
     ic = pred.corr(cast(pd.Series, labels["excess_return_20d"]), method="spearman")
     assert ic > 0.8
 
-    downside = fit_final_model(
-        features, labels, task="downside", model_factory=_factory("binary")
-    )
+    downside = fit_final_model(features, labels, task="downside", model_factory=_factory("binary"))
     probs = np.asarray(downside.predict(features))
     assert np.all((probs >= 0.0) & (probs <= 1.0))
 
-    vol_model = fit_final_model(
-        features, labels, task="vol", model_factory=_factory("regression")
-    )
+    vol_model = fit_final_model(features, labels, task="vol", model_factory=_factory("regression"))
     # Vol models emit LOG vol (scoring exponentiates when vol_is_log).
     log_pred = np.asarray(vol_model.predict(features))
     assert np.corrcoef(log_pred, np.log(labels["realized_vol_20d"]))[0, 1] > 0.8
@@ -230,22 +218,20 @@ def test_fit_final_model_drops_nan_labels_and_requires_multiindex() -> None:
     features, labels = _panel()
     labels = labels.copy()
     labels.iloc[: len(labels) // 2, 0] = np.nan  # half the rank labels gone
-    model = fit_final_model(
-        features, labels, task="rank", model_factory=_factory("regression")
-    )
+    model = fit_final_model(features, labels, task="rank", model_factory=_factory("regression"))
     assert model is not None
     flat = features.reset_index(drop=True)
     with pytest.raises(ValueError, match="MultiIndex"):
         fit_final_model(
-            flat, labels["excess_return_20d"], task="rank",
+            flat,
+            labels["excess_return_20d"],
+            task="rank",
             model_factory=_factory("regression"),
         )
     all_nan = labels.copy()
     all_nan["realized_vol_20d"] = np.nan
     with pytest.raises(ValueError, match="no rows"):
-        fit_final_model(
-            features, all_nan, task="vol", model_factory=_factory("regression")
-        )
+        fit_final_model(features, all_nan, task="vol", model_factory=_factory("regression"))
 
 
 def test_feature_quantiles_shape_and_nan_columns() -> None:
@@ -303,9 +289,7 @@ def test_ensemble_bundle_saves_members_and_loads_averaging_wrapper(
     downside = fit_final_model(
         features, labels, task="downside", model_factory=_ensemble_factory("binary")
     )
-    vol = fit_final_model(
-        features, labels, task="vol", model_factory=_factory("regression")
-    )
+    vol = fit_final_model(features, labels, task="vol", model_factory=_factory("regression"))
     save_bundle(
         tmp_path,
         "ens-v1",
@@ -343,9 +327,7 @@ def test_ensemble_bundle_saves_members_and_loads_averaging_wrapper(
     _np.testing.assert_array_equal(loaded.ranker.predict(day), ranker.predict(day))
     # The wrapper truly averages: member predictions differ (different seeds)
     # and their mean equals the ensemble output.
-    member_preds = [
-        _np.asarray(m.predict(day), dtype=float) for m in loaded.ranker.members
-    ]
+    member_preds = [_np.asarray(m.predict(day), dtype=float) for m in loaded.ranker.members]
     assert not _np.array_equal(member_preds[0], member_preds[1])
     _np.testing.assert_allclose(
         loaded.ranker.predict(day), _np.mean(_np.stack(member_preds), axis=0)
@@ -364,9 +346,7 @@ def test_ensemble_member_sha_mismatch_is_loud(tmp_path: Path) -> None:
     ranker = fit_final_model(
         features, labels, task="rank", model_factory=_ensemble_factory("regression")
     )
-    single = fit_final_model(
-        features, labels, task="vol", model_factory=_factory("regression")
-    )
+    single = fit_final_model(features, labels, task="vol", model_factory=_factory("regression"))
     save_bundle(
         tmp_path,
         "ens-bad",

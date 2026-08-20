@@ -17,9 +17,7 @@ from dynamo.research.market_stats import (
 START = datetime(2025, 1, 2, tzinfo=UTC)
 
 
-def bars(
-    symbol: str, closes: list[float], volumes: list[float] | None = None
-) -> pd.DataFrame:
+def bars(symbol: str, closes: list[float], volumes: list[float] | None = None) -> pd.DataFrame:
     volumes = volumes if volumes is not None else [1_000.0] * len(closes)
     return pd.DataFrame(
         {
@@ -48,9 +46,7 @@ def test_extended_price_stats_arithmetic() -> None:
     assert stats["high_52w"] == pytest.approx(max(year))
     assert stats["low_52w"] == pytest.approx(min(year))
     assert stats["dist_from_52w_high_pct"] == pytest.approx(0.0)  # at the high
-    assert stats["dist_from_52w_low_pct"] == pytest.approx(
-        (last / min(year) - 1.0) * 100.0
-    )
+    assert stats["dist_from_52w_low_pct"] == pytest.approx((last / min(year) - 1.0) * 100.0)
     assert stats["max_drawdown_52w_pct"] == pytest.approx(0.0)  # monotone up
 
 
@@ -60,9 +56,7 @@ def test_max_drawdown_and_distance_from_the_high() -> None:
     peak = max(closes)
     trough = min(closes[closes.index(peak) :])
     assert stats["max_drawdown_52w_pct"] == pytest.approx((trough / peak - 1.0) * 100.0)
-    assert stats["dist_from_52w_high_pct"] == pytest.approx(
-        (closes[-1] / peak - 1.0) * 100.0
-    )
+    assert stats["dist_from_52w_high_pct"] == pytest.approx((closes[-1] / peak - 1.0) * 100.0)
 
 
 def test_original_four_stats_keep_their_names_and_meaning() -> None:
@@ -96,9 +90,7 @@ def test_peer_section_returns_excess_and_beta() -> None:
     own = ramp(200, 100.0, 1.0)
     etf = ramp(200, 50.0, 0.25)
     spy = ramp(200, 400.0, 1.0)
-    frame = pd.concat(
-        [bars("ACME", own), bars("XLI", etf), bars("SPY", spy)], ignore_index=True
-    )
+    frame = pd.concat([bars("ACME", own), bars("XLI", etf), bars("SPY", spy)], ignore_index=True)
     peers = peer_context(frame, "ACME", sector="Industrials")
     assert peers is not None
     assert peers.sector_etf == "XLI"
@@ -109,12 +101,8 @@ def test_peer_section_returns_excess_and_beta() -> None:
         spy_ret = (spy[-1] / spy[-window - 1] - 1.0) * 100.0
         assert peers.stats[f"ret_{window}d_pct"] == pytest.approx(own_ret)
         assert peers.stats[f"sector_XLI_ret_{window}d_pct"] == pytest.approx(etf_ret)
-        assert peers.stats[f"excess_vs_XLI_{window}d_pct"] == pytest.approx(
-            own_ret - etf_ret
-        )
-        assert peers.stats[f"excess_vs_SPY_{window}d_pct"] == pytest.approx(
-            own_ret - spy_ret
-        )
+        assert peers.stats[f"excess_vs_XLI_{window}d_pct"] == pytest.approx(own_ret - etf_ret)
+        assert peers.stats[f"excess_vs_SPY_{window}d_pct"] == pytest.approx(own_ret - spy_ret)
     assert "beta_120d_vs_SPY" in peers.stats
 
 

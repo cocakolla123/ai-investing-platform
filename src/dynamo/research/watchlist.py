@@ -152,9 +152,7 @@ def build_watchlist(
         committee[sym] = _committee_component(verdict, as_of)
         quant_comp[sym] = _quant_component(quant.get(sym), pctiles.get(sym), cfg)
         qs = quality.get(sym)
-        quality_comp[sym] = (
-            None if qs is None or qs.composite is None else qs.composite / 100.0
-        )
+        quality_comp[sym] = None if qs is None or qs.composite is None else qs.composite / 100.0
         b: list[str] = []
         if verdict is not None and quant.get(sym) is None:
             b.append("no-quant")

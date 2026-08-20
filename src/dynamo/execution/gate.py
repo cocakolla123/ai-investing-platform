@@ -202,9 +202,7 @@ def live_orders_permitted(
 
     key = approval_key if approval_key is not None else approval_key_from_env()
     effective_today = today if today is not None else date.today()
-    checked = check_approval(
-        approval, key=key, today=effective_today, scope_target=scope_target
-    )
+    checked = check_approval(approval, key=key, today=effective_today, scope_target=scope_target)
     if not checked.permitted:
         return checked
 

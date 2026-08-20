@@ -20,9 +20,7 @@ from dynamo.risk.ladder import (
 HWM = 1_000_000.0
 
 drawdowns = st.floats(min_value=-0.6, max_value=0.2)
-paths = st.lists(
-    st.one_of(drawdowns, st.just(float("nan"))), min_size=1, max_size=120
-)
+paths = st.lists(st.one_of(drawdowns, st.just(float("nan"))), min_size=1, max_size=120)
 
 
 @settings(max_examples=100, deadline=None)

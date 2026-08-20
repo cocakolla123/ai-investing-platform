@@ -211,9 +211,7 @@ class TestReconciliation:
     def _reconciler(self, broker: MockPMBroker):
         alerts: list[tuple[str, str]] = []
         store = RecordingStore()
-        reconciler = PMReconciler(
-            broker, store, lambda name, msg: alerts.append((name, msg))
-        )
+        reconciler = PMReconciler(broker, store, lambda name, msg: alerts.append((name, msg)))
         return reconciler, store, alerts
 
     def test_clean_when_positions_match(self) -> None:

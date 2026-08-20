@@ -66,9 +66,7 @@ def historical_var(
     var99, cvar99 = _var_cvar(losses, 0.99)
     var99 = max(var99, var95)
     cvar99 = max(cvar99, var99)
-    return VarResult(
-        var95=var95, var99=var99, cvar95=cvar95, cvar99=cvar99, n_obs=int(series.size)
-    )
+    return VarResult(var95=var95, var99=var99, cvar95=cvar95, cvar99=cvar99, n_obs=int(series.size))
 
 
 def _binom_cdf(k: int, n: int, p: float) -> float:
@@ -170,9 +168,7 @@ def backtest_var(
     its own risk.
     """
     recent = list(observations)[-max(window, 1) :]
-    usable = [
-        (p, r) for p, r in recent if math.isfinite(p) and p > 0.0 and math.isfinite(r)
-    ]
+    usable = [(p, r) for p, r in recent if math.isfinite(p) and p > 0.0 and math.isfinite(r)]
     exceptions, worst = count_var_exceptions(usable)
     if len(usable) < MIN_BACKTEST_OBSERVATIONS:
         return VarBacktest(exceptions, len(usable), VarTrafficLight.GREEN, 1.0, worst)

@@ -21,9 +21,7 @@ DEFAULT_HALFLIFE_DAYS = 120.0
 _FALLBACK_SHRINKAGE = 0.10
 
 
-def ewma_correlation(
-    panel: ReturnsPanel, halflife: float = DEFAULT_HALFLIFE_DAYS
-) -> FloatArray:
+def ewma_correlation(panel: ReturnsPanel, halflife: float = DEFAULT_HALFLIFE_DAYS) -> FloatArray:
     """EWMA correlation matrix (halflife-weighted, most recent heaviest).
 
     Non-finite returns are treated as zero; degenerate (zero-variance) symbols
@@ -77,9 +75,7 @@ def ledoit_wolf_shrinkage_intensity(panel: ReturnsPanel) -> float:
     return float(min(max(delta, 0.0), 1.0))
 
 
-def shrunk_correlation(
-    panel: ReturnsPanel, halflife: float = DEFAULT_HALFLIFE_DAYS
-) -> FloatArray:
+def shrunk_correlation(panel: ReturnsPanel, halflife: float = DEFAULT_HALFLIFE_DAYS) -> FloatArray:
     """EWMA correlation blended toward identity with LW intensity (stability)."""
     corr = ewma_correlation(panel, halflife)
     n = corr.shape[0]
@@ -113,10 +109,7 @@ def correlation_clusters(
     condensed = cast(FloatArray, squareform(dist, checks=False))
     link = cast(FloatArray, linkage(condensed, method="average"))
     cut = max(1.0 - float(threshold), 1e-9)
-    labels = cast(
-        NDArray[np.int_], fcluster(link, t=cut, criterion="distance")
-    )
+    labels = cast(NDArray[np.int_], fcluster(link, t=cut, criterion="distance"))
     return {
-        symbol: f"c{int(label)}"
-        for symbol, label in zip(symbols, labels.tolist(), strict=True)
+        symbol: f"c{int(label)}" for symbol, label in zip(symbols, labels.tolist(), strict=True)
     }

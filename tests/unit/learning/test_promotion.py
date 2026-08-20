@@ -25,7 +25,11 @@ def _promote_to_production(**overrides: object):
     }
     kwargs.update(overrides)
     return promote(
-        "ranker-v2", RegistryStatus.SHADOW, RegistryStatus.PRODUCTION, "owner", AT,
+        "ranker-v2",
+        RegistryStatus.SHADOW,
+        RegistryStatus.PRODUCTION,
+        "owner",
+        AT,
         **kwargs,  # type: ignore[arg-type]
     )
 
@@ -48,9 +52,7 @@ def test_terminal_statuses_absorbing(terminal: RegistryStatus) -> None:
 
 
 def test_legal_non_production_promotion_needs_no_approval() -> None:
-    record = promote(
-        "ranker-v2", RegistryStatus.CANDIDATE, RegistryStatus.VALIDATING, "owner", AT
-    )
+    record = promote("ranker-v2", RegistryStatus.CANDIDATE, RegistryStatus.VALIDATING, "owner", AT)
     assert record.target_id == "ranker-v2"
     assert record.from_status == RegistryStatus.CANDIDATE
     assert record.to_status == RegistryStatus.VALIDATING

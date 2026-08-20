@@ -141,9 +141,7 @@ def _bars_only_frame(symbols: list[str]) -> pd.DataFrame:
         for name, spec in FEATURE_CATALOG.items()
         if spec.group in BARS_DRIVEN_GROUPS and name not in NOT_BARS_DRIVEN
     }
-    return pd.DataFrame(
-        {sym: _catalog_row(bars_driven) for sym in symbols}, dtype=float
-    ).T
+    return pd.DataFrame({sym: _catalog_row(bars_driven) for sym in symbols}, dtype=float).T
 
 
 def test_coverage_denominator_is_asset_class_aware() -> None:
@@ -182,9 +180,7 @@ def test_confidence_discriminates_once_coverage_is_honest() -> None:
     from dynamo.research.quant.catalog import FEATURE_CATALOG
 
     thin = _catalog_row({"ret_20d": 0.1, "month_of_year": 3.0})
-    frame = pd.concat(
-        [_bars_only_frame(["XLK"]), pd.DataFrame({"THIN": thin}, dtype=float).T]
-    )
+    frame = pd.concat([_bars_only_frame(["XLK"]), pd.DataFrame({"THIN": thin}, dtype=float).T])
     frame = frame.reindex(columns=pd.Index(list(FEATURE_CATALOG)))
     scores = {
         s.symbol: s

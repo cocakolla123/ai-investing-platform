@@ -127,9 +127,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="bundle version AND registry id (e.g. campaign-v1); must be unused",
     )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--symbols", nargs="+", default=None, help="explicit training symbols"
-    )
+    group.add_argument("--symbols", nargs="+", default=None, help="explicit training symbols")
     group.add_argument(
         "--symbols-file",
         type=Path,
@@ -258,9 +256,7 @@ def progress_file_writer(path: Path) -> Callable[[int, int, float], None]:
     return write
 
 
-def label_sector_map(
-    sectors: Mapping[str, str], universe: Sequence[str]
-) -> dict[str, str]:
+def label_sector_map(sectors: Mapping[str, str], universe: Sequence[str]) -> dict[str, str]:
     """symbol -> excess-return benchmark: the sector SPDR where one exists,
     else SPY (crypto pairs and unclassified names — documented decision:
     market-relative excess is the honest fallback, NaN would silently drop
@@ -348,13 +344,9 @@ def build_panel(
                 f"elapsed {_hms(elapsed)}, ETA {_hms(eta)}"
             )
     if progress is not None and cache is not None and feature_sessions:
-        progress(
-            f"panel: feature cache served {cache_hits}/{len(feature_sessions)} sessions"
-        )
+        progress(f"panel: feature cache served {cache_hits}/{len(feature_sessions)} sessions")
     if not feature_frames:
-        empty = pd.DataFrame(
-            index=pd.MultiIndex.from_arrays([[], []], names=["ts", "symbol"])
-        )
+        empty = pd.DataFrame(index=pd.MultiIndex.from_arrays([[], []], names=["ts", "symbol"]))
         return TrainingPanel(features=empty, labels=empty, sessions=())
     features_panel = pd.concat(feature_frames, keys=keys, names=["ts", "symbol"])
     labels_panel = pd.concat(label_frames, keys=keys, names=["ts", "symbol"])
@@ -391,9 +383,7 @@ def select_feature_groups(features: Any, groups: Sequence[str]) -> Any:
     wanted = [str(g) for g in groups]
     unknown = sorted(set(wanted) - set(GROUP_TARGETS))
     if unknown:
-        raise ValueError(
-            f"unknown feature group(s) {unknown}; valid: {sorted(GROUP_TARGETS)}"
-        )
+        raise ValueError(f"unknown feature group(s) {unknown}; valid: {sorted(GROUP_TARGETS)}")
     keep = [
         c
         for c in features.columns
@@ -424,21 +414,17 @@ def check_panel(panel: TrainingPanel) -> tuple[int, int]:
     feature_any = cast(pd.Series, features.notna().any(axis=1))
     by_symbol_label = label_any.groupby(level="symbol").any()
     by_symbol_feature = feature_any.groupby(level="symbol").any()
-    usable = (by_symbol_label & by_symbol_feature.reindex(by_symbol_label.index, fill_value=False))
+    usable = by_symbol_label & by_symbol_feature.reindex(by_symbol_label.index, fill_value=False)
     n_symbols = int(usable.sum())
     problems = []
     if n_sessions < MIN_PANEL_SESSIONS:
-        problems.append(
-            f"{n_sessions} feature sessions < {MIN_PANEL_SESSIONS} minimum"
-        )
+        problems.append(f"{n_sessions} feature sessions < {MIN_PANEL_SESSIONS} minimum")
     if n_symbols < MIN_PANEL_SYMBOLS:
         problems.append(
             f"{n_symbols} usable symbols (label + features) < {MIN_PANEL_SYMBOLS} minimum"
         )
     if problems:
-        raise PanelTooSmallError(
-            "refusing to train on a degenerate panel: " + "; ".join(problems)
-        )
+        raise PanelTooSmallError("refusing to train on a degenerate panel: " + "; ".join(problems))
     return n_sessions, n_symbols
 
 
@@ -579,9 +565,7 @@ def train_quant_bundle(
     # (seasonal-naive, AutoETS) stays available through train_and_evaluate
     # directly, but per-symbol ETS fits across folds would dominate runtime
     # for zero effect on the doc-04 ship gates' primary comparisons.
-    baselines = {
-        "baseline-historic-average": lambda: StatsforecastBaseline("historic_average")
-    }
+    baselines = {"baseline-historic-average": lambda: StatsforecastBaseline("historic_average")}
 
     def _task_model(objective: str) -> Any:
         if ensemble_seeds == 1:
@@ -662,9 +646,7 @@ def train_quant_bundle(
         "rank_ships_ok": bool(task_reports["rank"]["ships_ok"][MODEL_NAME]),
         "downside_brier_pooled": _num(down_pooled.get("brier_pooled")),
         "downside_auc_pooled": _num(down_pooled.get("auc_pooled")),
-        "downside_base_rate_brier_pooled": _num(
-            down_pooled.get("base_rate_brier_pooled")
-        ),
+        "downside_base_rate_brier_pooled": _num(down_pooled.get("base_rate_brier_pooled")),
         "vol_rmse_log_pooled": _num(vol_pooled.get("rmse_log_vol_pooled")),
         "vol_qlike_pooled": _num(vol_pooled.get("qlike_pooled")),
         "n_folds": int(task_reports["rank"]["n_folds"]),
@@ -737,20 +719,14 @@ def registry_model_version(report: TrainReport, train_start: date, train_end: da
                 else {}
             ),
             **(
-                {"label_kind": report.label_kind}
-                if report.label_kind != DEFAULT_LABEL_KIND
-                else {}
+                {"label_kind": report.label_kind} if report.label_kind != DEFAULT_LABEL_KIND else {}
             ),
             **(
                 {"horizons": list(report.horizons)}
                 if report.horizons != (HORIZON_SESSIONS,)
                 else {}
             ),
-            **(
-                {"ensemble_seeds": report.ensemble_seeds}
-                if report.ensemble_seeds > 1
-                else {}
-            ),
+            **({"ensemble_seeds": report.ensemble_seeds} if report.ensemble_seeds > 1 else {}),
         },
         metrics=dict(report.registry_metrics),
         artifact_path=str(report.bundle_path),
@@ -776,10 +752,7 @@ def print_go_no_go(report: TrainReport, out: Callable[[str], None] = print) -> N
     out("  fold  test window               rank IC")
     for fold in report.task_reports["rank"]["folds"]:
         ic = fold["models"][MODEL_NAME]["rank_ic"]
-        out(
-            f"  {fold['fold_id']:>4}  {fold['test_start']} .. {fold['test_end']}  "
-            f"{_fmt(ic)}"
-        )
+        out(f"  {fold['fold_id']:>4}  {fold['test_start']} .. {fold['test_end']}  {_fmt(ic)}")
     out(
         f"  pooled rank IC {_fmt(m['rank_ic_pooled'])}  "
         f"t-stat {_fmt(m['rank_ic_t_stat'], '.2f')} "
@@ -825,10 +798,7 @@ def main(argv: list[str] | None = None) -> int:
 
         unknown = sorted(set(args.feature_groups) - set(GROUP_TARGETS))
         if unknown:
-            print(
-                f"refused: unknown feature group(s) {unknown} — "
-                f"valid: {sorted(GROUP_TARGETS)}"
-            )
+            print(f"refused: unknown feature group(s) {unknown} — valid: {sorted(GROUP_TARGETS)}")
             return 1
     # Validate cheap knobs NOW — a typo must fail in milliseconds, not after
     # an hours-long panel build.
@@ -894,9 +864,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_cache:
         from dynamo.research.quant.panel_cache import PanelFeatureCache
 
-        cache = PanelFeatureCache(
-            Path(Settings().artifact_dir) / "panel_cache", universe
-        )
+        cache = PanelFeatureCache(Path(Settings().artifact_dir) / "panel_cache", universe)
         print(f"panel cache: {cache.directory} (bypass with --no-cache)", flush=True)
     panel = build_panel(
         lambda d: HistoricalDataGateway(engine, d).feature_inputs(universe),
@@ -908,9 +876,7 @@ def main(argv: list[str] | None = None) -> int:
         progress=lambda msg: print(msg, flush=True),
         cache=cache,
         on_session=(
-            progress_file_writer(args.progress_file)
-            if args.progress_file is not None
-            else None
+            progress_file_writer(args.progress_file) if args.progress_file is not None else None
         ),
     )
     non_default = (
@@ -950,9 +916,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print_go_no_go(report)
-    registry.insert_candidate(
-        registry_model_version(report, args.train_start, args.train_end)
-    )
+    registry.insert_candidate(registry_model_version(report, args.train_start, args.train_end))
     print(f"  bundle: {report.bundle_path}")
     print(
         f"  registered as CANDIDATE (model_type='quant_bundle', id={report.version!r}) — "

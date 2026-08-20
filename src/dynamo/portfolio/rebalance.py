@@ -72,10 +72,7 @@ def evaluate_triggers(inputs: TriggerInputs) -> RebalanceDecision:
             triggers.add(RebalanceTrigger.VERDICT_CHANGE)
             details.append(f"verdict change: held {symbol} now {curr.value}")
         elif (
-            symbol not in held
-            and curr is not None
-            and curr in _ENTRYISH
-            and prev not in _ENTRYISH
+            symbol not in held and curr is not None and curr in _ENTRYISH and prev not in _ENTRYISH
         ):
             triggers.add(RebalanceTrigger.VERDICT_CHANGE)
             details.append(f"verdict change: new {curr.value} candidate {symbol}")
@@ -91,9 +88,7 @@ def evaluate_triggers(inputs: TriggerInputs) -> RebalanceDecision:
     regime_now = inputs.verdict.regime.regime
     if inputs.previous_regime is not None and inputs.previous_regime != regime_now:
         triggers.add(RebalanceTrigger.REGIME_CHANGE)
-        details.append(
-            f"regime change: {inputs.previous_regime.value} -> {regime_now.value}"
-        )
+        details.append(f"regime change: {inputs.previous_regime.value} -> {regime_now.value}")
 
     if inputs.scheduled_review:
         triggers.add(RebalanceTrigger.SCHEDULED)
@@ -114,13 +109,9 @@ def _risk_breaches(weights: Mapping[str, float], verdict: RiskVerdict) -> list[s
     out: list[str] = []
     gross = math.fsum(w for w in weights.values() if w > 0.0)
     if gross > verdict.gross_exposure_cap + 1e-12:
-        out.append(
-            f"risk breach: gross {gross:.4f} > cap {verdict.gross_exposure_cap:.4f}"
-        )
+        out.append(f"risk breach: gross {gross:.4f} > cap {verdict.gross_exposure_cap:.4f}")
     if 1.0 - gross < verdict.cash_floor - 1e-12:
-        out.append(
-            f"risk breach: cash {1.0 - gross:.4f} < floor {verdict.cash_floor:.4f}"
-        )
+        out.append(f"risk breach: cash {1.0 - gross:.4f} < floor {verdict.cash_floor:.4f}")
     vetoed = {v.symbol for v in verdict.vetoes if v.symbol != "*"}
     for symbol in sorted(weights):
         w = weights[symbol]

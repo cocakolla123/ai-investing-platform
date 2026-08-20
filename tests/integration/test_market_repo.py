@@ -53,7 +53,10 @@ def bar(symbol: str, day: int, source: str, close: float, adj: float | None) -> 
     return Bar(
         symbol=symbol,
         ts=datetime(2026, 7, day, tzinfo=UTC),
-        open=close, high=close, low=close, close=close,
+        open=close,
+        high=close,
+        low=close,
+        close=close,
         volume=1000,
         adj_close=adj,
         source=source,
@@ -96,12 +99,20 @@ def test_universe_at_point_in_time(repo: MarketDataRepository) -> None:
     repo.upsert_universe_membership(
         [
             UniverseMembership(
-                symbol="AAPL", tier=Tier.CORE, valid_from=date(2026, 1, 1),
-                valid_to=None, reason="seed", approved_by="seed",
+                symbol="AAPL",
+                tier=Tier.CORE,
+                valid_from=date(2026, 1, 1),
+                valid_to=None,
+                reason="seed",
+                approved_by="seed",
             ),
             UniverseMembership(
-                symbol="NEWCO", tier=Tier.PROMOTED, valid_from=date(2026, 7, 1),
-                valid_to=date(2026, 7, 31), reason="triage", approved_by=None,
+                symbol="NEWCO",
+                tier=Tier.PROMOTED,
+                valid_from=date(2026, 7, 1),
+                valid_to=date(2026, 7, 31),
+                reason="triage",
+                approved_by=None,
             ),
         ]
     )
@@ -115,8 +126,12 @@ def test_universe_at_point_in_time(repo: MarketDataRepository) -> None:
 
 def _core(symbol: str, valid_from: date, approved_by: str | None) -> UniverseMembership:
     return UniverseMembership(
-        symbol=symbol, tier=Tier.CORE, valid_from=valid_from,
-        valid_to=None, reason="core seed: built-in starter list", approved_by=approved_by,
+        symbol=symbol,
+        tier=Tier.CORE,
+        valid_from=valid_from,
+        valid_to=None,
+        reason="core seed: built-in starter list",
+        approved_by=approved_by,
     )
 
 
@@ -134,8 +149,12 @@ def test_backdate_core_universe_replaces_seed_in_one_shot(
     )
     backdated = [
         UniverseMembership(
-            symbol=s, tier=Tier.CORE, valid_from=date(2024, 12, 1), valid_to=None,
-            reason="replay backfill campaign backdate", approved_by="replay-backdate",
+            symbol=s,
+            tier=Tier.CORE,
+            valid_from=date(2024, 12, 1),
+            valid_to=None,
+            reason="replay backfill campaign backdate",
+            approved_by="replay-backdate",
         )
         for s in ("AAPL", "SPY")
     ]
@@ -144,9 +163,7 @@ def test_backdate_core_universe_replaces_seed_in_one_shot(
 
     with engine.connect() as conn:
         rows = conn.execute(
-            select(schema.universe_membership).order_by(
-                schema.universe_membership.c.symbol
-            )
+            select(schema.universe_membership).order_by(schema.universe_membership.c.symbol)
         ).all()
     by_symbol: dict[str, list] = {}
     for r in rows:
@@ -176,7 +193,10 @@ def test_backdate_core_universe_is_idempotent_and_rebases(
         repo.backdate_core_universe(
             [
                 UniverseMembership(
-                    symbol="AAPL", tier=Tier.CORE, valid_from=as_of, valid_to=None,
+                    symbol="AAPL",
+                    tier=Tier.CORE,
+                    valid_from=as_of,
+                    valid_to=None,
                     reason="replay backfill campaign backdate",
                     approved_by="replay-backdate",
                 )
@@ -231,8 +251,12 @@ def test_quarantine_and_alert_writes(repo: MarketDataRepository, engine: Engine)
 
 def test_generic_upsert_on_quant_scores(repo: MarketDataRepository, engine: Engine) -> None:
     row = {
-        "symbol": "ACME", "as_of": date(2026, 7, 31), "model_version": "v1",
-        "expected_excess_return": 0.02, "confidence": 0.5, "feature_coverage": 1.0,
+        "symbol": "ACME",
+        "as_of": date(2026, 7, 31),
+        "model_version": "v1",
+        "expected_excess_return": 0.02,
+        "confidence": 0.5,
+        "feature_coverage": 1.0,
     }
     repo.upsert_rows(schema.quant_scores, [row])
     repo.upsert_rows(schema.quant_scores, [{**row, "expected_excess_return": 0.03}])
@@ -275,10 +299,22 @@ def test_upsert_xbrl_facts_dedupes_in_batch_keep_last(
 
     filed = datetime(2026, 2, 1, tzinfo=UTC)
     facts = [
-        XbrlFact(cik="0000000001", tag="Revenues", period_end=date(2025, 12, 31),
-                 filed_at=filed, value=100.0, unit="USD"),
-        XbrlFact(cik="0000000001", tag="Revenues", period_end=date(2025, 12, 31),
-                 filed_at=filed, value=400.0, unit="USD"),
+        XbrlFact(
+            cik="0000000001",
+            tag="Revenues",
+            period_end=date(2025, 12, 31),
+            filed_at=filed,
+            value=100.0,
+            unit="USD",
+        ),
+        XbrlFact(
+            cik="0000000001",
+            tag="Revenues",
+            period_end=date(2025, 12, 31),
+            filed_at=filed,
+            value=400.0,
+            unit="USD",
+        ),
     ]
     assert repo.upsert_xbrl_facts(facts) == 1
     with engine.connect() as conn:
@@ -295,10 +331,22 @@ def test_upsert_transcripts_dedupes_in_batch_keep_last(
     from dynamo.domain.models.market import Transcript
 
     transcripts = [
-        Transcript(symbol="ACME", event_date=date(2026, 1, 15), source="defeatbeta",
-                   period="Q4-2025", content="first draft", speakers=None),
-        Transcript(symbol="ACME", event_date=date(2026, 1, 15), source="defeatbeta",
-                   period="Q4-2025", content="revised", speakers=None),
+        Transcript(
+            symbol="ACME",
+            event_date=date(2026, 1, 15),
+            source="defeatbeta",
+            period="Q4-2025",
+            content="first draft",
+            speakers=None,
+        ),
+        Transcript(
+            symbol="ACME",
+            event_date=date(2026, 1, 15),
+            source="defeatbeta",
+            period="Q4-2025",
+            content="revised",
+            speakers=None,
+        ),
     ]
     assert repo.upsert_transcripts(transcripts) == 1
     with engine.connect() as conn:
@@ -317,8 +365,13 @@ def test_upsert_insider_tx_dedupes_in_batch_keep_last(
 
     def tx(shares: float) -> InsiderTx:
         return InsiderTx(
-            accession_no="0001-26-000001", symbol="ACME", insider_name="DOE JANE",
-            role="Director", tx_type="P", shares=shares, price=10.0,
+            accession_no="0001-26-000001",
+            symbol="ACME",
+            insider_name="DOE JANE",
+            role="Director",
+            tx_type="P",
+            shares=shares,
+            price=10.0,
             filed_at=datetime(2026, 8, 6, 12, tzinfo=UTC),
         )
 
@@ -339,10 +392,12 @@ def test_upsert_earnings_dedupes_in_batch_keep_last(
     from dynamo.domain.models.market import EarningsEvent
 
     events = [
-        EarningsEvent(symbol="ACME", event_date=date(2026, 8, 6), period="2026Q2",
-                      eps_est=1.0, eps_act=None),
-        EarningsEvent(symbol="ACME", event_date=date(2026, 8, 6), period="2026Q2",
-                      eps_est=1.0, eps_act=1.4),
+        EarningsEvent(
+            symbol="ACME", event_date=date(2026, 8, 6), period="2026Q2", eps_est=1.0, eps_act=None
+        ),
+        EarningsEvent(
+            symbol="ACME", event_date=date(2026, 8, 6), period="2026Q2", eps_est=1.0, eps_act=1.4
+        ),
     ]
     assert repo.upsert_earnings(events) == 1
     with engine.connect() as conn:
@@ -363,12 +418,7 @@ def test_append_estimate_vintages_appends_only_on_change(
     t0 = datetime(2026, 8, 1, 7, 0, tzinfo=UTC)
     assert repo.append_estimate_vintages([event], fetched_at=t0) == 1
     # Same estimate next day: no daily duplicate.
-    assert (
-        repo.append_estimate_vintages(
-            [event], fetched_at=t0.replace(day=2)
-        )
-        == 0
-    )
+    assert repo.append_estimate_vintages([event], fetched_at=t0.replace(day=2)) == 0
     # Revision: appended as a NEW vintage; the old row survives.
     revised = EarningsEvent(symbol="AAPL", event_date=date(2026, 9, 1), eps_est=1.25)
     assert repo.append_estimate_vintages([revised], fetched_at=t0.replace(day=3)) == 1

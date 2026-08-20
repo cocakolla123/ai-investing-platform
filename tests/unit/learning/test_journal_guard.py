@@ -80,9 +80,7 @@ def test_the_refusal_says_what_is_wrong_and_how_to_fix_it() -> None:
 def test_the_escape_hatch_allows_it_and_still_shouts() -> None:
     """An operator reproducing a historical run may opt in — but the run log
     must say the committee is seeing random precedent."""
-    gate = journal_retrieval_gate(
-        query_backend=HASH_FALLBACK_BACKEND, allow_hash_fallback=True
-    )
+    gate = journal_retrieval_gate(query_backend=HASH_FALLBACK_BACKEND, allow_hash_fallback=True)
     assert gate.allowed is True
     assert "RANDOM" in gate.reason
     assert HASH_FALLBACK_REMEDIATION in gate.reason

@@ -131,9 +131,7 @@ def expected_calibration_error(
     total = sum(b.n for b in buckets.values())
     if total == 0:
         return None
-    return sum(
-        (b.n / total) * abs(b.mean_conviction - b.success_rate) for b in buckets.values()
-    )
+    return sum((b.n / total) * abs(b.mean_conviction - b.success_rate) for b in buckets.values())
 
 
 def calibration_summary(
@@ -301,9 +299,7 @@ def abstention_rate(action_counts: Mapping[str, int]) -> float | None:
     total = sum(max(int(v), 0) for v in action_counts.values())
     if total == 0:
         return None
-    abstained = sum(
-        max(int(v), 0) for k, v in action_counts.items() if k in ABSTAIN_ACTIONS
-    )
+    abstained = sum(max(int(v), 0) for k, v in action_counts.items() if k in ABSTAIN_ACTIONS)
     return abstained / total
 
 
@@ -384,6 +380,7 @@ def latest_value_of_learning(
     value, from ``generation_results`` rows passed in (sign convention lives
     in ``learning/generations.py``: positive = learning beats the frozen
     control). ``None`` when no generation trained."""
+
     def _num(raw: object, default: float = 0.0) -> float:
         return float(raw) if isinstance(raw, int | float) else default
 
@@ -441,8 +438,9 @@ def learning_metric_rows(
         headline("learning.value_of_learning_n_test", float(learned[1]))
 
     for label, bucket in success_rate_by_conviction_bucket(experiences).items():
-        rows.append(("learning.bucket_success_rate", "conviction_bucket", label,
-                     bucket.success_rate))
+        rows.append(
+            ("learning.bucket_success_rate", "conviction_bucket", label, bucket.success_rate)
+        )
         rows.append(("learning.bucket_n", "conviction_bucket", label, float(bucket.n)))
 
     for scope_type, cuts in (

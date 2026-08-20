@@ -123,9 +123,7 @@ def consolidated_equivalent_dollar_volume(
     return value / share
 
 
-def observed_dollar_volume_threshold(
-    consolidated_threshold: float, source: str | None
-) -> float:
+def observed_dollar_volume_threshold(consolidated_threshold: float, source: str | None) -> float:
     """Inverse of :func:`consolidated_equivalent_dollar_volume`.
 
     Converts a consolidated-equivalent threshold into the observed number a

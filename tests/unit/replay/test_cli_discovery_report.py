@@ -117,9 +117,7 @@ def test_a_run_with_no_flags_exits_1_and_says_why(
 
 
 def test_reports_the_gate_numbers(capsys: pytest.CaptureFixture[str]) -> None:
-    rc = replay_cli.main(
-        ["discovery-report", "--run-id", "replay-disc", "--horizon-sessions", "5"]
-    )
+    rc = replay_cli.main(["discovery-report", "--run-id", "replay-disc", "--horizon-sessions", "5"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "range_bound" in out
@@ -149,9 +147,7 @@ def test_the_gateway_is_pinned_past_the_window_so_forward_returns_exist() -> Non
 
     FakeGateway.__init__ = record  # type: ignore[method-assign]
     try:
-        replay_cli.main(
-            ["discovery-report", "--run-id", "replay-disc", "--horizon-sessions", "20"]
-        )
+        replay_cli.main(["discovery-report", "--run-id", "replay-disc", "--horizon-sessions", "20"])
     finally:
         FakeGateway.__init__ = original  # type: ignore[method-assign]
 

@@ -44,9 +44,7 @@ def load_prompt(name: str) -> LoadedPrompt:
     """Read a prompt from the dynamo.research.prompts package -> (version, system)."""
     if name not in PROMPT_NAMES:
         raise PromptError(f"unknown prompt {name!r}; expected one of {PROMPT_NAMES}")
-    raw = (
-        resources.files("dynamo.research.prompts").joinpath(f"{name}.md").read_text("utf-8")
-    )
+    raw = resources.files("dynamo.research.prompts").joinpath(f"{name}.md").read_text("utf-8")
     front = _FRONTMATTER_RE.match(raw)
     if front is None:
         raise PromptError(f"prompt {name!r} is missing YAML frontmatter")

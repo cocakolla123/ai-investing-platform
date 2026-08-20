@@ -97,9 +97,7 @@ def write_backtest_artifacts(
     artifacts: dict[str, Path] = {"report": report_path}
 
     returns = _returns_from_equity(equity_curve)
-    benchmark = (
-        _returns_from_equity(benchmark_closes) if benchmark_closes is not None else None
-    )
+    benchmark = _returns_from_equity(benchmark_closes) if benchmark_closes is not None else None
     if len(returns) < 2:
         log.info("tearsheet_skipped", reason="not enough sessions for returns")
         return artifacts

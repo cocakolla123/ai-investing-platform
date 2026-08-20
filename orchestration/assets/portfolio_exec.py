@@ -458,9 +458,7 @@ def risk_scenarios_asset(
         context.log.warning("risk_scenarios: no portfolio state — skipping")
         return MaterializeResult(metadata={"skipped": "no portfolio state"})
 
-    prices = _latest_prices(
-        dynamo, sorted({p.symbol for p in state.positions}), as_of
-    )
+    prices = _latest_prices(dynamo, sorted({p.symbol for p in state.positions}), as_of)
     weights = {
         p.symbol: p.qty * prices[p.symbol] / state.equity
         for p in state.positions
@@ -526,7 +524,8 @@ def risk_scenarios_asset(
     written = RiskScenarioRepository(dynamo.engine()).upsert(rows)
 
     breaches = [
-        r["scenario"] for r in rows
+        r["scenario"]
+        for r in rows
         if r["kind"] == "stress" and float(r["equity_impact_pct"]) <= DEFENSIVE_FLOOR_BREACH
     ]
     if breaches:
@@ -786,9 +785,7 @@ def _equities_sticky_halt_active(dynamo: DynamoResource) -> bool:
     from dynamo.persistence.repositories.execution import ReconciliationRepository
 
     runs = ReconciliationRepository(dynamo.engine()).unacked_divergent_runs()
-    return any(
-        not str(r.get("scope", "")).startswith(_FOREIGN_HALT_PREFIXES) for r in runs
-    )
+    return any(not str(r.get("scope", "")).startswith(_FOREIGN_HALT_PREFIXES) for r in runs)
 
 
 def _ladder_halt_active(dynamo: DynamoResource) -> bool:
@@ -1019,6 +1016,7 @@ def reconcile_broker_state(context: OpExecutionContext, dynamo: DynamoResource) 
     if not (s.alpaca_api_key and s.alpaca_api_secret):
         context.log.info("reconciliation: no broker configured — skipping")
         return
+
     def alert(name: str, message: str) -> None:
         dynamo.alert("page", name, message)
 

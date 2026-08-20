@@ -260,9 +260,7 @@ def options_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) 
         select(qs.c.symbol, qs.c.composite).where(qs.c.as_of >= as_of - timedelta(days=7)),
     )
     long_term_eligible = frozenset(
-        str(r["symbol"])
-        for r in quality_df.to_dict(orient="records")
-        if r["composite"] is not None
+        str(r["symbol"]) for r in quality_df.to_dict(orient="records") if r["composite"] is not None
     )
 
     candidates = sorted(set(verdicts) | set(held))

@@ -50,8 +50,12 @@ def engine(integration_db_url: str) -> Iterator[Engine]:
 
 def _record(repo: LadderEventRepository, *, to: str, ack: bool, kill: bool = False) -> int:
     return repo.record(
-        as_of=AS_OF, from_rung="normal", to_rung=to, drawdown=-0.2,
-        requires_ack=ack, kill_switch_engaged=kill,
+        as_of=AS_OF,
+        from_rung="normal",
+        to_rung=to,
+        drawdown=-0.2,
+        requires_ack=ack,
+        kill_switch_engaged=kill,
     )
 
 
@@ -104,12 +108,19 @@ def test_the_dd20_row_records_that_the_switch_was_engaged(engine: Engine) -> Non
 def _rows(as_of: date, impact: float = -0.31) -> list[dict[str, object]]:
     return [
         {
-            "as_of": as_of, "kind": "stress", "scenario": "2008_q4",
-            "equity_impact_pct": impact, "ladder_implication": "dd20", "details": {},
+            "as_of": as_of,
+            "kind": "stress",
+            "scenario": "2008_q4",
+            "equity_impact_pct": impact,
+            "ladder_implication": "dd20",
+            "details": {},
         },
         {
-            "as_of": as_of, "kind": "monte_carlo", "scenario": "20d_student_t_copula",
-            "equity_impact_pct": -0.08, "ladder_implication": None,
+            "as_of": as_of,
+            "kind": "monte_carlo",
+            "scenario": "20d_student_t_copula",
+            "equity_impact_pct": -0.08,
+            "ladder_implication": None,
             "details": {"n_paths": 10000},
         },
     ]
@@ -148,9 +159,7 @@ def test_no_scenarios_yet_reads_as_empty(engine: Engine) -> None:
 # --- VaR backtest reader -------------------------------------------------
 
 
-def _seed_var_history(
-    engine: Engine, *, sessions: int, breach_every: int | None = None
-) -> int:
+def _seed_var_history(engine: Engine, *, sessions: int, breach_every: int | None = None) -> int:
     """One verdict + one equity point per session; equity drifts -0.1%/day
     except on breach days, which lose 9% against a 2% VaR forecast.
 

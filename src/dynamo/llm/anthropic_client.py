@@ -71,8 +71,10 @@ class AnthropicClient:
         client: Any | None = None,
     ) -> None:
         self._meter = cost_meter
-        self._client: Any = client if client is not None else anthropic.Anthropic(
-            api_key=settings.anthropic_api_key
+        self._client: Any = (
+            client
+            if client is not None
+            else anthropic.Anthropic(api_key=settings.anthropic_api_key)
         )
         self._tier_models: dict[str, str] = {
             "screen": settings.model_screen,
@@ -252,9 +254,7 @@ class AnthropicClient:
     def batch_results(self, batch_id: str) -> Iterable[tuple[str, dict[str, Any] | None]]:
         return self._iter_batch_results(batch_id)
 
-    def _iter_batch_results(
-        self, batch_id: str
-    ) -> Iterator[tuple[str, dict[str, Any] | None]]:
+    def _iter_batch_results(self, batch_id: str) -> Iterator[tuple[str, dict[str, Any] | None]]:
         schemas = self._batch_schemas.get(batch_id, {})
         for entry in self._client.messages.batches.results(batch_id):
             custom_id = str(entry.custom_id)

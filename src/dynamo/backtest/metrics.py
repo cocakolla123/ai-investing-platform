@@ -198,9 +198,7 @@ def trade_stats(realized_pnls: Sequence[tuple[str, str, float]]) -> TradeStats:
         win_rate=len(wins) / len(pnls),
         avg_win=gross_win / len(wins) if wins else 0.0,
         avg_loss=-gross_loss / len(losses) if losses else 0.0,
-        worst_trades=tuple(
-            {"date": d, "symbol": s, "pnl": p} for d, s, p in worst
-        ),
+        worst_trades=tuple({"date": d, "symbol": s, "pnl": p} for d, s, p in worst),
     )
 
 
@@ -266,9 +264,7 @@ def deflated_sharpe_ratio(
     var_hat = (1.0 - skew * sr + (kurtosis - 1.0) / 4.0 * sr * sr) / (n_obs - 1)
     var_hat = max(var_hat, 1e-12)
     v_trials = (
-        sharpe_variance_across_trials
-        if sharpe_variance_across_trials is not None
-        else var_hat
+        sharpe_variance_across_trials if sharpe_variance_across_trials is not None else var_hat
     )
     sr0 = expected_max_sharpe(trials, v_trials)
     z = (sr - sr0) * math.sqrt(n_obs - 1) / math.sqrt(max(var_hat * (n_obs - 1), 1e-12))
@@ -311,11 +307,7 @@ def build_report(
     skew = float(pd.Series(r).skew()) if r.size >= 3 else 0.0
     kurt = float(pd.Series(r).kurt() + 3.0) if r.size >= 4 else 3.0
     dsr = deflated_sharpe_ratio(block.sharpe, r.size + 1, trials, skew, kurt)
-    bench = (
-        benchmark_comparison(equity, benchmark_closes)
-        if benchmark_closes is not None
-        else None
-    )
+    bench = benchmark_comparison(equity, benchmark_closes) if benchmark_closes is not None else None
     return BacktestReport(
         run_id=run_id,
         engine="event_driven",

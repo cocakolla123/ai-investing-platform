@@ -172,9 +172,7 @@ class AlpacaOptionsChain:
         out: dict[str, dict[str, Any]] = {}
         for i in range(0, len(symbols), SNAPSHOT_BATCH):
             batch = symbols[i : i + SNAPSHOT_BATCH]
-            raw = self._data.get_option_snapshot(
-                OptionSnapshotRequest(symbol_or_symbols=batch)
-            )
+            raw = self._data.get_option_snapshot(OptionSnapshotRequest(symbol_or_symbols=batch))
             payload = raw if isinstance(raw, dict) else {}
             # raw_data nests under "snapshots" in some versions; accept both.
             snaps = payload.get("snapshots", payload)

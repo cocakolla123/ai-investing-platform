@@ -36,7 +36,8 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_quant_replay_full_run_under_total_socket_block(
-    fixture_frames: Any, no_network: None  # noqa: F811
+    fixture_frames: Any,  # noqa: F811
+    no_network: None,
 ) -> None:
     sessions, bars, scores = fixture_frames
     window = sessions[-RUN_SESSIONS:]
@@ -54,7 +55,8 @@ def test_quant_replay_full_run_under_total_socket_block(
 
 
 def test_portfolio_replay_full_run_under_total_socket_block(
-    fixture_frames: Any, no_network: None  # noqa: F811
+    fixture_frames: Any,  # noqa: F811
+    no_network: None,
 ) -> None:
     from tests.unit.replay.test_runner_portfolio import (
         SOURCE_RUN_ID,
@@ -85,7 +87,8 @@ def test_portfolio_replay_full_run_under_total_socket_block(
 
 
 def test_committee_replay_only_egress_is_the_injected_client(
-    fixture_frames: Any, no_network: None  # noqa: F811
+    fixture_frames: Any,  # noqa: F811
+    no_network: None,
 ) -> None:
     """Committee mode under the total socket block: the run completes, and
     EVERY outbound request went through the injected recording stub — the

@@ -60,23 +60,24 @@ def test_prices_apply_thin_market_trust_flag() -> None:
 
     thin_market = {**MARKET, "volumeNum": 500.0}
     thin = list(
-        make_client(
-            httpx.MockTransport(lambda req: httpx.Response(200, json=thin_market))
-        ).prices(["500001"])
+        make_client(httpx.MockTransport(lambda req: httpx.Response(200, json=thin_market))).prices(
+            ["500001"]
+        )
     )
     assert not thin[0].trusted
 
     wide_market = {**MARKET, "spread": 0.10}
     wide = list(
-        make_client(
-            httpx.MockTransport(lambda req: httpx.Response(200, json=wide_market))
-        ).prices(["500001"])
+        make_client(httpx.MockTransport(lambda req: httpx.Response(200, json=wide_market))).prices(
+            ["500001"]
+        )
     )
     assert not wide[0].trusted
 
 
 def test_closed_market_resolution_from_prices() -> None:
     closed = {**MARKET, "closed": True, "outcomePrices": '["1", "0"]'}
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[closed] if "offset" in request.url.params else [])
 

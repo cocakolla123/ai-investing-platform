@@ -89,9 +89,7 @@ def test_rsi_is_real_for_equities_sharing_a_panel_with_crypto() -> None:
     equities = make_bars(["AAA", "BBB"], n_sessions=300, start="2025-01-01")
     end = str(to_ts(str(equities["ts"].max())).date())
     bars = pd.concat([equities, _crypto_bars(["BTC/USD"], 420, 3, end)], ignore_index=True)
-    raw = build_raw_features(
-        FeatureInputs(bars=bars), to_ts(end), ["AAA", "BBB", "BTC/USD"]
-    )
+    raw = build_raw_features(FeatureInputs(bars=bars), to_ts(end), ["AAA", "BBB", "BTC/USD"])
     rsi = raw["rsi_14"]
     assert bool(rsi.notna().all())
     assert not (rsi == 50.0).any()  # no fabricated neutrals
@@ -130,10 +128,7 @@ def test_breadth_uses_the_equity_reference_set_not_whoever_has_an_ma() -> None:
     )
     expected = float(
         np.mean(
-            [
-                panel[s].dropna().iloc[-1] > panel[s].dropna().iloc[-200:].mean()
-                for s in equities
-            ]
+            [panel[s].dropna().iloc[-1] > panel[s].dropna().iloc[-200:].mean() for s in equities]
         )
     )
     assert abs(float(breadth.iloc[0]) - expected) < 1e-12
@@ -162,8 +157,16 @@ def test_asset_class_inference_from_the_sector_map() -> None:
 
 
 def test_applicable_features_drop_only_structurally_impossible_columns() -> None:
-    names = ["ret_20d", "fcf_yield", "roic_ttm", "insider_net_buy_90d",
-             "days_to_next_earnings", "rs_20d_sector", "month_of_year", "f1"]
+    names = [
+        "ret_20d",
+        "fcf_yield",
+        "roic_ttm",
+        "insider_net_buy_90d",
+        "days_to_next_earnings",
+        "rs_20d_sector",
+        "month_of_year",
+        "f1",
+    ]
     equity = applicable_features(ASSET_CLASS_EQUITY, names)
     assert equity == names  # an operating company is expected to have it all
     for cls in (ASSET_CLASS_ETF, ASSET_CLASS_CRYPTO):

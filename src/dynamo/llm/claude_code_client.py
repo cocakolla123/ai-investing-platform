@@ -208,9 +208,7 @@ class ClaudeCodeResearchModel:
     @staticmethod
     def _build_prompt(*, context: str, instruction: str, schema: dict[str, Any]) -> str:
         # No prompt cache through the CLI -> boundary markers are just joined.
-        flat_context = "\n\n".join(
-            seg for seg in context.split(CONTEXT_CACHE_BOUNDARY) if seg
-        )
+        flat_context = "\n\n".join(seg for seg in context.split(CONTEXT_CACHE_BOUNDARY) if seg)
         suffixed = instruction + _FALLBACK_SUFFIX + json.dumps(schema, sort_keys=True)
         return f"{flat_context}\n\n{suffixed}" if flat_context else suffixed
 
@@ -333,8 +331,7 @@ class ClaudeCodeResearchModel:
             except PlanLimitExhausted:
                 if self._fallback_enabled and self._api_fallback is not None:
                     log.warning(
-                        "claude_code: plan window exhausted — falling back to the API "
-                        "for role %r",
+                        "claude_code: plan window exhausted — falling back to the API for role %r",
                         role,
                     )
                     return self._api_fallback.complete_json(
@@ -410,7 +407,5 @@ class ClaudeCodeResearchModel:
     def batch_results(self, batch_id: str) -> Iterable[tuple[str, dict[str, Any] | None]]:
         return self._iter_batch_results(batch_id)
 
-    def _iter_batch_results(
-        self, batch_id: str
-    ) -> Iterator[tuple[str, dict[str, Any] | None]]:
+    def _iter_batch_results(self, batch_id: str) -> Iterator[tuple[str, dict[str, Any] | None]]:
         yield from self._batch_results.get(batch_id, [])

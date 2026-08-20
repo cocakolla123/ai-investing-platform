@@ -223,9 +223,7 @@ def build_labels(
     panel = panel.sort_index()
     ts_as_of = to_ts(as_of)
     market = (
-        cast(pd.Series, panel[market_symbol]).dropna()
-        if market_symbol in panel.columns
-        else None
+        cast(pd.Series, panel[market_symbol]).dropna() if market_symbol in panel.columns else None
     )
 
     out = empty.copy()
@@ -278,9 +276,7 @@ def build_labels(
                     excess = total - float(etf_path.iloc[-1] / etf_path.iloc[0] - 1.0)
             lr = np.log(path).diff().dropna()
             vol = (
-                float(lr.std() * math.sqrt(TRADING_DAYS_PER_YEAR))
-                if len(lr) > 2
-                else float("nan")
+                float(lr.std() * math.sqrt(TRADING_DAYS_PER_YEAR)) if len(lr) > 2 else float("nan")
             )
             breached = float(cum.iloc[1:].min()) < downside_threshold
             out.loc[sym, f"excess_return_{h}d"] = excess

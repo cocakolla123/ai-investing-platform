@@ -41,7 +41,11 @@ URL = "postgresql+psycopg://dynamo:s3cr3t@localhost:5432/dynamo_dev"
 def test_sqlalchemy_url_parses_to_libpq_parts() -> None:
     t = parse_database_url(URL)
     assert (t.host, t.port, t.user, t.password, t.database) == (
-        "localhost", 5432, "dynamo", "s3cr3t", "dynamo_dev"
+        "localhost",
+        5432,
+        "dynamo",
+        "s3cr3t",
+        "dynamo_dev",
     )
 
 
@@ -53,9 +57,9 @@ def test_percent_encoded_password_is_decoded() -> None:
 @pytest.mark.parametrize(
     "url",
     [
-        "mysql://u:p@h/db",                       # wrong engine
-        "postgresql+psycopg://u:p@h:5432/",       # no database
-        "postgresql+psycopg:///db",               # no host
+        "mysql://u:p@h/db",  # wrong engine
+        "postgresql+psycopg://u:p@h:5432/",  # no database
+        "postgresql+psycopg:///db",  # no host
     ],
 )
 def test_unparseable_urls_raise_rather_than_guess(url: str) -> None:

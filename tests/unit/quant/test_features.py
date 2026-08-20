@@ -40,8 +40,11 @@ def test_normalization_scale_invariance(scale: float, shift: float, seed: int) -
 
 def test_normalization_leaves_raw_groups_untouched() -> None:
     raw = pd.DataFrame(
-        {"month_of_year": [3.0, 3.0, 3.0], "hy_oas_level": [4.2, 4.2, 4.2],
-         "ret_20d": [0.1, 0.0, -0.1]},
+        {
+            "month_of_year": [3.0, 3.0, 3.0],
+            "hy_oas_level": [4.2, 4.2, 4.2],
+            "ret_20d": [0.1, 0.0, -0.1],
+        },
         index=pd.Index(["A", "B", "C"]),
     )
     norm = normalize_features(raw)
@@ -258,6 +261,5 @@ def test_default_labels_regression_columns_and_values() -> None:
     assert float(labels.loc["SYM", "downside_20d"]) == float(float(cum.iloc[1:].min()) < -0.10)
     lr = np.log(sym_p).diff().dropna()
     assert (
-        abs(float(labels.loc["SYM", "realized_vol_20d"]) - float(lr.std() * np.sqrt(252.0)))
-        < 1e-12
+        abs(float(labels.loc["SYM", "realized_vol_20d"]) - float(lr.std() * np.sqrt(252.0))) < 1e-12
     )

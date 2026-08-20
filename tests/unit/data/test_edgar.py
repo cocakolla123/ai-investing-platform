@@ -264,9 +264,7 @@ def test_insider_range_without_a_cik_filter_takes_everything() -> None:
         return httpx.Response(200, json=FORM4_HITS)
 
     day = date(2026, 7, 31)
-    txs = list(
-        make_client(httpx.MockTransport(handler)).insider_transactions_in_range(day, day)
-    )
+    txs = list(make_client(httpx.MockTransport(handler)).insider_transactions_in_range(day, day))
     assert len(txs) == 1
 
 
@@ -307,8 +305,6 @@ def test_insider_range_fetches_each_accession_once() -> None:
         return httpx.Response(200, json=TWO_XML_ONE_ACCESSION)
 
     day = date(2026, 7, 31)
-    txs = list(
-        make_client(httpx.MockTransport(handler)).insider_transactions_in_range(day, day)
-    )
+    txs = list(make_client(httpx.MockTransport(handler)).insider_transactions_in_range(day, day))
     assert len(fetched) == 1
     assert len(txs) == 1

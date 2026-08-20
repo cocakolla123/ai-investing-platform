@@ -88,20 +88,27 @@ class AlpacaBroker:
 
     def submit(self, order: Order) -> str:
         request = self._build_request(order)
-        raw = self._call(lambda: self._client.submit_order(order_data=request),
-                         client_order_id=order.client_order_id)
+        raw = self._call(
+            lambda: self._client.submit_order(order_data=request),
+            client_order_id=order.client_order_id,
+        )
         return str(self._as_dict(raw).get("id", ""))
 
     def cancel(self, client_order_id: str) -> None:
-        raw = self._call(lambda: self._client.get_order_by_client_id(client_order_id),
-                         client_order_id=client_order_id)
+        raw = self._call(
+            lambda: self._client.get_order_by_client_id(client_order_id),
+            client_order_id=client_order_id,
+        )
         broker_id = str(self._as_dict(raw).get("id", ""))
-        self._call(lambda: self._client.cancel_order_by_id(broker_id),
-                   client_order_id=client_order_id)
+        self._call(
+            lambda: self._client.cancel_order_by_id(broker_id), client_order_id=client_order_id
+        )
 
     def replace(self, client_order_id: str, stop_price: float) -> str:
-        raw = self._call(lambda: self._client.get_order_by_client_id(client_order_id),
-                         client_order_id=client_order_id)
+        raw = self._call(
+            lambda: self._client.get_order_by_client_id(client_order_id),
+            client_order_id=client_order_id,
+        )
         broker_id = str(self._as_dict(raw).get("id", ""))
         req = ReplaceOrderRequest(stop_price=round(stop_price, 2))
         replaced = self._call(
@@ -111,8 +118,10 @@ class AlpacaBroker:
         return str(self._as_dict(replaced).get("id", ""))
 
     def get_order(self, client_order_id: str) -> dict[str, Any]:
-        raw = self._call(lambda: self._client.get_order_by_client_id(client_order_id),
-                         client_order_id=client_order_id)
+        raw = self._call(
+            lambda: self._client.get_order_by_client_id(client_order_id),
+            client_order_id=client_order_id,
+        )
         return self._normalize_order(self._as_dict(raw))
 
     def open_orders(self) -> list[dict[str, Any]]:

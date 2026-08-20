@@ -64,9 +64,7 @@ def social_scan(context: AssetExecutionContext, dynamo: DynamoResource) -> Mater
         NewsItem,
         _read_df(
             dynamo,
-            select(n).where(
-                n.c.published_at >= lookback, n.c.source.in_(("reddit", "stocktwits"))
-            ),
+            select(n).where(n.c.published_at >= lookback, n.c.source.in_(("reddit", "stocktwits"))),
         ),
     )
     flags = run_social_scan(

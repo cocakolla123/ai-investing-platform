@@ -90,7 +90,14 @@ def test_seed_core_from_file_still_appends_crypto(tmp_path: Path) -> None:
     make_manager(store, seed_path=str(seed)).seed_core(AS_OF)
     members = store.universe_at(AS_OF, Tier.CORE)
     assert {m.symbol for m in members} == {
-        "AAPL", "MSFT", "SPY", "BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "LINK/USD",
+        "AAPL",
+        "MSFT",
+        "SPY",
+        "BTC/USD",
+        "ETH/USD",
+        "SOL/USD",
+        "AVAX/USD",
+        "LINK/USD",
     }
     reasons = {m.symbol: m.reason for m in members}
     assert reasons["BTC/USD"] == "core seed: crypto starter list"
@@ -142,8 +149,9 @@ def test_recommendations_are_ackable_alert_rows_not_writes() -> None:
     store = FakeStore()
     manager = make_manager(store)
     manager.recommend_addition("NEWCO", "sustained committee conviction", now=NOW)
-    manager.recommend_demotion("OLDCO", "60d below liquidity floor", now=NOW,
-                               suggested_replacement="NEWCO")
+    manager.recommend_demotion(
+        "OLDCO", "60d below liquidity floor", now=NOW, suggested_replacement="NEWCO"
+    )
     assert len(store.alerts) == 2
     assert all(a["name"] == "universe_change_recommendation" for a in store.alerts)
     assert all(a["severity"] == "info" for a in store.alerts)

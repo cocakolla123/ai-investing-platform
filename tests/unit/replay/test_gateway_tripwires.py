@@ -65,8 +65,9 @@ def _patch_read_sql(monkeypatch: pytest.MonkeyPatch, frame: pd.DataFrame) -> Non
 def test_read_df_trips_on_future_ts(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_read_sql(
         monkeypatch,
-        pd.DataFrame({"series_id": ["VIX"], "ts": [AFTER], "value": [1.0],
-                      "vintage_ts": [_dt(BEFORE)]}),
+        pd.DataFrame(
+            {"series_id": ["VIX"], "ts": [AFTER], "value": [1.0], "vintage_ts": [_dt(BEFORE)]}
+        ),
     )
     with pytest.raises(ReplayLeakageError, match="ts"):
         _gateway().macro_series(90)
@@ -75,8 +76,9 @@ def test_read_df_trips_on_future_ts(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_read_df_trips_on_future_vintage(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_read_sql(
         monkeypatch,
-        pd.DataFrame({"series_id": ["VIX"], "ts": [BEFORE], "value": [1.0],
-                      "vintage_ts": [_dt(AFTER)]}),
+        pd.DataFrame(
+            {"series_id": ["VIX"], "ts": [BEFORE], "value": [1.0], "vintage_ts": [_dt(AFTER)]}
+        ),
     )
     with pytest.raises(ReplayLeakageError, match="vintage_ts"):
         _gateway().macro_series(90)
@@ -85,8 +87,9 @@ def test_read_df_trips_on_future_vintage(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_read_df_passes_on_knowable_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_read_sql(
         monkeypatch,
-        pd.DataFrame({"series_id": ["VIX"], "ts": [BEFORE], "value": [1.0],
-                      "vintage_ts": [_dt(BEFORE)]}),
+        pd.DataFrame(
+            {"series_id": ["VIX"], "ts": [BEFORE], "value": [1.0], "vintage_ts": [_dt(BEFORE)]}
+        ),
     )
     assert len(_gateway().macro_series(90)) == 1
 
@@ -98,9 +101,14 @@ def test_news_exempts_backfill_fetched_at_but_trips_on_published(
     future published_at trips."""
     ok = pd.DataFrame(
         {
-            "id": ["n-1"], "symbols": [["AAPL"]], "headline": ["h"],
-            "summary": [""], "source": ["test"], "published_at": [_dt(BEFORE)],
-            "url": [""], "fetched_at": [_dt(AFTER)],  # ingestion wall clock
+            "id": ["n-1"],
+            "symbols": [["AAPL"]],
+            "headline": ["h"],
+            "summary": [""],
+            "source": ["test"],
+            "published_at": [_dt(BEFORE)],
+            "url": [""],
+            "fetched_at": [_dt(AFTER)],  # ingestion wall clock
         }
     )
     _patch_read_sql(monkeypatch, ok)
@@ -116,8 +124,12 @@ def test_transcripts_trip_on_future_event_date(monkeypatch: pytest.MonkeyPatch) 
     _patch_read_sql(
         monkeypatch,
         pd.DataFrame(
-            {"symbol": ["AAPL"], "event_date": [AFTER], "source": ["defeatbeta"],
-             "content": ["call text"]}
+            {
+                "symbol": ["AAPL"],
+                "event_date": [AFTER],
+                "source": ["defeatbeta"],
+                "content": ["call text"],
+            }
         ),
     )
     with pytest.raises(ReplayLeakageError, match="event_date"):
@@ -129,8 +141,7 @@ def test_transcripts_trip_on_future_event_date(monkeypatch: pytest.MonkeyPatch) 
 
 def test_bars_trip_on_future_ts() -> None:
     gw = _gateway()
-    frame = pd.DataFrame({"symbol": ["AAPL"], "ts": [pd.Timestamp(_dt(AFTER))],
-                          "close": [1.0]})
+    frame = pd.DataFrame({"symbol": ["AAPL"], "ts": [pd.Timestamp(_dt(AFTER))], "close": [1.0]})
     gw._repo = SimpleNamespace(bars_frame=lambda *a, **k: frame)  # type: ignore[assignment]
     with pytest.raises(ReplayLeakageError, match=r"bars\.ts"):
         gw.bars(["AAPL"], 30)
@@ -138,8 +149,7 @@ def test_bars_trip_on_future_ts() -> None:
 
 def test_quant_scores_trip_on_future_as_of() -> None:
     gw = _gateway()
-    frame = pd.DataFrame({"symbol": ["AAPL"], "as_of": [AFTER],
-                          "expected_excess_return": [0.9]})
+    frame = pd.DataFrame({"symbol": ["AAPL"], "as_of": [AFTER], "expected_excess_return": [0.9]})
     gw._repo = SimpleNamespace(latest_quant_scores=lambda *a, **k: frame)  # type: ignore[assignment]
     with pytest.raises(ReplayLeakageError, match=r"quant_scores\.as_of"):
         gw.quant_scores(["AAPL"])
@@ -175,8 +185,11 @@ def test_universe_trips_on_future_membership() -> None:
 def test_regime_state_trips_on_future_row() -> None:
     row = SimpleNamespace(
         _mapping={
-            "as_of": AFTER, "regime": "neutral", "composite_score": 0.0,
-            "inputs": {}, "sessions_in_state": 1,
+            "as_of": AFTER,
+            "regime": "neutral",
+            "composite_score": 0.0,
+            "inputs": {},
+            "sessions_in_state": 1,
         }
     )
     result = SimpleNamespace(first=lambda: row)
@@ -189,8 +202,11 @@ def test_journal_search_trips_on_future_entry(monkeypatch: pytest.MonkeyPatch) -
     from dynamo.domain.models.learning import JournalEntry, JournalKind
 
     future_entry = JournalEntry(
-        id="j-future", kind=JournalKind.THESIS, symbols=("AAPL",),
-        text="future thesis", created_at=_dt(AFTER),
+        id="j-future",
+        kind=JournalKind.THESIS,
+        symbols=("AAPL",),
+        text="future thesis",
+        created_at=_dt(AFTER),
     )
 
     class _Repo:
@@ -216,12 +232,19 @@ def test_similar_experiences_trip_on_same_day_or_future_rows(
     def exp(day: date) -> DecisionExperience:
         return DecisionExperience.model_validate(
             {
-                "id": f"exp-{day.isoformat()}", "decision_context_id": "dc",
-                "trade_id": "t", "source": "live", "created_at": _dt(day),
-                "symbol": "AAPL", "as_of": day, "resolved": True, "pnl_pct": 1.0,
+                "id": f"exp-{day.isoformat()}",
+                "decision_context_id": "dc",
+                "trade_id": "t",
+                "source": "live",
+                "created_at": _dt(day),
+                "symbol": "AAPL",
+                "as_of": day,
+                "resolved": True,
+                "pnl_pct": 1.0,
                 "forecast_quality": ForecastQuality.ACCURATE,
                 "decision_quality": DecisionQuality.SOUND,
-                "outcome_quality": OutcomeQuality.WIN, "label": "win",
+                "outcome_quality": OutcomeQuality.WIN,
+                "label": "win",
             }
         )
 
@@ -285,9 +308,16 @@ def test_surveillance_universe_allows_an_open_ended_membership(
 def _bar_frame(ts: date, fetched: date) -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "symbol": ["AAPL"], "ts": [pd.Timestamp(_dt(ts))], "source": ["tiingo"],
-            "open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0],
-            "volume": [10], "adj_close": [1.0], "fetched_at": [_dt(fetched)],
+            "symbol": ["AAPL"],
+            "ts": [pd.Timestamp(_dt(ts))],
+            "source": ["tiingo"],
+            "open": [1.0],
+            "high": [1.0],
+            "low": [1.0],
+            "close": [1.0],
+            "volume": [10],
+            "adj_close": [1.0],
+            "fetched_at": [_dt(fetched)],
         }
     )
 
@@ -338,8 +368,7 @@ def test_earnings_event_date_exemption_is_scoped(monkeypatch: pytest.MonkeyPatch
     WITH the exemption (future events are legitimately knowable) and trips
     WITHOUT it."""
     frame = pd.DataFrame(
-        {"symbol": ["AAPL"], "event_date": [AS_OF + timedelta(days=3)],
-         "fetched_at": [_dt(BEFORE)]}
+        {"symbol": ["AAPL"], "event_date": [AS_OF + timedelta(days=3)], "fetched_at": [_dt(BEFORE)]}
     )
     _patch_read_sql(monkeypatch, frame)
     gw = _gateway()

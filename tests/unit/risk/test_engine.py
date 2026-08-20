@@ -31,9 +31,7 @@ def _portfolio(equity: float = 100_000.0) -> PortfolioState:
         as_of=AS_OF,
         equity=equity,
         cash=equity - 100.0 * 55.0,
-        positions=(
-            Position(symbol="AAA", qty=100.0, avg_entry_price=50.0, lots=(lot,)),
-        ),
+        positions=(Position(symbol="AAA", qty=100.0, avg_entry_price=50.0, lots=(lot,)),),
         high_water_mark=equity * 1.02,
     )
 
@@ -86,16 +84,12 @@ class TestFailClosed:
         assert any("AAA" in v.reason for v in verdict.vetoes)
 
     def test_short_regime_history(self) -> None:
-        verdict = ENGINE.compute_verdict(
-            _inputs(regime_history=make_regime_history(sessions=100))
-        )
+        verdict = ENGINE.compute_verdict(_inputs(regime_history=make_regime_history(sessions=100)))
         assert verdict.degraded and not verdict.new_risk_allowed
         assert verdict.regime.regime is Regime.RISK_OFF  # conservative fallback
 
     def test_invalid_equity(self) -> None:
-        verdict = ENGINE.compute_verdict(
-            _inputs(portfolio=_portfolio(equity=float("nan")))
-        )
+        verdict = ENGINE.compute_verdict(_inputs(portfolio=_portfolio(equity=float("nan"))))
         assert verdict.degraded and not verdict.new_risk_allowed
 
     def test_degraded_still_reports_ladder_and_cash_floor(self) -> None:
@@ -151,9 +145,7 @@ class TestVetoContract:
     def test_quarantined_symbol_capped_to_zero_and_sized_to_zero(self) -> None:
         """Committee buy at conviction 0.9 on a vetoed symbol -> weight 0."""
         verdict = ENGINE.compute_verdict(_inputs(quarantined=frozenset({"BBB"})))
-        assert any(
-            v.symbol == "BBB" and v.rule == "quarantine" for v in verdict.vetoes
-        )
+        assert any(v.symbol == "BBB" and v.rule == "quarantine" for v in verdict.vetoes)
         assert verdict.per_position_cap["BBB"] == 0.0
 
         vetoed = frozenset(v.symbol for v in verdict.vetoes if v.symbol != "*")
@@ -178,10 +170,7 @@ class TestRegimeAndKupiecEffects:
         assert green.sector_caps["Tech"] == cfg.sector_cap
         assert red.sector_caps["Tech"] == cfg.sector_cap * 0.75
         for symbol in SYMS:
-            assert (
-                red.per_position_cap[symbol]
-                <= green.per_position_cap[symbol] + 1e-12
-            )
+            assert red.per_position_cap[symbol] <= green.per_position_cap[symbol] + 1e-12
 
     def test_crisis_regime_blocks_new_risk(self) -> None:
         crash = make_regime_history(

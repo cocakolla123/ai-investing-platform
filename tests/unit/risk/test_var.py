@@ -23,9 +23,7 @@ from dynamo.risk.var import (
     w1=st.floats(min_value=0.0, max_value=0.5),
     w2=st.floats(min_value=0.0, max_value=0.5),
 )
-def test_var_ordering_properties(
-    seed: int, sessions: int, w1: float, w2: float
-) -> None:
+def test_var_ordering_properties(seed: int, sessions: int, w1: float, w2: float) -> None:
     rng = np.random.default_rng(seed)
     values = rng.standard_t(4, size=(sessions, 2)) * 0.01
     panel = ReturnsPanel(make_dates(sessions), ("A", "B"), values)
@@ -39,9 +37,7 @@ def test_var_ordering_properties(
 
 
 def test_var_fails_closed_on_missing_symbol_or_short_history() -> None:
-    panel = ReturnsPanel(
-        make_dates(100), ("A",), np.zeros((100, 1), dtype=np.float64)
-    )
+    panel = ReturnsPanel(make_dates(100), ("A",), np.zeros((100, 1), dtype=np.float64))
     assert historical_var(panel, {"MISSING": 0.1}) is None
     short = ReturnsPanel(make_dates(10), ("A",), np.zeros((10, 1), dtype=np.float64))
     assert historical_var(short, {"A": 0.1}) is None
@@ -50,9 +46,7 @@ def test_var_fails_closed_on_missing_symbol_or_short_history() -> None:
 
 def test_all_cash_portfolio_has_zero_var() -> None:
     rng = np.random.default_rng(0)
-    panel = ReturnsPanel(
-        make_dates(200), ("A",), rng.normal(0, 0.01, size=(200, 1))
-    )
+    panel = ReturnsPanel(make_dates(200), ("A",), rng.normal(0, 0.01, size=(200, 1)))
     result = historical_var(panel, {})
     assert result is not None
     assert result.var95 == 0.0 and result.cvar99 == 0.0

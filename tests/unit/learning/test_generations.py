@@ -90,9 +90,7 @@ def test_folds_expand_monthly_and_exclude_final_holdout() -> None:
 
 
 def test_no_leak_train_strictly_before_test_in_every_fold() -> None:
-    experiences = (
-        _month(2026, 1, 8) + _month(2026, 2, 8) + _month(2026, 3, 8) + _month(2026, 4, 8)
-    )
+    experiences = _month(2026, 1, 8) + _month(2026, 2, 8) + _month(2026, 3, 8) + _month(2026, 4, 8)
     for fold in generation_folds(experiences, final_holdout_months=1):
         max_train = max((e.as_of, e.created_at) for e in fold.train)
         min_test = min((e.as_of, e.created_at) for e in fold.test)
@@ -120,9 +118,7 @@ def test_unusable_rows_are_filtered_from_folds() -> None:
     no_conviction = no_conviction.model_copy(update={"conviction": None})
     rows = usable_experiences([*good, unresolved, unlabeled, no_conviction])
     assert len(rows) == len(good)
-    folds = generation_folds(
-        [*good, unresolved, unlabeled, no_conviction], final_holdout_months=1
-    )
+    folds = generation_folds([*good, unresolved, unlabeled, no_conviction], final_holdout_months=1)
     ids = {e.id for f in folds for e in (*f.train, *f.test)}
     assert unresolved.id not in ids and unlabeled.id not in ids and no_conviction.id not in ids
 
@@ -178,9 +174,7 @@ def test_trained_generation_reports_meta_vs_control_and_sign_convention() -> Non
     assert outcome.brier_control == pytest.approx(brier(control, test_outcomes))
     # SIGN CONVENTION: value_of_learning = brier_control - brier_meta.
     assert outcome.brier_meta is not None and outcome.brier_control is not None
-    assert outcome.value_of_learning == pytest.approx(
-        outcome.brier_control - outcome.brier_meta
-    )
+    assert outcome.value_of_learning == pytest.approx(outcome.brier_control - outcome.brier_meta)
     # Deterministic: the same fold re-runs to the identical numbers.
     again = run_generation(folds[0], algo="logistic")
     assert again.brier_meta == outcome.brier_meta

@@ -123,9 +123,7 @@ class MockOptionsBroker:
 
     def open_orders(self) -> list[dict[str, Any]]:
         return [
-            bo.as_dict()
-            for bo in self._orders.values()
-            if bo.status in ("new", "partially_filled")
+            bo.as_dict() for bo in self._orders.values() if bo.status in ("new", "partially_filled")
         ]
 
     def positions(self) -> list[dict[str, Any]]:
@@ -183,9 +181,7 @@ class MockOptionsBroker:
         bo.status = "filled" if bo.filled_contracts >= bo.contracts else "partially_filled"
 
         signed = contracts if bo.side == OrderSide.BUY.value else -contracts
-        pos = self._positions.setdefault(
-            bo.occ_symbol, {"qty": 0.0, "avg_entry_price": 0.0}
-        )
+        pos = self._positions.setdefault(bo.occ_symbol, {"qty": 0.0, "avg_entry_price": 0.0})
         new_qty = pos["qty"] + signed
         pos["avg_entry_price"] = price if new_qty != 0.0 else 0.0
         pos["qty"] = new_qty

@@ -99,7 +99,7 @@ def compute_calibration(
     for o in observations:
         by_scope.setdefault((o.scope_type, o.scope_id), []).append(o)
     points: list[CalibrationPoint] = []
-    for (scope_type, scope_id) in sorted(by_scope):
+    for scope_type, scope_id in sorted(by_scope):
         group = by_scope[(scope_type, scope_id)]
         points.append(
             CalibrationPoint(

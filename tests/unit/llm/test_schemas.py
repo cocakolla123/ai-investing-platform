@@ -43,8 +43,10 @@ class TestStrictness:
     def test_every_object_is_closed_and_fully_required(self) -> None:
         for name, schema in SCHEMAS.items():
             for node in walk(schema):
-                if isinstance(node, dict) and node.get("type") == "object" and (
-                    "properties" in node
+                if (
+                    isinstance(node, dict)
+                    and node.get("type") == "object"
+                    and ("properties" in node)
                 ):
                     assert node.get("additionalProperties") is False, name
                     assert node.get("required") == list(node["properties"].keys()), name
@@ -95,9 +97,7 @@ class TestRoundTrip:
             "side": "bear",
             "thesis": "t",
             "key_points": [EVIDENCE],
-            "kill_cases": [
-                {"description": "churn", "severity": "high", "trigger": "renewal miss"}
-            ],
+            "kill_cases": [{"description": "churn", "severity": "high", "trigger": "renewal miss"}],
             "expected_move_pct": -10.0,
             "horizon_days": 30,
             "conviction": 0.4,
@@ -158,9 +158,7 @@ class TestRoundTrip:
             "why_wrong": ["w"],
         }
         assert PredictionMarketViewOut.model_validate(pm).edge == 0.1
-        assert (
-            PredictionMarketView.model_validate({**pm, "as_of": "2026-08-03"}).venue == "kalshi"
-        )
+        assert PredictionMarketView.model_validate({**pm, "as_of": "2026-08-03"}).venue == "kalshi"
 
         triage = {"materiality": 0.8, "verdict": "material", "reason": "guidance cut"}
         assert TriageOut.model_validate(triage).verdict.value == "material"

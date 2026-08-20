@@ -218,9 +218,7 @@ def frozen_control_probabilities(
     ]
 
 
-def ev_per_decision(
-    probs: Sequence[float], pnls: Sequence[float | None]
-) -> float | None:
+def ev_per_decision(probs: Sequence[float], pnls: Sequence[float | None]) -> float | None:
     """Realized EV per decision under a take-predicted-winners policy.
 
     For each test decision: if the scorer predicts a win (p >= 0.5) the
@@ -312,9 +310,7 @@ def run_generation(fold: GenerationFold, *, algo: str = "gradient_boosting") -> 
     train_labels = [e.label == "win" for e in fold.train]
     # Scalar (string) time keys: uniformly comparable for the trainer's
     # stable argsort, deterministic tie-break by id.
-    train_order = [
-        f"{e.as_of.isoformat()}|{e.created_at.isoformat()}|{e.id}" for e in fold.train
-    ]
+    train_order = [f"{e.as_of.isoformat()}|{e.created_at.isoformat()}|{e.id}" for e in fold.train]
     model = MetaModel(algo=algo)
     model.train(train_frame, train_labels, train_order)
 

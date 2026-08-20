@@ -125,9 +125,7 @@ class SurveillanceReads(Protocol):
     as_of: date
 
     def surveillance_universe(self) -> list[str]: ...
-    def surveillance_bars(
-        self, symbols: Sequence[str], lookback_days: int
-    ) -> pd.DataFrame: ...
+    def surveillance_bars(self, symbols: Sequence[str], lookback_days: int) -> pd.DataFrame: ...
 
 
 class FlagSink(Protocol):
@@ -498,9 +496,7 @@ def haiku_gate(
             role="triage",
             system=system_prompt,
             context=f"## Surveillance flags for {symbol}\n{_flag_text(sym_flags)}",
-            instruction=(
-                f"Classify the materiality of these flags for {symbol} as of {as_of}."
-            ),
+            instruction=(f"Classify the materiality of these flags for {symbol} as of {as_of}."),
             schema=schema,
             model_tier=HAIKU_TIER,
             max_tokens=max_tokens,
@@ -519,9 +515,7 @@ def haiku_gate(
                 f"triage material: {why}" if why else "triage material",
             )
         )
-    return GateResult(
-        promoted=tuple(promoted), considered=tuple(ranked), llm_calls=calls
-    )
+    return GateResult(promoted=tuple(promoted), considered=tuple(ranked), llm_calls=calls)
 
 
 def _flag_text(flags: Sequence[SurveillanceFlag]) -> str:
@@ -611,9 +605,7 @@ class ReplayDiscovery:
         flag_sink: FlagSink | None = None,
     ) -> None:
         if mode not in DISCOVERY_MODES:
-            raise ValueError(
-                f"discovery mode {mode!r} is not one of {DISCOVERY_MODES}"
-            )
+            raise ValueError(f"discovery mode {mode!r} is not one of {DISCOVERY_MODES}")
         if mode == "haiku" and model is None:
             raise ValueError(
                 "discovery_mode='haiku' needs a triage model — the composition "
@@ -755,9 +747,7 @@ class ReplayDiscovery:
             "promotions_total": sum(len(d.promoted) for d in self.days),
             "distinct_promoted": len(promoted),
             "llm_calls": sum(d.llm_calls for d in self.days),
-            "mean_universe": round(
-                sum(len(d.universe) for d in self.days) / sessions, 1
-            ),
+            "mean_universe": round(sum(len(d.universe) for d in self.days) / sessions, 1),
         }
 
 
@@ -777,10 +767,7 @@ def flag_rows(run_id: str, record: DiscoveryDay) -> list[dict[str, Any]]:
         seen[key] = n + 1
         rows.append(
             {
-                "id": (
-                    f"{run_id}:{record.as_of.isoformat()}:"
-                    f"{flag.symbol}:{flag.detector}:{n}"
-                ),
+                "id": (f"{run_id}:{record.as_of.isoformat()}:{flag.symbol}:{flag.detector}:{n}"),
                 "run_id": run_id,
                 "as_of": record.as_of,
                 "symbol": flag.symbol,

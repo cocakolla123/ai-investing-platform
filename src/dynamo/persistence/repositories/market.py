@@ -103,8 +103,16 @@ CANONICAL_PRICE_SOURCES: tuple[str, ...] = ("tiingo", "alpaca")
 CANONICAL_VOLUME_SOURCES: tuple[str, ...] = ("alpaca", "tiingo")
 
 CANONICAL_BAR_COLUMNS: tuple[str, ...] = (
-    "symbol", "ts", "open", "high", "low",
-    "close", "adj_close", "volume", "source", "volume_source",
+    "symbol",
+    "ts",
+    "open",
+    "high",
+    "low",
+    "close",
+    "adj_close",
+    "volume",
+    "source",
+    "volume_source",
 )
 
 
@@ -198,9 +206,7 @@ def canonical_bars(frame: pd.DataFrame) -> pd.DataFrame:
 
     # Volume is chosen independently, then grafted on by (symbol, session).
     by_volume = frame.sort_values(by=["symbol", "ts", "_volume_rank"], kind="mergesort")
-    chosen = cast(
-        pd.DataFrame, by_volume.drop_duplicates(subset=["symbol", "ts"], keep="first")
-    )
+    chosen = cast(pd.DataFrame, by_volume.drop_duplicates(subset=["symbol", "ts"], keep="first"))
     volume = cast(pd.DataFrame, chosen[["symbol", "ts", "volume", "source"]]).copy()
     volume["volume_source"] = volume.pop("source")
 
@@ -484,15 +490,15 @@ class MarketDataRepository:
         the daily calendar refresh never duplicates rows."""
         ts = fetched_at or _now()
         events = list(events)
-        latest = self.latest_estimate_vintages(
-            {(e.symbol, e.event_date) for e in events}
-        )
+        latest = self.latest_estimate_vintages({(e.symbol, e.event_date) for e in events})
         rows = estimate_vintage_rows(events, latest, ts)
         if not rows:
             return 0
         t = schema.earnings_estimate_vintages
-        stmt = pg_insert(t).values(rows).on_conflict_do_nothing(
-            index_elements=[c.name for c in t.primary_key.columns]
+        stmt = (
+            pg_insert(t)
+            .values(rows)
+            .on_conflict_do_nothing(index_elements=[c.name for c in t.primary_key.columns])
         )
         with self._engine.begin() as cx:
             result = cx.execute(stmt)
@@ -747,9 +753,7 @@ class MarketDataRepository:
         pk = [c.name for c in t.primary_key.columns]
         stmt = stmt.on_conflict_do_update(
             index_elements=pk,
-            set_={
-                c.name: stmt.excluded[c.name] for c in t.columns if c.name not in pk
-            },
+            set_={c.name: stmt.excluded[c.name] for c in t.columns if c.name not in pk},
         ).returning(t.c.symbol)
         # RETURNING gives a reliable insert count (psycopg3 reports rowcount=-1
         # for multi-VALUES upserts) — same pattern as ReplayRepository.
@@ -870,9 +874,7 @@ class MarketDataRepository:
         with self._engine.begin() as conn:
             existing = {
                 (str(r.symbol), cast(date, r.valid_from)): dict(r._mapping)
-                for r in conn.execute(
-                    select(t).where(tuple_(t.c.symbol, t.c.valid_from).in_(keys))
-                )
+                for r in conn.execute(select(t).where(tuple_(t.c.symbol, t.c.valid_from).in_(keys)))
             }
             rows: list[dict[str, Any]] = []
             for symbol, old, new in rebases:
@@ -904,8 +906,7 @@ class MarketDataRepository:
             return 0
         t = schema.instruments
         rows = [
-            {"symbol": symbol, "name": symbol, "cik": cik}
-            for symbol, cik in sorted(ciks.items())
+            {"symbol": symbol, "name": symbol, "cik": cik} for symbol, cik in sorted(ciks.items())
         ]
         stmt = pg_insert(t).values(rows)
         stmt = stmt.on_conflict_do_update(

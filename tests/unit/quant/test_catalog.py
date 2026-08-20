@@ -63,9 +63,7 @@ def test_estimate_revision_features_live_with_vintage_frame(
             {"symbol": "BBB", "fetched_at": as_of - pd.Timedelta(days=10), "eps_est": 1.50},
         ]
     )
-    with_est = FeatureInputs(
-        bars=bars, sector_map=dict(inputs.sector_map), estimates=estimates
-    )
+    with_est = FeatureInputs(bars=bars, sector_map=dict(inputs.sector_map), estimates=estimates)
     raw = build_raw_features(with_est, as_of, ["AAA", "BBB"])
     assert raw.loc["AAA", "est_rev_breadth_30d"] == 1.0  # sign of the revision
     assert raw.loc["BBB", "est_rev_breadth_30d"] == -1.0
@@ -119,15 +117,39 @@ def test_insider_features_form4_filed_at(inputs: FeatureInputs, bars: pd.DataFra
     insider = pd.DataFrame(
         [
             # three distinct buyers within 30 days -> cluster flag
-            {"symbol": "AAA", "insider_name": "a", "tx_type": "P", "shares": 100.0, "price": 10.0,
-             "filed_at": as_of - pd.Timedelta(days=5)},
-            {"symbol": "AAA", "insider_name": "b", "tx_type": "P", "shares": 100.0, "price": 10.0,
-             "filed_at": as_of - pd.Timedelta(days=10)},
-            {"symbol": "AAA", "insider_name": "c", "tx_type": "P", "shares": 100.0, "price": 10.0,
-             "filed_at": as_of - pd.Timedelta(days=15)},
+            {
+                "symbol": "AAA",
+                "insider_name": "a",
+                "tx_type": "P",
+                "shares": 100.0,
+                "price": 10.0,
+                "filed_at": as_of - pd.Timedelta(days=5),
+            },
+            {
+                "symbol": "AAA",
+                "insider_name": "b",
+                "tx_type": "P",
+                "shares": 100.0,
+                "price": 10.0,
+                "filed_at": as_of - pd.Timedelta(days=10),
+            },
+            {
+                "symbol": "AAA",
+                "insider_name": "c",
+                "tx_type": "P",
+                "shares": 100.0,
+                "price": 10.0,
+                "filed_at": as_of - pd.Timedelta(days=15),
+            },
             # filed after as_of -> invisible
-            {"symbol": "BBB", "insider_name": "d", "tx_type": "P", "shares": 1e6, "price": 100.0,
-             "filed_at": as_of + pd.Timedelta(days=1)},
+            {
+                "symbol": "BBB",
+                "insider_name": "d",
+                "tx_type": "P",
+                "shares": 1e6,
+                "price": 100.0,
+                "filed_at": as_of + pd.Timedelta(days=1),
+            },
         ]
     )
     inp = FeatureInputs(bars=bars, insider=insider, sector_map=inputs.sector_map)
@@ -145,11 +167,19 @@ def test_macro_uses_vintage_discipline(inputs: FeatureInputs, bars: pd.DataFrame
     macro = pd.DataFrame(
         [
             # original vintage available at as_of
-            {"series_id": "BAMLH0A0HYM2", "ts": as_of - pd.Timedelta(days=3), "value": 3.5,
-             "vintage_ts": as_of - pd.Timedelta(days=3)},
+            {
+                "series_id": "BAMLH0A0HYM2",
+                "ts": as_of - pd.Timedelta(days=3),
+                "value": 3.5,
+                "vintage_ts": as_of - pd.Timedelta(days=3),
+            },
             # revision published after as_of must be ignored
-            {"series_id": "BAMLH0A0HYM2", "ts": as_of - pd.Timedelta(days=3), "value": 9.9,
-             "vintage_ts": as_of + pd.Timedelta(days=2)},
+            {
+                "series_id": "BAMLH0A0HYM2",
+                "ts": as_of - pd.Timedelta(days=3),
+                "value": 9.9,
+                "vintage_ts": as_of + pd.Timedelta(days=2),
+            },
         ]
     )
     inp = FeatureInputs(bars=bars, macro=macro, sector_map=inputs.sector_map)

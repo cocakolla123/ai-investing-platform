@@ -111,7 +111,8 @@ def test_edgar_unconfigured_is_a_skip_not_a_failure() -> None:
             return None
 
     result = cast(
-        MaterializeResult, insider_tx(_ctx(), _NoEdgar(_Edgar(), {}))  # type: ignore[arg-type]
+        MaterializeResult,
+        insider_tx(_ctx(), _NoEdgar(_Edgar(), {})),  # type: ignore[arg-type]
     )
     metadata = dict(result.metadata or {})
     assert metadata["rows"] == 0

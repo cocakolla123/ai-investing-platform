@@ -145,9 +145,7 @@ def parse_short_interest_csv(
             settlement = date.fromisoformat(settlement_raw[:10])
         except ValueError:
             continue
-        published = overrides.get(settlement) or publication_date_for(
-            settlement, lag_days=lag_days
-        )
+        published = overrides.get(settlement) or publication_date_for(settlement, lag_days=lag_days)
         # SEC/FINRA spell share classes with a dot or a space; the platform
         # uses the dot form everywhere (mirrors EdgarClient.company_ticker_map).
         yield ShortInterest(

@@ -97,9 +97,7 @@ class OptionsOrderRepository:
     def get(self, client_order_id: str) -> OptionOrder | None:
         with self._engine.connect() as cx:
             row = cx.execute(
-                select(options_orders).where(
-                    options_orders.c.client_order_id == client_order_id
-                )
+                select(options_orders).where(options_orders.c.client_order_id == client_order_id)
             ).first()
         return _row_to_order(row) if row is not None else None
 
@@ -200,9 +198,7 @@ class OptionsTradeRepository:
 
     def fills_today(self, day: date) -> list[dict[str, Any]]:
         with self._engine.connect() as cx:
-            rows = cx.execute(
-                select(options_trades).where(options_trades.c.kind == "fill")
-            ).all()
+            rows = cx.execute(select(options_trades).where(options_trades.c.kind == "fill")).all()
         return [dict(r._mapping) for r in rows if r.filled_at.date() == day]
 
 
@@ -219,9 +215,7 @@ class OptionsPositionRepository:
         """
         with self._engine.begin() as cx:
             row = cx.execute(
-                select(options_positions).where(
-                    options_positions.c.occ_symbol == order.occ_symbol
-                )
+                select(options_positions).where(options_positions.c.occ_symbol == order.occ_symbol)
             ).first()
             if row is None:
                 if trade.contracts <= 0:

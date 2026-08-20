@@ -68,9 +68,7 @@ def test_synthetic_gap_scales_with_gross_exposure() -> None:
 def test_synthetic_single_name_uses_largest_position() -> None:
     panel = make_panel(32, ("A", "B"), 300)
     results = synthetic_scenarios(panel, {"A": 0.02, "B": 0.08}, 100_000.0, 100_000.0)
-    single = next(
-        r for r in results if r.scenario == "synthetic_single_name_down_40pct"
-    )
+    single = next(r for r in results if r.scenario == "synthetic_single_name_down_40pct")
     assert math.isclose(single.equity_impact_pct, -0.40 * 0.08)
     assert single.details["largest_weight"] == 0.08
 

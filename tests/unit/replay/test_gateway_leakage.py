@@ -62,12 +62,8 @@ def test_universe_hides_future_memberships(engine, gateway) -> None:  # type: ig
 
     _repo(engine).upsert_universe_membership(
         [
-            UniverseMembership(
-                symbol="OLD", tier=Tier.CORE, valid_from=BEFORE, reason="seed"
-            ),
-            UniverseMembership(
-                symbol="NEW", tier=Tier.CORE, valid_from=AFTER, reason="seed"
-            ),
+            UniverseMembership(symbol="OLD", tier=Tier.CORE, valid_from=BEFORE, reason="seed"),
+            UniverseMembership(symbol="NEW", tier=Tier.CORE, valid_from=AFTER, reason="seed"),
             UniverseMembership(
                 symbol="GONE",
                 tier=Tier.CORE,
@@ -120,24 +116,44 @@ def test_feature_inputs_bound_every_frame(engine, gateway) -> None:  # type: ign
     repo.upsert_xbrl_facts(
         [
             XbrlFact(
-                cik="0000320193", tag="Revenues", period_end=BEFORE,
-                value=1.0, unit="USD", filed_at=_dt(BEFORE),
+                cik="0000320193",
+                tag="Revenues",
+                period_end=BEFORE,
+                value=1.0,
+                unit="USD",
+                filed_at=_dt(BEFORE),
             ),
             XbrlFact(
-                cik="0000320193", tag="Revenues", period_end=BEFORE,
-                value=2.0, unit="USD", filed_at=_dt(AFTER),  # future filing
+                cik="0000320193",
+                tag="Revenues",
+                period_end=BEFORE,
+                value=2.0,
+                unit="USD",
+                filed_at=_dt(AFTER),  # future filing
             ),
         ]
     )
     repo.upsert_insider_tx(
         [
             InsiderTx(
-                accession_no="a-1", symbol="AAPL", insider_name="x", tx_type="P",
-                role="officer", shares=1.0, price=1.0, filed_at=_dt(BEFORE),
+                accession_no="a-1",
+                symbol="AAPL",
+                insider_name="x",
+                tx_type="P",
+                role="officer",
+                shares=1.0,
+                price=1.0,
+                filed_at=_dt(BEFORE),
             ),
             InsiderTx(
-                accession_no="a-2", symbol="AAPL", insider_name="x", tx_type="P",
-                role="officer", shares=1.0, price=1.0, filed_at=_dt(AFTER),
+                accession_no="a-2",
+                symbol="AAPL",
+                insider_name="x",
+                tx_type="P",
+                role="officer",
+                shares=1.0,
+                price=1.0,
+                filed_at=_dt(AFTER),
             ),
         ]
     )
@@ -178,11 +194,17 @@ def test_feature_inputs_bound_every_frame(engine, gateway) -> None:  # type: ign
     repo.upsert_news(
         [
             NewsItem(
-                id="n-1", symbols=("AAPL",), headline="early", source="test",
+                id="n-1",
+                symbols=("AAPL",),
+                headline="early",
+                source="test",
                 published_at=_dt(BEFORE),
             ),
             NewsItem(
-                id="n-2", symbols=("AAPL",), headline="future", source="test",
+                id="n-2",
+                symbols=("AAPL",),
+                headline="future",
+                source="test",
                 published_at=_dt(AFTER),
             ),
         ],
@@ -196,12 +218,16 @@ def test_feature_inputs_bound_every_frame(engine, gateway) -> None:  # type: ign
         schema.short_interest,
         [
             {
-                "symbol": "AAPL", "settlement_date": BEFORE - timedelta(days=15),
-                "publication_date": BEFORE, "shares_short": 1_000.0,
+                "symbol": "AAPL",
+                "settlement_date": BEFORE - timedelta(days=15),
+                "publication_date": BEFORE,
+                "shares_short": 1_000.0,
             },
             {
-                "symbol": "AAPL", "settlement_date": BEFORE,
-                "publication_date": AFTER, "shares_short": 9_999.0,
+                "symbol": "AAPL",
+                "settlement_date": BEFORE,
+                "publication_date": AFTER,
+                "shares_short": 9_999.0,
             },
         ],
     )
@@ -235,16 +261,28 @@ def test_fundamentals_read_hides_future_filings(engine, gateway) -> None:  # typ
     repo.upsert_xbrl_facts(
         [
             XbrlFact(
-                cik="0000320193", tag="Revenues", period_end=old_period,
-                value=1.0, unit="USD", filed_at=_dt(BEFORE),
+                cik="0000320193",
+                tag="Revenues",
+                period_end=old_period,
+                value=1.0,
+                unit="USD",
+                filed_at=_dt(BEFORE),
             ),
             XbrlFact(
-                cik="0000320193", tag="Revenues", period_end=old_period,
-                value=2.0, unit="USD", filed_at=_dt(AFTER),  # future restatement
+                cik="0000320193",
+                tag="Revenues",
+                period_end=old_period,
+                value=2.0,
+                unit="USD",
+                filed_at=_dt(AFTER),  # future restatement
             ),
             XbrlFact(
-                cik="0000789019", tag="Revenues", period_end=BEFORE,
-                value=3.0, unit="USD", filed_at=_dt(BEFORE),
+                cik="0000789019",
+                tag="Revenues",
+                period_end=BEFORE,
+                value=3.0,
+                unit="USD",
+                filed_at=_dt(BEFORE),
             ),
         ]
     )
@@ -267,8 +305,12 @@ def test_quant_scores_hide_future_rows(engine, gateway) -> None:  # type: ignore
         schema.quant_scores,
         [
             {
-                "symbol": "AAPL", "as_of": d, "model_version": "m",
-                "expected_excess_return": v, "confidence": 0.5, "feature_coverage": 1.0,
+                "symbol": "AAPL",
+                "as_of": d,
+                "model_version": "m",
+                "expected_excess_return": v,
+                "confidence": 0.5,
+                "feature_coverage": 1.0,
             }
             for d, v in ((BEFORE, 0.01), (AFTER, 0.99))
         ],
@@ -289,8 +331,12 @@ def test_verdicts_hide_future_rows(engine, gateway) -> None:  # type: ignore[no-
         schema.committee_verdicts,
         [
             {
-                "id": f"v-{d.isoformat()}", "symbol": "AAPL", "as_of": d,
-                "action": "buy", "conviction": c, "disagreement_score": 0.0,
+                "id": f"v-{d.isoformat()}",
+                "symbol": "AAPL",
+                "as_of": d,
+                "action": "buy",
+                "conviction": c,
+                "disagreement_score": 0.0,
                 "payload": {"id": f"v-{d.isoformat()}"},
             }
             for d, c in ((BEFORE, 0.6), (AFTER, 0.9))
@@ -342,8 +388,11 @@ def test_regime_state_hides_future_rows(engine, gateway) -> None:  # type: ignor
         schema.regime_states,
         [
             {
-                "as_of": d, "regime": r, "composite_score": 0.0,
-                "inputs": {}, "sessions_in_state": 1,
+                "as_of": d,
+                "regime": r,
+                "composite_score": 0.0,
+                "inputs": {},
+                "sessions_in_state": 1,
             }
             for d, r in ((BEFORE, "neutral"), (AFTER, "crisis"))
         ],
@@ -490,19 +539,31 @@ def test_transcripts_hide_future_calls(engine, gateway) -> None:  # type: ignore
         schema.transcripts,
         [
             {
-                "symbol": "AAPL", "event_date": BEFORE, "source": "defeatbeta",
-                "period": "Q2", "content": "knowable call", "speakers": [],
+                "symbol": "AAPL",
+                "event_date": BEFORE,
+                "source": "defeatbeta",
+                "period": "Q2",
+                "content": "knowable call",
+                "speakers": [],
                 "fetched_at": _dt(AFTER),  # backfilled TODAY — still visible
             },
             {
-                "symbol": "AAPL", "event_date": AFTER, "source": "defeatbeta",
-                "period": "Q3", "content": "FUTURE call", "speakers": [],
+                "symbol": "AAPL",
+                "event_date": AFTER,
+                "source": "defeatbeta",
+                "period": "Q3",
+                "content": "FUTURE call",
+                "speakers": [],
                 "fetched_at": _dt(AFTER),
             },
             {
-                "symbol": "AAPL", "event_date": AS_OF - timedelta(days=45),
-                "source": "defeatbeta", "period": "Q1", "content": "stale call",
-                "speakers": [], "fetched_at": _dt(BEFORE),
+                "symbol": "AAPL",
+                "event_date": AS_OF - timedelta(days=45),
+                "source": "defeatbeta",
+                "period": "Q1",
+                "content": "stale call",
+                "speakers": [],
+                "fetched_at": _dt(BEFORE),
             },
         ],
     )
@@ -551,9 +612,7 @@ def test_similar_experiences_within_run_learning_scoped_to_one_run(engine, gatew
     # Default: live-only firewall unchanged.
     assert [e.id for e in gateway.similar_experiences(symbol="AAPL", limit=5)] == ["wrl-1"]
     # Within-run learning: live + THIS run's past rows, nothing else.
-    hits = gateway.similar_experiences(
-        symbol="AAPL", limit=5, include_replay_run_id="run-this"
-    )
+    hits = gateway.similar_experiences(symbol="AAPL", limit=5, include_replay_run_id="run-this")
     assert sorted(e.id for e in hits) == ["wrl-1", "wrl-2"]
 
 
@@ -590,9 +649,7 @@ def test_surveillance_universe_hides_future_tier2_memberships(engine, gateway) -
             # The traded core is a DIFFERENT question: surveillance_universe
             # must not quietly return it, or "what discovery promoted" stops
             # being measurable.
-            UniverseMembership(
-                symbol="CORE", tier=Tier.CORE, valid_from=BEFORE, reason="seed"
-            ),
+            UniverseMembership(symbol="CORE", tier=Tier.CORE, valid_from=BEFORE, reason="seed"),
         ]
     )
     assert gateway.surveillance_universe() == ["WATCHED"]
@@ -646,10 +703,7 @@ def test_surveillance_flags_written_after_as_of_are_unreachable(engine, gateway)
         )
     with engine.connect() as cx:
         seeded = int(
-            cx.execute(
-                select(func.count()).select_from(schema.surveillance_flags)
-            ).scalar()
-            or 0
+            cx.execute(select(func.count()).select_from(schema.surveillance_flags)).scalar() or 0
         )
     assert seeded == 1, "the row must really be there for this test to mean anything"
     assert not [
@@ -681,8 +735,14 @@ def test_dropping_the_where_clause_raises(engine, gateway) -> None:  # type: ign
     repo.upsert_bars(
         [
             Bar(
-                symbol="TOMORROW", ts=_dt(AFTER, 20), open=1.0, high=1.0, low=1.0,
-                close=1.0, volume=1, source="tiingo",
+                symbol="TOMORROW",
+                ts=_dt(AFTER, 20),
+                open=1.0,
+                high=1.0,
+                low=1.0,
+                close=1.0,
+                volume=1,
+                source="tiingo",
             )
         ]
     )

@@ -103,9 +103,7 @@ class OrderRepository:
 
     def open_orders(self) -> list[Order]:
         with self._engine.connect() as cx:
-            rows = cx.execute(
-                select(orders).where(orders.c.state.not_in(_TERMINAL_VALUES))
-            ).all()
+            rows = cx.execute(select(orders).where(orders.c.state.not_in(_TERMINAL_VALUES))).all()
         return [_row_to_order(r) for r in rows]
 
     def set_broker_order_id(self, client_order_id: str, broker_order_id: str) -> None:
@@ -306,9 +304,7 @@ class PositionRepository:
         """Upsert the position from a fill; a position at zero qty is removed."""
         signed = trade.qty if trade.side == OrderSide.BUY else -trade.qty
         with self._engine.begin() as cx:
-            row = cx.execute(
-                select(positions).where(positions.c.symbol == trade.symbol)
-            ).first()
+            row = cx.execute(select(positions).where(positions.c.symbol == trade.symbol)).first()
             if row is None:
                 if signed <= 0:
                     return
@@ -398,9 +394,7 @@ class EquityCurveRepository:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
-    def upsert(
-        self, as_of: date, equity: float, cash: float, gross_exposure: float = 0.0
-    ) -> None:
+    def upsert(self, as_of: date, equity: float, cash: float, gross_exposure: float = 0.0) -> None:
         stmt = pg_insert(equity_curve).values(
             as_of=as_of, equity=equity, cash=cash, gross_exposure=gross_exposure
         )

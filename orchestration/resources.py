@@ -262,9 +262,7 @@ class DynamoResource(ConfigurableResource):
             return None
         from dynamo.data.transcripts_av import AlphaVantageTranscripts
 
-        return AlphaVantageTranscripts(
-            s.alphavantage_api_key, daily_cap=s.transcript_daily_cap
-        )
+        return AlphaVantageTranscripts(s.alphavantage_api_key, daily_cap=s.transcript_daily_cap)
 
     def defeatbeta_transcripts(self) -> DefeatBetaTranscripts | None:
         """Bulk transcript backfill; None when the ``transcripts`` extra is absent."""

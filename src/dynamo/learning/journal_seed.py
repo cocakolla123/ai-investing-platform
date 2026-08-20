@@ -195,9 +195,7 @@ def entries_for(exp: DecisionExperience) -> list[JournalEntry]:
             regime_at_write=exp.regime,
             sectors=sectors,
         ),
-        *lesson_entries(
-            review, created_at, strategy=exp.sleeve, regime_at_write=exp.regime
-        ),
+        *lesson_entries(review, created_at, strategy=exp.sleeve, regime_at_write=exp.regime),
     ]
     refs = {
         "experience_id": exp.id,

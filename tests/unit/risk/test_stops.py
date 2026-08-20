@@ -51,16 +51,12 @@ def test_trailing_engages_only_beyond_one_atr_profit() -> None:
 
 def test_trailing_ratchets_up_never_down() -> None:
     (spec,) = compute_position_stops(
-        _tactical(
-            current_price=104.0, highest_close_since_entry=110.0, prev_stop=106.0
-        ),
+        _tactical(current_price=104.0, highest_close_since_entry=110.0, prev_stop=106.0),
         CFG,
     )
     assert spec.stop_price == 106.0  # prior stop above recomputed trail: hold it
     (spec2,) = compute_position_stops(
-        _tactical(
-            current_price=112.0, highest_close_since_entry=112.0, prev_stop=95.5
-        ),
+        _tactical(current_price=112.0, highest_close_since_entry=112.0, prev_stop=95.5),
         CFG,
     )
     assert spec2.stop_price > 95.5  # higher trail wins
@@ -74,25 +70,19 @@ def test_disaster_stop_floors_everything() -> None:
 
 
 def test_long_term_uses_disaster_not_atr() -> None:
-    (spec,) = compute_position_stops(
-        _tactical(sleeve=Sleeve.LONG_TERM), CFG
-    )
+    (spec,) = compute_position_stops(_tactical(sleeve=Sleeve.LONG_TERM), CFG)
     assert spec.kind is StopKind.DISASTER
     assert math.isclose(spec.stop_price, 75.0)
 
 
 def test_time_stop_flags_at_horizon() -> None:
-    specs = compute_position_stops(
-        _tactical(sessions_held=21, horizon_days=20), CFG
-    )
+    specs = compute_position_stops(_tactical(sessions_held=21, horizon_days=20), CFG)
     kinds = {s.kind for s in specs}
     assert StopKind.TIME in kinds
     time_spec = next(s for s in specs if s.kind is StopKind.TIME)
     assert time_spec.stop_price == 100.0
     # Below horizon: no time stop.
-    specs = compute_position_stops(
-        _tactical(sessions_held=10, horizon_days=20), CFG
-    )
+    specs = compute_position_stops(_tactical(sessions_held=10, horizon_days=20), CFG)
     assert StopKind.TIME not in {s.kind for s in specs}
 
 
@@ -122,7 +112,5 @@ def test_invalid_inputs_never_raise() -> None:
 
 
 def test_recompute_stops_covers_all_positions() -> None:
-    specs = recompute_stops(
-        [_tactical(), _tactical(symbol="BBB", sleeve=Sleeve.LONG_TERM)], CFG
-    )
+    specs = recompute_stops([_tactical(), _tactical(symbol="BBB", sleeve=Sleeve.LONG_TERM)], CFG)
     assert {s.symbol for s in specs} == {"AAA", "BBB"}

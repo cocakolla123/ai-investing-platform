@@ -111,9 +111,7 @@ class FakeRepo:
         rows = [
             r
             for r in self.flag_rows
-            if r["triage_verdict"] is None
-            and r["ts"] >= since
-            and r["detector"] not in excluded
+            if r["triage_verdict"] is None and r["ts"] >= since and r["detector"] not in excluded
         ]
         rows.sort(key=lambda r: (r["ts"], r["id"]))
         if limit is not None:
@@ -150,7 +148,8 @@ class FakeRepo:
     def upsert_universe_membership(self, memberships: Any) -> int:
         memberships = list(memberships)
         self.members = [
-            m for m in self.members
+            m
+            for m in self.members
             if not any(m.symbol == n.symbol and m.tier == n.tier for n in memberships)
         ] + memberships
         return len(memberships)

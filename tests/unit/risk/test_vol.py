@@ -27,17 +27,13 @@ def test_constant_returns_have_zero_sigma() -> None:
 def test_sigma_scales_linearly() -> None:
     rng = np.random.default_rng(5)
     r = rng.normal(0.0, 0.01, 300)
-    assert math.isclose(
-        ewma_sigma_daily(3.0 * r, 60), 3.0 * ewma_sigma_daily(r, 60), rel_tol=1e-9
-    )
+    assert math.isclose(ewma_sigma_daily(3.0 * r, 60), 3.0 * ewma_sigma_daily(r, 60), rel_tol=1e-9)
 
 
 def test_annualization_factor() -> None:
     rng = np.random.default_rng(6)
     r = rng.normal(0.0, 0.01, 300)
-    assert math.isclose(
-        ewma_sigma_annual(r, 60), ewma_sigma_daily(r, 60) * ANNUALIZATION
-    )
+    assert math.isclose(ewma_sigma_annual(r, 60), ewma_sigma_daily(r, 60) * ANNUALIZATION)
 
 
 @settings(max_examples=60, deadline=None)
@@ -91,9 +87,7 @@ def test_atr_of_constant_range_bars() -> None:
 
 
 def test_atr_handles_short_or_bad_series() -> None:
-    bars = SymbolBars(
-        make_dates(1), np.array([1.0]), np.array([0.5]), np.array([0.8])
-    )
+    bars = SymbolBars(make_dates(1), np.array([1.0]), np.array([0.5]), np.array([0.8]))
     assert math.isnan(atr(bars))
     n = 30
     bad = SymbolBars(

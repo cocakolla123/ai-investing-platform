@@ -101,9 +101,7 @@ def wired(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     )
     monkeypatch.setattr(research_mod, "_journal_embedder", lambda: embedder)
     # Structured retrieval: no embedding involved, must survive the gate.
-    monkeypatch.setattr(
-        research_mod, "_prior_case_hits", lambda *a, **k: {"ACME": [PRIOR_CASE]}
-    )
+    monkeypatch.setattr(research_mod, "_prior_case_hits", lambda *a, **k: {"ACME": [PRIOR_CASE]})
     monkeypatch.setattr(research_mod, "_sectors_for", lambda *a, **k: {"ACME": "Tech"})
     monkeypatch.setattr(research_mod, "_regime_at", lambda *a, **k: None)
     return {"repo": repo, "embedder": embedder, "settings": settings}

@@ -41,8 +41,13 @@ DC = DecisionContext(
 
 def _outcome(pnl: float = -4.2) -> TradeOutcome:
     return TradeOutcome(
-        trade_id="t-1", symbol="AAPL", pnl_pct=pnl, holding_days=28,
-        entry_price=100.0, exit_price=100.0 * (1 + pnl / 100), closed_at=NOW,
+        trade_id="t-1",
+        symbol="AAPL",
+        pnl_pct=pnl,
+        holding_days=28,
+        entry_price=100.0,
+        exit_price=100.0 * (1 + pnl / 100),
+        closed_at=NOW,
     )
 
 
@@ -100,9 +105,7 @@ def test_losing_trade_requires_failure_class() -> None:
 
 
 def test_losing_trade_with_failure_class_ok() -> None:
-    review = parse_review(
-        _review_payload(-4.2, FailureClass.NORMAL_UNCERTAINTY), _outcome(-4.2)
-    )
+    review = parse_review(_review_payload(-4.2, FailureClass.NORMAL_UNCERTAINTY), _outcome(-4.2))
     assert review.failure_primary == FailureClass.NORMAL_UNCERTAINTY
 
 

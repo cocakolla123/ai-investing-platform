@@ -117,9 +117,7 @@ def _sessions(history: pd.DataFrame, as_of: pd.Timestamp) -> pd.DatetimeIndex:
     return cast(pd.DatetimeIndex, ts[ts <= as_of])
 
 
-def _value_at(
-    history: pd.DataFrame, ts: pd.Timestamp, symbol: str, column: str
-) -> float:
+def _value_at(history: pd.DataFrame, ts: pd.Timestamp, symbol: str, column: str) -> float:
     try:
         v = history.loc[(ts, symbol), column]
     except KeyError:
@@ -207,9 +205,7 @@ def _rule_holds(
     return True, observed
 
 
-def _rule_depth(
-    history: pd.DataFrame, rule: Rule, symbol: str, ts: pd.Timestamp
-) -> float:
+def _rule_depth(history: pd.DataFrame, rule: Rule, symbol: str, ts: pd.Timestamp) -> float:
     """Satisfaction depth in [0, 1] for strength. Quantile rules grade by how
     deep into the quantile the symbol sits; other satisfied rules score 1."""
     if rule.op in ("in_top_quantile", "in_bottom_quantile"):
@@ -222,9 +218,7 @@ def _rule_depth(
     return 1.0
 
 
-def _strength(
-    history: pd.DataFrame, rules: Iterable[Rule], symbol: str, ts: pd.Timestamp
-) -> float:
+def _strength(history: pd.DataFrame, rules: Iterable[Rule], symbol: str, ts: pd.Timestamp) -> float:
     depths = [_rule_depth(history, r, symbol, ts) for r in rules]
     mean_depth = sum(depths) / len(depths) if depths else 0.0
     return float(min(1.0, max(0.0, 0.5 + 0.5 * mean_depth)))
@@ -455,6 +449,5 @@ def earnings_react_v1() -> Strategy:
 
 
 DEFAULT_STRATEGIES: dict[str, Strategy] = {
-    s.strategy_id: s
-    for s in (momentum_rs_v1(), breakout_v1(), meanrev_v1(), earnings_react_v1())
+    s.strategy_id: s for s in (momentum_rs_v1(), breakout_v1(), meanrev_v1(), earnings_react_v1())
 }

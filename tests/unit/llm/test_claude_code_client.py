@@ -474,10 +474,7 @@ def test_auth_error_envelope_raises_terminal_auth_error() -> None:
         {
             "is_error": True,
             "subtype": "success",
-            "result": (
-                "Failed to authenticate: OAuth session expired "
-                "and could not be refreshed"
-            ),
+            "result": ("Failed to authenticate: OAuth session expired and could not be refreshed"),
             "usage": {},
         }
     )

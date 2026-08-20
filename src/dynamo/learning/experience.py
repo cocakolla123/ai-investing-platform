@@ -241,9 +241,7 @@ def build_experience(
     if path is not None:
         mae, mfe = mae_mfe_pct(trade.entry_price, path.lows, path.highs, path.exit_session_index)
         bench_excess = benchmark_excess_pct(trade.pnl_pct, path.benchmark_closes)
-        cf_delayed = cf.delayed_entry_pnl_pct(
-            path.opens, path.exit_session_index, trade.exit_price
-        )
+        cf_delayed = cf.delayed_entry_pnl_pct(path.opens, path.exit_session_index, trade.exit_price)
         cf_horizon = cf.hold_to_horizon_pnl_pct(trade.entry_price, path.closes, horizon)
         if (
             expected_upside is not None

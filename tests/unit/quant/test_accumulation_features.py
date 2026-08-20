@@ -194,12 +194,8 @@ def test_explained_heavy_days_do_not_count() -> None:
         [_heavy_volume_bars("QUIET"), _heavy_volume_bars("EXPLAINED")],
         ignore_index=True,
     )
-    heavy_days = sorted(
-        pd.bdate_range(end="2026-06-26", periods=200)[np.arange(200) % 10 == 0]
-    )
-    explained = pd.DataFrame(
-        {"symbol": "EXPLAINED", "published_at": heavy_days}
-    )
+    heavy_days = sorted(pd.bdate_range(end="2026-06-26", periods=200)[np.arange(200) % 10 == 0])
+    explained = pd.DataFrame({"symbol": "EXPLAINED", "published_at": heavy_days})
     news = pd.concat([_news_rows("QUIET", [300]), explained], ignore_index=True)
     raw = _raw(bars, ["QUIET", "EXPLAINED"], news=news)
     assert float(raw.loc["EXPLAINED", "unusual_volume_no_news"]) == 0.0
@@ -207,9 +203,7 @@ def test_explained_heavy_days_do_not_count() -> None:
 
 
 def test_news_count_reads_the_trailing_60_days_only() -> None:
-    bars = pd.concat(
-        [_heavy_volume_bars("LOUD"), _heavy_volume_bars("QUIET")], ignore_index=True
-    )
+    bars = pd.concat([_heavy_volume_bars("LOUD"), _heavy_volume_bars("QUIET")], ignore_index=True)
     news = pd.concat(
         [
             _news_rows("LOUD", [1, 5, 12, 30, 55]),
@@ -241,9 +235,7 @@ def _same_total_return_paths(total: float = 0.30, n: int = 200) -> pd.DataFrame:
     base = np.full(n, 100.0)
     smooth = base.copy()
     step = (1.0 + total) ** (1.0 / MOMENTUM_QUALITY_WINDOW)
-    smooth[-MOMENTUM_QUALITY_WINDOW:] = 100.0 * step ** np.arange(
-        1, MOMENTUM_QUALITY_WINDOW + 1
-    )
+    smooth[-MOMENTUM_QUALITY_WINDOW:] = 100.0 * step ** np.arange(1, MOMENTUM_QUALITY_WINDOW + 1)
     gap = base.copy()
     gap[-MOMENTUM_QUALITY_WINDOW:] = 100.0 * (1.0 + total)
     return pd.concat([_bars("SMOOTH", smooth), _bars("GAP", gap)], ignore_index=True)
@@ -271,16 +263,12 @@ def test_drawdown_adjusted_momentum_penalizes_a_violent_path() -> None:
     n = 200
     smooth = np.full(n, 100.0)
     step = 1.30 ** (1.0 / MOMENTUM_QUALITY_WINDOW)
-    smooth[-MOMENTUM_QUALITY_WINDOW:] = 100.0 * step ** np.arange(
-        1, MOMENTUM_QUALITY_WINDOW + 1
-    )
+    smooth[-MOMENTUM_QUALITY_WINDOW:] = 100.0 * step ** np.arange(1, MOMENTUM_QUALITY_WINDOW + 1)
     violent = np.full(n, 100.0)
     half = MOMENTUM_QUALITY_WINDOW // 2
     violent[-MOMENTUM_QUALITY_WINDOW:-half] = np.linspace(98.0, 70.0, half)
     violent[-half:] = np.linspace(75.0, 130.0, half)
-    bars = pd.concat(
-        [_bars("SMOOTH", smooth), _bars("VIOLENT", violent)], ignore_index=True
-    )
+    bars = pd.concat([_bars("SMOOTH", smooth), _bars("VIOLENT", violent)], ignore_index=True)
     raw = _raw(bars, ["SMOOTH", "VIOLENT"])
 
     assert float(raw.loc["SMOOTH", "ret_60d"]) == pytest.approx(

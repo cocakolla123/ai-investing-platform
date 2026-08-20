@@ -79,9 +79,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="re-embed entries previously written with the hash fallback",
     )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="report what would be written"
-    )
+    parser.add_argument("--dry-run", action="store_true", help="report what would be written")
     return parser
 
 

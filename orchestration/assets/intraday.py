@@ -112,13 +112,9 @@ def intraday_evaluate_entries(context: OpExecutionContext, dynamo: DynamoResourc
     sf = schema.surveillance_flags
     material_df = _read_df(
         dynamo,
-        select(sf.c.symbol).where(
-            sf.c.triage_verdict == "material", sf.c.ts >= _day_start(as_of)
-        ),
+        select(sf.c.symbol).where(sf.c.triage_verdict == "material", sf.c.ts >= _day_start(as_of)),
     )
-    material_today = (
-        {str(s) for s in material_df["symbol"]} if not material_df.empty else set()
-    )
+    material_today = {str(s) for s in material_df["symbol"]} if not material_df.empty else set()
     promoted_material = sorted(promoted_today & material_today)
 
     # (b) Breakout signals for watchlist tacticals, checked vs live quotes.
@@ -179,8 +175,7 @@ def intraday_evaluate_entries(context: OpExecutionContext, dynamo: DynamoResourc
     inst = schema.instruments
     inst_df = _read_df(dynamo, select(inst.c.symbol, inst.c.sector))
     sector_by_symbol = {
-        str(r["symbol"]): str(r["sector"] or "unknown")
-        for r in inst_df.to_dict(orient="records")
+        str(r["symbol"]): str(r["sector"] or "unknown") for r in inst_df.to_dict(orient="records")
     }
 
     # {} unless meta_sizing_enabled (dark path, plan Phase 3): absent symbols
@@ -298,9 +293,7 @@ def intraday_evaluate_entries(context: OpExecutionContext, dynamo: DynamoResourc
             # Committee expectations denormalized from the verdict where one
             # exists; (0, 0, 20) means "no forecast" for verdict-less entries.
             expected_upside_pct=verdict.expected_upside_pct if verdict is not None else 0.0,
-            expected_downside_pct=(
-                verdict.expected_downside_pct if verdict is not None else 0.0
-            ),
+            expected_downside_pct=(verdict.expected_downside_pct if verdict is not None else 0.0),
             horizon_days=verdict.horizon_days if verdict is not None else 20,
         )
         dc_id = dc_repo.append(dc)

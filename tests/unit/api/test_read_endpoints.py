@@ -133,9 +133,7 @@ def test_metrics_endpoint_mounted(client) -> None:
     assert "python_info" in resp.text
 
 
-def test_risk_limits_says_so_when_the_verdict_predates_config_stamping(
-    client, deps
-) -> None:
+def test_risk_limits_says_so_when_the_verdict_predates_config_stamping(client, deps) -> None:
     """Old verdicts carry no config; the API must not quietly show defaults
     as though they were what ran."""
     assert deps.risk.verdict is not None

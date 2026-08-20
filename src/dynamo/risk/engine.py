@@ -79,9 +79,7 @@ def _mark_weights(inputs: RiskEngineInputs, equity: float) -> dict[str, float] |
         price = inputs.prices.get(position.symbol)
         if price is None or not _finite_positive(price):
             return None
-        weights[position.symbol] = (
-            weights.get(position.symbol, 0.0) + position.qty * price / equity
-        )
+        weights[position.symbol] = weights.get(position.symbol, 0.0) + position.qty * price / equity
     return weights
 
 
@@ -149,8 +147,7 @@ class RiskEngine:
             age_days = (inputs.as_of.date() - inputs.returns.dates[-1]).days
             if age_days > inputs.max_stale_days:
                 problems.append(
-                    f"returns history is stale ({age_days}d old > "
-                    f"{inputs.max_stale_days}d limit)"
+                    f"returns history is stale ({age_days}d old > {inputs.max_stale_days}d limit)"
                 )
 
         weights: dict[str, float] | None = None
@@ -161,15 +158,11 @@ class RiskEngine:
             else:
                 for symbol in weights:
                     if inputs.returns.index_of(symbol) is None:
-                        problems.append(
-                            f"held symbol {symbol} missing from returns history"
-                        )
+                        problems.append(f"held symbol {symbol} missing from returns history")
 
         regime = latest_regime(inputs.regime_history, cfg)
         if regime is None:
-            problems.append(
-                "regime inputs insufficient (history shorter than warmup)"
-            )
+            problems.append("regime inputs insufficient (history shorter than warmup)")
 
         if problems or weights is None or regime is None:
             return self._degraded_verdict(inputs, ladder_state, regime, problems)
@@ -188,14 +181,10 @@ class RiskEngine:
         gross_cap = cfg.gross_cap
         if effects.gross_override is not None:
             gross_cap = min(gross_cap, effects.gross_override)
-        vetoes = tuple(
-            Veto(symbol="*", rule="fail_closed", reason=reason) for reason in problems
-        )
+        vetoes = tuple(Veto(symbol="*", rule="fail_closed", reason=reason) for reason in problems)
         equity = inputs.portfolio.equity
         cash = inputs.portfolio.cash
-        cash_fraction = (
-            cash / equity if _finite_positive(equity) and math.isfinite(cash) else 1.0
-        )
+        cash_fraction = cash / equity if _finite_positive(equity) and math.isfinite(cash) else 1.0
         metrics = RiskMetrics(
             as_of=inputs.as_of,
             gross_exposure=0.0,
@@ -238,20 +227,14 @@ class RiskEngine:
 
         gross_exposure = float(sum(abs(w) for w in weights.values()))
         cash_fraction = (
-            inputs.portfolio.cash / equity
-            if math.isfinite(inputs.portfolio.cash)
-            else 0.0
+            inputs.portfolio.cash / equity if math.isfinite(inputs.portfolio.cash) else 0.0
         )
         drawdown_from_hwm = equity / hwm - 1.0
 
-        tighten = kupiec_tighten_factor(
-            kupiec_traffic_light(inputs.var_exceptions_250d)
-        )
+        tighten = kupiec_tighten_factor(kupiec_traffic_light(inputs.var_exceptions_250d))
 
         corr = shrunk_correlation(panel)
-        clusters = correlation_clusters(
-            corr, panel.symbols, cfg.correlation_cluster_threshold
-        )
+        clusters = correlation_clusters(corr, panel.symbols, cfg.correlation_cluster_threshold)
 
         var_result: VarResult | None = None
         portfolio_vol: float | None = None
@@ -319,9 +302,7 @@ class RiskEngine:
                 used = sum(
                     w
                     for other, w in weights.items()
-                    if other != symbol
-                    and inputs.sector_by_symbol.get(other) == sector
-                    and w > 0.0
+                    if other != symbol and inputs.sector_by_symbol.get(other) == sector and w > 0.0
                 )
                 cap = min(cap, max(cfg.sector_cap - used, 0.0))
             cluster_id = clusters.get(symbol)
@@ -336,14 +317,10 @@ class RiskEngine:
             per_position_cap[symbol] = float(min(max(cap, 0.0), cfg.per_position_hard))
 
         sectors_seen = {
-            s
-            for s in (inputs.sector_by_symbol.get(sym) for sym in panel.symbols)
-            if s is not None
+            s for s in (inputs.sector_by_symbol.get(sym) for sym in panel.symbols) if s is not None
         }
         sector_caps = {s: cfg.sector_cap * tighten for s in sorted(sectors_seen)}
-        cluster_caps = {
-            c: cfg.cluster_cap * tighten for c in sorted(set(clusters.values()))
-        }
+        cluster_caps = {c: cfg.cluster_cap * tighten for c in sorted(set(clusters.values()))}
 
         # --- exposure caps ------------------------------------------------
         gross_cap = cfg.gross_cap
@@ -357,9 +334,7 @@ class RiskEngine:
         cash_floor = max(cfg.cash_floor, 1.0 - gross_cap)
 
         new_risk_allowed = (
-            effects.new_positions_allowed
-            and regime.regime is not Regime.CRISIS
-            and not var_breach
+            effects.new_positions_allowed and regime.regime is not Regime.CRISIS and not var_breach
         )
 
         # --- stops --------------------------------------------------------

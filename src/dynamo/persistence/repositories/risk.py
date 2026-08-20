@@ -116,9 +116,9 @@ class VarBacktestReader:
 
     def _var_by_date(self, since: date) -> dict[date, float]:
         t = schema.risk_verdicts
-        stmt = select(t.c.as_of, t.c.payload).where(t.c.as_of >= datetime(
-            since.year, since.month, since.day, tzinfo=UTC
-        ))
+        stmt = select(t.c.as_of, t.c.payload).where(
+            t.c.as_of >= datetime(since.year, since.month, since.day, tzinfo=UTC)
+        )
         out: dict[date, float] = {}
         with self._engine.connect() as conn:
             for row in conn.execute(stmt):
@@ -135,9 +135,7 @@ class VarBacktestReader:
 
     def _equity_returns(self, since: date) -> list[tuple[date, float]]:
         t = schema.equity_curve
-        stmt = (
-            select(t.c.as_of, t.c.equity).where(t.c.as_of >= since).order_by(t.c.as_of)
-        )
+        stmt = select(t.c.as_of, t.c.equity).where(t.c.as_of >= since).order_by(t.c.as_of)
         with self._engine.connect() as conn:
             rows = [(r.as_of, float(r.equity)) for r in conn.execute(stmt)]
         returns: list[tuple[date, float]] = []
@@ -148,8 +146,9 @@ class VarBacktestReader:
                 returns.append((prev_day, equity / prev_equity - 1.0))
         return returns
 
-    def observations(self, *, window: int = 250, today: date | None = None
-                     ) -> list[tuple[float, float]]:
+    def observations(
+        self, *, window: int = 250, today: date | None = None
+    ) -> list[tuple[float, float]]:
         from datetime import timedelta
 
         anchor = today or datetime.now(UTC).date()

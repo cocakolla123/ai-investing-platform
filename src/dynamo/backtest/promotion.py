@@ -102,7 +102,9 @@ PROMOTION_STAGES: tuple[StageGate, ...] = (
             Criterion("n_folds", ">=", 6.0, ">= 6 folds"),
             Criterion("median_fold_sharpe", ">", 0.0, "positive median fold Sharpe"),
             Criterion(
-                "max_single_fold_return_share", "<=", 0.5,
+                "max_single_fold_return_share",
+                "<=",
+                0.5,
                 "no fold contributes > 50% of total return",
             ),
         ),
@@ -198,9 +200,7 @@ def run_stage(
     if gate is None:
         raise PromotionError(f"unknown promotion stage {stage}")
     if not clean_tree:
-        raise PromotionError(
-            "dirty git tree: promotion-grade runs are refused (doc 08 section 8)"
-        )
+        raise PromotionError("dirty git tree: promotion-grade runs are refused (doc 08 section 8)")
     engine = str(evidence.get("engine", ""))
     if gate.stage <= 4 and engine != "event_driven":
         raise PromotionError(
@@ -209,9 +209,7 @@ def run_stage(
         )
 
     family = strategy_family or target_id
-    trials = (
-        repo.increment_trial(family) if gate.counts_trial else repo.trial_count(family)
-    )
+    trials = repo.increment_trial(family) if gate.counts_trial else repo.trial_count(family)
 
     details: list[str] = []
     passed = True

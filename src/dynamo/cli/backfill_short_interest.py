@@ -91,9 +91,7 @@ def select_cycles(
     caller asked for. An explicit ``--settlement`` that is unpublished at
     ``as_of`` therefore comes back empty rather than being fetched anyway.
     """
-    published = sorted(
-        (d for d in available if publication_date_for(d) <= as_of), reverse=True
-    )
+    published = sorted((d for d in available if publication_date_for(d) <= as_of), reverse=True)
     if settlement is not None:
         return [d for d in published if d == settlement]
     if since is not None:

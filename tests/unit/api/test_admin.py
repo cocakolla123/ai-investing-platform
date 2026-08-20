@@ -308,9 +308,7 @@ def test_ladder_ack_requires_the_confirm_header(
     assert ladder_halted.ladder_events[7]["acked_at"] is None
 
 
-def test_ladder_ack_refuses_a_blank_note(
-    client: TestClient, ladder_halted: FakeAdminStore
-) -> None:
+def test_ladder_ack_refuses_a_blank_note(client: TestClient, ladder_halted: FakeAdminStore) -> None:
     resp = _post(client, "/ladder/7/ack", "ladder-ack", {"note": "  "})
     assert resp.status_code == 400
     assert ladder_halted.ladder_events[7]["acked_at"] is None

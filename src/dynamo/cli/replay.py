@@ -473,9 +473,7 @@ def _bundle_factory(engine: Any) -> Any:
                 )
             ).first()
         artifact_dir = (
-            Path(str(row.artifact_path)).parent
-            if row is not None and row.artifact_path
-            else None
+            Path(str(row.artifact_path)).parent if row is not None and row.artifact_path else None
         )
         return bundle_from_version(version, artifact_dir)
 
@@ -497,21 +495,15 @@ def _selection_kwargs(args: argparse.Namespace, settings: Any) -> dict[str, Any]
         return getattr(settings, setting) if value is None else value
 
     return {
-        "min_feature_coverage": pick(
-            "min_feature_coverage", "replay_min_feature_coverage"
-        ),
+        "min_feature_coverage": pick("min_feature_coverage", "replay_min_feature_coverage"),
         "shortlist_candidate_percentile": pick(
             "candidate_percentile", "replay_shortlist_candidate_percentile"
         ),
-        "shortlist_crypto_slots": pick(
-            "crypto_slots", "replay_shortlist_crypto_slots"
-        ),
+        "shortlist_crypto_slots": pick("crypto_slots", "replay_shortlist_crypto_slots"),
         "shortlist_cooldown_sessions": pick(
             "cooldown_sessions", "replay_shortlist_cooldown_sessions"
         ),
-        "shortlist_rotation_slots": pick(
-            "rotation_slots", "replay_shortlist_rotation_slots"
-        ),
+        "shortlist_rotation_slots": pick("rotation_slots", "replay_shortlist_rotation_slots"),
         "shortlist_rotation_lookback_sessions": pick(
             "rotation_lookback_sessions",
             "replay_shortlist_rotation_lookback_sessions",
@@ -568,9 +560,7 @@ def _build_discovery(engine: Any, config: Any, repo: Any, model: Any = None) -> 
 
     gw_start = HistoricalDataGateway(engine, config.start)
     gw_end = HistoricalDataGateway(engine, config.end)
-    members = sorted(
-        set(gw_start.surveillance_universe()) | set(gw_end.surveillance_universe())
-    )
+    members = sorted(set(gw_start.surveillance_universe()) | set(gw_end.surveillance_universe()))
     sectors = gw_end.sectors(members)
     sector_etf_map = default_sector_etf_map(sectors)
     # The sector ETFs must be IN the panel or rel_strength has no benchmark
@@ -633,9 +623,7 @@ def _preflight_extras(
         print("preflight SKIPPED (--skip-preflight) — skip recorded in run metadata")
         return {"preflight": {"skipped": True}}
     try:
-        report = run_preflight(
-            engine, config, require_shipping_bundle=require_shipping_bundle
-        )
+        report = run_preflight(engine, config, require_shipping_bundle=require_shipping_bundle)
     except PreflightError as exc:
         print("preflight FAILED — refusing to run:")
         for check in exc.report.checks:
@@ -949,11 +937,7 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         f"committee replay {config.run_id} ({config.start} -> {config.end}) "
         f"backend={backend} cap=${budget.cap_usd:.2f}"
         + (f" resuming from ${prior_spent:.2f} spent" if prior_spent else "")
-        + (
-            f", skipping {len(done_days)} day(s) with persisted verdicts"
-            if done_days
-            else ""
-        )
+        + (f", skipping {len(done_days)} day(s) with persisted verdicts" if done_days else "")
     )
     if backend == "claude_code":
         print(
@@ -1065,8 +1049,7 @@ def _cmd_estimate(args: argparse.Namespace) -> int:
         if not args.no_macro_digest:
             per_session = estimate_request_cost(
                 tier_models["analyst"],
-                prompt_chars=len(load_prompt("macro_digest").system)
-                + ASSUMED_MACRO_CONTEXT_CHARS,
+                prompt_chars=len(load_prompt("macro_digest").system) + ASSUMED_MACRO_CONTEXT_CHARS,
                 max_tokens=MACRO_DIGEST_MAX_TOKENS,
             )
         total = estimate_run_cost(
@@ -1094,9 +1077,7 @@ def _cmd_estimate(args: argparse.Namespace) -> int:
         print("  projection uses the same conservative math, so real spend lands lower.")
     # Model knowledge gate verdict — the same check CommitteeReplay enforces,
     # surfaced here BEFORE any dollar is at stake.
-    gate = model_knowledge_gate(
-        args.start, tier_models, settings.replay_cutoff_margin_days
-    )
+    gate = model_knowledge_gate(args.start, tier_models, settings.replay_cutoff_margin_days)
     print("  model knowledge gate (documented training-data cutoffs):")
     for model_id, cutoff in sorted(gate["cutoffs"].items()):
         marker = "BLOCKS" if model_id in gate["blocking_models"] else "ok"
@@ -1129,9 +1110,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     contexts = repo.contexts_for(args.run_id)
     verdicts = repo.verdicts_for(args.run_id)
     report = audit_run(run, contexts, verdicts)
-    out_dir = Path(
-        args.out_dir or Path(Settings().artifact_dir) / "backtests" / args.run_id
-    )
+    out_dir = Path(args.out_dir or Path(Settings().artifact_dir) / "backtests" / args.run_id)
     json_path, md_path = write_audit_artifacts(report, out_dir)
     for name, cat in sorted(report.categories.items()):
         print(
@@ -1376,9 +1355,7 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
-def _write_compare_png(
-    curves: dict[str, Any], labels: dict[str, str], path: str
-) -> None:
+def _write_compare_png(curves: dict[str, Any], labels: dict[str, str], path: str) -> None:
     """Overlaid equity curves normalized to 100 at start (cross-bankroll
     comparability). matplotlib is optional — absent is a note, not an error
     (guarded importlib load, mirroring the quantstats tearsheet pattern)."""
@@ -1448,8 +1425,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
     if run["budget_usd"] is not None:
         print(f"budget: ${run['spent_usd']:.2f} spent of ${run['budget_usd']:.2f} cap")
     print(
-        f"decisions: {len(decisions)}   verdicts: {len(verdicts)}   "
-        f"experiences: {len(experiences)}"
+        f"decisions: {len(decisions)}   verdicts: {len(verdicts)}   experiences: {len(experiences)}"
     )
     for v in verdicts:
         print(
@@ -1459,10 +1435,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
     for d in decisions:
         fill = f"{d['fill_price']:.2f}" if d["fill_price"] is not None else "-"
         weight = f"{d['target_weight']:.4f}" if d["target_weight"] is not None else "-"
-        print(
-            f"  {d['as_of']} {d['symbol']:<6} {d['action']:<9} "
-            f"w={weight} fill={fill}"
-        )
+        print(f"  {d['as_of']} {d['symbol']:<6} {d['action']:<9} w={weight} fill={fill}")
     return 0
 
 
@@ -1481,9 +1454,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_usd is not None and args.max_usd <= 0:
             parser.error("--max-usd must be positive")
         if args.mode == "portfolio" and not args.source_run_id:
-            parser.error(
-                "--mode portfolio requires --source-run-id (a completed committee run)"
-            )
+            parser.error("--mode portfolio requires --source-run-id (a completed committee run)")
         return _cmd_run(args)
     if args.command == "estimate":
         return _cmd_estimate(args)

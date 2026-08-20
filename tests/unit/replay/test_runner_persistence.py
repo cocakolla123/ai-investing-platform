@@ -42,9 +42,7 @@ def result() -> tuple[Any, FakeRunRepo]:
     scores = make_scores(sessions)
     window = sessions[-TWO_MONTH_SESSIONS:]
     assert len({(d.year, d.month) for d in window}) >= 2, "fixture must span months"
-    config = ReplayConfig(
-        start=window[0], end=window[-1], label="persist", horizon_sessions=3
-    )
+    config = ReplayConfig(start=window[0], end=window[-1], label="persist", horizon_sessions=3)
     run_repo = FakeRunRepo()
     runner = ReplayRunner(
         gateway_factory=lambda d: FakeGateway(d, bars, scores),
@@ -59,9 +57,7 @@ def test_equity_rows_round_trip_the_in_memory_curve(result: Any) -> None:
     res, run_repo = result
     rows = run_repo.equity_rows
     assert len(rows) == len(res.sessions) == len(res.session_records)
-    for row, (day, equity), rec in zip(
-        rows, res.equity_curve, res.session_records, strict=True
-    ):
+    for row, (day, equity), rec in zip(rows, res.equity_curve, res.session_records, strict=True):
         assert row["run_id"] == res.run_id
         assert row["as_of"] == day == rec.session
         assert row["equity"] == equity == rec.equity
@@ -127,9 +123,7 @@ def test_realized_pnl_matches_average_cost_ledger(result: Any) -> None:
             prev_qty = qty_held.get(f.symbol, 0.0)
             prev_basis = basis.get(f.symbol, 0.0)
             new_qty = prev_qty + f.qty
-            basis[f.symbol] = (
-                (prev_qty * prev_basis + f.trade_value + f.cost) / new_qty
-            )
+            basis[f.symbol] = (prev_qty * prev_basis + f.trade_value + f.cost) / new_qty
             qty_held[f.symbol] = new_qty
         else:
             sells += 1
@@ -150,9 +144,7 @@ def test_turnover_total_accumulates_across_monthly_resets(result: Any) -> None:
     res, _ = result
     equity_by_day = dict(res.equity_curve)
     session_order = list(res.sessions)
-    prev_day = {
-        session_order[i]: session_order[i - 1] for i in range(1, len(session_order))
-    }
+    prev_day = {session_order[i]: session_order[i - 1] for i in range(1, len(session_order))}
     per_month: dict[tuple[int, int], float] = {}
     total = 0.0
     traded_by_day: dict[date, float] = {}
@@ -241,12 +233,27 @@ def test_realized_pnl_parity_with_backtest_engine() -> None:
     for day, target_weight, opens in ((d1, 0.10, opens_1), (d2, 0.0, opens_2)):
         target = _target(day, symbol, target_weight)
         r_cash, fills, _ = runner._execute(
-            target, equity, closes, opens, day, r_cash, r_shares, r_basis,
-            {symbol: sigma_annual}, {symbol: adv},
+            target,
+            equity,
+            closes,
+            opens,
+            day,
+            r_cash,
+            r_shares,
+            r_basis,
+            {symbol: sigma_annual},
+            {symbol: adv},
         )
         r_fills.extend(fills)
         e_cash, fills2, _ = engine._execute(
-            target, equity, closes, data.opens.loc[day], day, e_cash, e_shares, e_basis,
+            target,
+            equity,
+            closes,
+            data.opens.loc[day],
+            day,
+            e_cash,
+            e_shares,
+            e_basis,
             data,
         )
         e_fills.extend(fills2)
@@ -254,7 +261,10 @@ def test_realized_pnl_parity_with_backtest_engine() -> None:
     assert len(r_fills) == len(e_fills) == 2
     for rf, ef in zip(r_fills, e_fills, strict=True):
         assert (rf.symbol, rf.side, rf.qty, rf.price) == (
-            ef.symbol, ef.side, ef.qty, ef.price,
+            ef.symbol,
+            ef.side,
+            ef.qty,
+            ef.price,
         )
         assert rf.trade_value == ef.trade_value
         assert rf.cost == ef.cost

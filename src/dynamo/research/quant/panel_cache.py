@@ -74,12 +74,8 @@ def catalog_fingerprint() -> str:
     payload = json.dumps(
         {
             "feature_names": list(catalog.FEATURE_CATALOG),
-            "catalog_src": hashlib.sha256(
-                inspect.getsource(catalog).encode("utf-8")
-            ).hexdigest(),
-            "features_src": hashlib.sha256(
-                inspect.getsource(features).encode("utf-8")
-            ).hexdigest(),
+            "catalog_src": hashlib.sha256(inspect.getsource(catalog).encode("utf-8")).hexdigest(),
+            "features_src": hashlib.sha256(inspect.getsource(features).encode("utf-8")).hexdigest(),
         }
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

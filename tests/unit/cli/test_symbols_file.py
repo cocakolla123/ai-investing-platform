@@ -68,8 +68,15 @@ def test_backfill_bars_accepts_symbols_file_flag(tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         backfill_parser().parse_args(
             [
-                "bars", "--start", "2025-01-01", "--end", "2026-01-01",
-                "--symbols-file", str(path), "--symbols", "AAPL",
+                "bars",
+                "--start",
+                "2025-01-01",
+                "--end",
+                "2026-01-01",
+                "--symbols-file",
+                str(path),
+                "--symbols",
+                "AAPL",
             ]
         )
 
@@ -99,8 +106,6 @@ def test_quant_train_accepts_symbols_file_flag(tmp_path: Path) -> None:
     args = qt._build_parser().parse_args([*base, "--symbols-file", str(path)])
     assert args.symbols_file == path
     with pytest.raises(SystemExit):  # mutually exclusive with --symbols
-        qt._build_parser().parse_args(
-            [*base, "--symbols-file", str(path), "--symbols", "AAPL"]
-        )
+        qt._build_parser().parse_args([*base, "--symbols-file", str(path), "--symbols", "AAPL"])
     with pytest.raises(SystemExit):  # and with --universe
         qt._build_parser().parse_args([*base, "--symbols-file", str(path), "--universe"])

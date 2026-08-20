@@ -28,9 +28,7 @@ def _day_end(day: date) -> datetime:
 class SqlReportSource:
     """Reads one day's activity straight from the tables schema.py owns."""
 
-    def __init__(
-        self, engine: Engine, monthly_budget_usd: float, ballast_symbol: str = ""
-    ) -> None:
+    def __init__(self, engine: Engine, monthly_budget_usd: float, ballast_symbol: str = "") -> None:
         self._engine = engine
         self._budget = monthly_budget_usd
         # Idle-cash ballast symbol ("" = disabled): broken out of the stock
@@ -67,10 +65,7 @@ class SqlReportSource:
             equities_where.append(eq.c.symbol != ballast)
         return {
             "equities": int(
-                self._scalar(
-                    select(func.count()).select_from(eq).where(*equities_where)
-                )
-                or 0
+                self._scalar(select(func.count()).select_from(eq).where(*equities_where)) or 0
             ),
             # Idle-cash ballast (its own labeled line; 0 rows when disabled).
             "ballast": (
@@ -94,8 +89,7 @@ class SqlReportSource:
                 or 0
             ),
             "options": int(
-                self._scalar(select(func.count()).select_from(op).where(op.c.contracts != 0))
-                or 0
+                self._scalar(select(func.count()).select_from(op).where(op.c.contracts != 0)) or 0
             ),
             "kalshi": int(
                 self._scalar(
@@ -141,9 +135,7 @@ class SqlReportSource:
     def verdicts_on(self, day: date) -> list[Row]:
         t = schema.committee_verdicts
         return self._rows(
-            select(
-                t.c.symbol, t.c.action, t.c.conviction, t.c.disagreement_score, t.c.payload
-            )
+            select(t.c.symbol, t.c.action, t.c.conviction, t.c.disagreement_score, t.c.payload)
             .where(t.c.as_of == day)
             .order_by(t.c.symbol)
         )
@@ -189,8 +181,9 @@ class SqlReportSource:
     def options_trades_on(self, day: date) -> list[Row]:
         t = schema.options_trades
         return self._rows(
-            select(t.c.filled_at, t.c.occ_symbol, t.c.underlying, t.c.side, t.c.contracts,
-                   t.c.price)
+            select(
+                t.c.filled_at, t.c.occ_symbol, t.c.underlying, t.c.side, t.c.contracts, t.c.price
+            )
             .where(t.c.filled_at >= _day_start(day), t.c.filled_at < _day_end(day))
             .order_by(t.c.filled_at, t.c.occ_symbol)
         )
@@ -199,7 +192,11 @@ class SqlReportSource:
         t = schema.pm_trades
         return self._rows(
             select(
-                t.c.filled_at, t.c.venue, t.c.market_id, t.c.side, t.c.contracts,
+                t.c.filled_at,
+                t.c.venue,
+                t.c.market_id,
+                t.c.side,
+                t.c.contracts,
                 t.c.price_cents,
             )
             .where(t.c.filled_at >= _day_start(day), t.c.filled_at < _day_end(day))
@@ -387,10 +384,7 @@ class SqlReportSource:
     def open_proposal_count(self) -> int:
         t = schema.improvement_proposals
         return int(
-            self._scalar(
-                select(func.count()).select_from(t).where(t.c.status == "open")
-            )
-            or 0
+            self._scalar(select(func.count()).select_from(t).where(t.c.status == "open")) or 0
         )
 
 
@@ -398,6 +392,4 @@ def build_daily_report_for_engine(
     engine: Engine, day: date, monthly_budget_usd: float, ballast_symbol: str = ""
 ) -> DailyReport:
     """Convenience wrapper: build the report for ``day`` straight from SQL."""
-    return build_daily_report(
-        SqlReportSource(engine, monthly_budget_usd, ballast_symbol), day
-    )
+    return build_daily_report(SqlReportSource(engine, monthly_budget_usd, ballast_symbol), day)

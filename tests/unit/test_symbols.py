@@ -12,9 +12,7 @@ def test_canonical_crypto_pairs_are_crypto(symbol: str) -> None:
     assert is_crypto_symbol(symbol)
 
 
-@pytest.mark.parametrize(
-    "symbol", ["AAPL", "BRK.B", "SPY", "BTCUSD", "AAPL260918C00230000"]
-)
+@pytest.mark.parametrize("symbol", ["AAPL", "BRK.B", "SPY", "BTCUSD", "AAPL260918C00230000"])
 def test_non_slash_symbols_are_not_crypto(symbol: str) -> None:
     # NOTE: "BTCUSD" is the broker form, NOT canonical — adapters must
     # normalize before anything downstream sees it.

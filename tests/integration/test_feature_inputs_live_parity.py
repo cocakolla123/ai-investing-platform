@@ -251,14 +251,11 @@ def test_live_and_gateway_feature_inputs_agree(engine: Any, seeded: Any) -> None
 
     for field in FRAME_FIELDS:
         assert _normalize(getattr(live, field)) == _normalize(getattr(replay, field)), (
-            f"FeatureInputs.{field} differs between the nightly builder and the "
-            "replay gateway"
+            f"FeatureInputs.{field} differs between the nightly builder and the replay gateway"
         )
 
 
-def test_neither_builder_sees_a_cycle_published_after_as_of(
-    engine: Any, seeded: Any
-) -> None:
+def test_neither_builder_sees_a_cycle_published_after_as_of(engine: Any, seeded: Any) -> None:
     from orchestration.assets.research import _feature_inputs
 
     from dynamo.replay.gateway import HistoricalDataGateway
@@ -271,9 +268,7 @@ def test_neither_builder_sees_a_cycle_published_after_as_of(
         assert set(frame["settlement_date"]) == {AS_OF - timedelta(days=20)}
 
 
-def test_dark_features_are_no_longer_nan_in_the_live_path(
-    engine: Any, seeded: Any
-) -> None:
+def test_dark_features_are_no_longer_nan_in_the_live_path(engine: Any, seeded: Any) -> None:
     """The point of the wiring: the five features that were NaN nightly now
     compute from the live builder's frames."""
     from orchestration.assets.research import _feature_inputs

@@ -30,16 +30,22 @@ def test_models_satisfy_forecast_model_port() -> None:
 
 def test_lightgbm_regression_deterministic() -> None:
     x, y = _data()
-    p1 = LightGBMModel("regression", n_estimators=20, params={"min_child_samples": 5}).fit(
-        x, y, {}
-    ).predict(x)
-    p2 = LightGBMModel("regression", n_estimators=20, params={"min_child_samples": 5}).fit(
-        x, y, {}
-    ).predict(x)
+    p1 = (
+        LightGBMModel("regression", n_estimators=20, params={"min_child_samples": 5})
+        .fit(x, y, {})
+        .predict(x)
+    )
+    p2 = (
+        LightGBMModel("regression", n_estimators=20, params={"min_child_samples": 5})
+        .fit(x, y, {})
+        .predict(x)
+    )
     np.testing.assert_array_equal(p1, p2)
-    imp = LightGBMModel("regression", n_estimators=20, params={"min_child_samples": 5}).fit(
-        x, y, {}
-    ).feature_importances()
+    imp = (
+        LightGBMModel("regression", n_estimators=20, params={"min_child_samples": 5})
+        .fit(x, y, {})
+        .feature_importances()
+    )
     assert set(imp) == {"f1", "f2"}
     assert imp["f1"] > imp["f2"]  # planted signal dominates
 

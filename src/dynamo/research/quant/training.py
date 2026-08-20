@@ -338,11 +338,7 @@ def train_and_evaluate(
                 and wins_enough
             )
         elif task == "downside":
-            ships = (
-                beats_baseline
-                and m < float(e["base_rate_brier_pooled"])
-                and wins_enough
-            )
+            ships = beats_baseline and m < float(e["base_rate_brier_pooled"]) and wins_enough
         else:
             ships = beats_baseline and wins_enough
         ships_ok[name] = bool(ships)
@@ -367,9 +363,7 @@ def train_and_evaluate(
 # --------------------------------------------------------------------------
 
 
-def _select_label(
-    labels: pd.DataFrame | pd.Series, task: Task, target: str | None
-) -> pd.Series:
+def _select_label(labels: pd.DataFrame | pd.Series, task: Task, target: str | None) -> pd.Series:
     if isinstance(labels, pd.DataFrame):
         default_target = {
             "rank": "excess_return_20d",

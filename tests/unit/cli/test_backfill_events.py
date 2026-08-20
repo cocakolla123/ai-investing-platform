@@ -245,9 +245,7 @@ def test_filings_fill_a_missing_symbol_from_instruments(wired: dict[str, Any]) -
 
 
 def _event(symbol: str, day: date, *, act: float | None = None) -> EarningsEvent:
-    return EarningsEvent(
-        symbol=symbol, event_date=day, period="2026Q2", eps_est=1.0, eps_act=act
-    )
+    return EarningsEvent(symbol=symbol, event_date=day, period="2026Q2", eps_est=1.0, eps_act=act)
 
 
 def test_earnings_chunks_and_upserts_idempotently(wired: dict[str, Any]) -> None:
@@ -281,8 +279,7 @@ def test_a_truncated_window_is_a_failure_not_a_silent_gap(
     day = be.FINNHUB_CALENDAR_FLOOR
     wired["finnhub"].by_window = {
         (day, day): [
-            _event(f"SYM{i}", day + timedelta(days=i % 5))
-            for i in range(be.FINNHUB_RESPONSE_CAP)
+            _event(f"SYM{i}", day + timedelta(days=i % 5)) for i in range(be.FINNHUB_RESPONSE_CAP)
         ]
     }
     exit_code = be.main(
@@ -354,9 +351,7 @@ def test_a_provider_500_skips_the_day_and_keeps_going(
 def test_filings_sweep_survives_a_provider_500_too(
     monkeypatch: pytest.MonkeyPatch, wired: dict[str, Any]
 ) -> None:
-    edgar = _FlakyEdgar(
-        bad={START}, payload={END: [_filing("0002-26-000009", "8-K", END, "ACME")]}
-    )
+    edgar = _FlakyEdgar(bad={START}, payload={END: [_filing("0002-26-000009", "8-K", END, "ACME")]})
     monkeypatch.setattr(be, "_edgar", lambda _s: edgar)
     assert be.main(["filings", "--forms", "8-K", *_args()]) == 1
     assert set(wired["repo"].filings) == {"0002-26-000009"}
@@ -375,9 +370,7 @@ def test_the_index_root_form_is_stored_as_the_sec_form_code(
     MATERIAL_FORMS says "SC 13D", and startswith("SC 13D") is False on the
     index's spelling. Storing the index name would produce rows
     ``filing_event`` reads and silently ignores."""
-    wired["edgar"].by_day = {
-        START: [_filing("0002-26-000011", "SCHEDULE 13D", START, "ACME")]
-    }
+    wired["edgar"].by_day = {START: [_filing("0002-26-000011", "SCHEDULE 13D", START, "ACME")]}
     assert be.main(["filings", "--forms", "SCHEDULE 13D", *_args()]) == 0
     assert wired["repo"].filings["0002-26-000011"].form_type == "SC 13D"
 

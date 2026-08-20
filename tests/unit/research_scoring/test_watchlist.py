@@ -99,9 +99,7 @@ def test_blend_bounds_and_rank_contiguity(n: int, seed: int) -> None:
         if rng.random() < 0.8
     ]
     quality = [
-        _quality(s, rng.choice([None, rng.uniform(0, 100)]))
-        for s in symbols
-        if rng.random() < 0.8
+        _quality(s, rng.choice([None, rng.uniform(0, 100)])) for s in symbols if rng.random() < 0.8
     ]
     signals = [_signal(s, rng.random()) for s in symbols if rng.random() < 0.5]
     rows = build_watchlist(

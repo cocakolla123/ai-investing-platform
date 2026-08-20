@@ -32,8 +32,7 @@ from tests.unit.options.helpers import MONTHLY_EXPIRY, make_decision, make_optio
 class TestOccSymbol:
     def test_golden(self) -> None:
         assert (
-            occ_symbol("AAPL", date(2026, 12, 18), OptionRight.CALL, 150.0)
-            == "AAPL261218C00150000"
+            occ_symbol("AAPL", date(2026, 12, 18), OptionRight.CALL, 150.0) == "AAPL261218C00150000"
         )
 
     def test_round_trip(self) -> None:
@@ -113,9 +112,7 @@ class TestCollateralValidators:
     def test_decision_construction_is_the_proposal_check(self) -> None:
         """AT PROPOSAL: a decision without collateral cannot exist."""
         with pytest.raises(CollateralShortfall):
-            make_decision(
-                OptionStructure.COVERED_CALL, contracts=2, collateral_shares=150.0
-            )
+            make_decision(OptionStructure.COVERED_CALL, contracts=2, collateral_shares=150.0)
         with pytest.raises(CollateralShortfall):
             make_decision(
                 OptionStructure.CASH_SECURED_PUT,
@@ -123,9 +120,7 @@ class TestCollateralValidators:
                 contracts=1,
                 collateral_cash=1_000.0,
             )
-        ok = make_decision(
-            OptionStructure.COVERED_CALL, contracts=2, collateral_shares=200.0
-        )
+        ok = make_decision(OptionStructure.COVERED_CALL, contracts=2, collateral_shares=200.0)
         assert ok.structure is OptionStructure.COVERED_CALL
 
 

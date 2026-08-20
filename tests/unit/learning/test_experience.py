@@ -295,9 +295,7 @@ def test_builder_handles_missing_verdict_and_review_gracefully() -> None:
     exp = build_experience(
         trade=_trade(pnl_pct=-2.0),
         now=NOW,
-        decision_context=_dc(
-            expected_upside_pct=0.0, expected_downside_pct=0.0, verdict_id=None
-        ),
+        decision_context=_dc(expected_upside_pct=0.0, expected_downside_pct=0.0, verdict_id=None),
         verdict=None,
         quant=None,
         regime=None,

@@ -224,7 +224,10 @@ def test_universe_wide_writes_tier2_and_leaves_tier1_untouched(
     wired: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
     core = UniverseMembership(
-        symbol="AAPL", tier=Tier.CORE, valid_from=date(2024, 1, 1), reason="seed",
+        symbol="AAPL",
+        tier=Tier.CORE,
+        valid_from=date(2024, 1, 1),
+        reason="seed",
         approved_by="seed",
     )
     wired["repo"] = FakeRepo(members=[core])
@@ -290,8 +293,14 @@ def test_universe_wide_requires_alpaca_keys(monkeypatch: pytest.MonkeyPatch) -> 
 
 def _bars_argv(*extra: str) -> list[str]:
     return [
-        "bars", "--provider", "alpaca", "--start", "2024-01-01",
-        "--end", "2026-08-16", *extra,
+        "bars",
+        "--provider",
+        "alpaca",
+        "--start",
+        "2024-01-01",
+        "--end",
+        "2026-08-16",
+        *extra,
     ]
 
 
@@ -310,9 +319,7 @@ def test_bars_alpaca_batches_many_symbols_per_request(
 
 
 def test_bars_alpaca_skips_symbols_already_covered(wired: Any) -> None:
-    wired["repo"] = FakeRepo(
-        coverage={"COVERED": (date(2024, 1, 2), date(2026, 8, 14))}
-    )
+    wired["repo"] = FakeRepo(coverage={"COVERED": (date(2024, 1, 2), date(2026, 8, 14))})
     wired["alpaca"] = FakeAlpaca()
     rc = backfill.main(_bars_argv("--symbols", "COVERED", "NEW"))
     assert rc == 0
@@ -477,8 +484,11 @@ def test_surveillance_sweep_applies_the_liquidity_floor(
     )
     rc = backfill.main(
         [
-            "surveillance-sweep", "--as-of", "2026-08-14",
-            "--min-dollar-volume", "1000000000",
+            "surveillance-sweep",
+            "--as-of",
+            "2026-08-14",
+            "--min-dollar-volume",
+            "1000000000",
         ]
     )
     assert rc == 0

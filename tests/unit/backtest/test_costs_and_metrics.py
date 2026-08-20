@@ -117,9 +117,7 @@ class TestDeflatedSharpe:
     def test_more_trials_lower_dsr(self):
         n_obs = 504
         sr = 1.2
-        values = [
-            deflated_sharpe_ratio(sr, n_obs, trials) for trials in (1, 5, 25, 100, 400)
-        ]
+        values = [deflated_sharpe_ratio(sr, n_obs, trials) for trials in (1, 5, 25, 100, 400)]
         assert all(b < a for a, b in pairwise(values))
 
     def test_bounds_and_sanity(self):

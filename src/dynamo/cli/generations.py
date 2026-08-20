@@ -82,8 +82,11 @@ def main(argv: list[str] | None = None) -> int:
         experiences.extend(replay_rows)
     print(
         f"experiences: {n_live} live"
-        + (f" + {len(experiences) - n_live} replay ({', '.join(include_replay)})"
-           if include_replay else " (replay excluded — pass --include-replay to opt in)")
+        + (
+            f" + {len(experiences) - n_live} replay ({', '.join(include_replay)})"
+            if include_replay
+            else " (replay excluded — pass --include-replay to opt in)"
+        )
     )
 
     folds = generation_folds(experiences, final_holdout_months=args.final_holdout_months)
@@ -103,9 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     config_hash = compute_config_hash(config)
     gen_repo = GenerationsRepository(dynamo.engine())
 
-    holdout = final_holdout_period(
-        experiences, final_holdout_months=args.final_holdout_months
-    )
+    holdout = final_holdout_period(experiences, final_holdout_months=args.final_holdout_months)
     if holdout is not None:
         start, end = holdout
         existing = gen_repo.is_claimed(start, end, "final_holdout")

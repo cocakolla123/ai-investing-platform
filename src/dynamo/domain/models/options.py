@@ -54,9 +54,7 @@ STRUCTURE_LEGS: dict[OptionStructure, tuple[OrderSide, OptionRight]] = {
     OptionStructure.CASH_SECURED_PUT: (OrderSide.SELL, OptionRight.PUT),
 }
 
-SHORT_STRUCTURES = frozenset(
-    {OptionStructure.COVERED_CALL, OptionStructure.CASH_SECURED_PUT}
-)
+SHORT_STRUCTURES = frozenset({OptionStructure.COVERED_CALL, OptionStructure.CASH_SECURED_PUT})
 
 
 class CollateralShortfall(Exception):
@@ -93,9 +91,7 @@ def validate_covered_call_collateral(contracts: int, shares_held: float) -> None
     """A covered call must be FULLY covered: >= 100 shares per contract."""
     required = contracts * CONTRACT_MULTIPLIER
     if not math.isfinite(shares_held) or shares_held < required:
-        raise CollateralShortfall(
-            f"covered call needs {required} shares, have {shares_held}"
-        )
+        raise CollateralShortfall(f"covered call needs {required} shares, have {shares_held}")
 
 
 def validate_csp_collateral(contracts: int, strike: float, cash_reserved: float) -> None:

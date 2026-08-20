@@ -17,9 +17,7 @@ from dynamo.domain.models.portfolio import (
 
 @dataclass
 class FakeClock:
-    current: datetime = field(
-        default_factory=lambda: datetime(2026, 8, 3, 14, 0, tzinfo=UTC)
-    )
+    current: datetime = field(default_factory=lambda: datetime(2026, 8, 3, 14, 0, tzinfo=UTC))
 
     def now(self) -> datetime:
         return self.current
@@ -70,9 +68,7 @@ class FakeOrderStore:
 
     def set_broker_order_id(self, client_order_id: str, broker_order_id: str) -> None:
         order = self.orders[client_order_id]
-        self.orders[client_order_id] = order.model_copy(
-            update={"broker_order_id": broker_order_id}
-        )
+        self.orders[client_order_id] = order.model_copy(update={"broker_order_id": broker_order_id})
 
     def set_decision_context(self, client_order_id: str, decision_context_id: str) -> None:
         order = self.orders[client_order_id]

@@ -67,9 +67,7 @@ def approve_universe_change(
         as_of=now.date(),
     )
     deps.admin.ack_alert(alert_id, now)
-    deps.admin.audit(
-        "universe_approve", {"alert_id": alert_id, "symbol": symbol, "change": change}
-    )
+    deps.admin.audit("universe_approve", {"alert_id": alert_id, "symbol": symbol, "change": change})
     return {"alert_id": alert_id, "status": "approved", "symbol": symbol, "change": change}
 
 

@@ -71,9 +71,7 @@ class FredClient:
 
     def series(self, series_id: str, start: date) -> Iterable[MacroPoint]:
         """Current-vintage observations from ``start``; vintage_ts = realtime_start."""
-        return self._observations(
-            {"series_id": series_id, "observation_start": start.isoformat()}
-        )
+        return self._observations({"series_id": series_id, "observation_start": start.isoformat()})
 
     # -- extras ------------------------------------------------------------
 

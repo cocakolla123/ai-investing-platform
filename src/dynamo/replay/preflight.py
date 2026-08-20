@@ -139,8 +139,7 @@ class PreflightReport:
         return {
             "passed": self.passed,
             "checks": [
-                {"name": c.name, "status": c.status, "detail": c.detail}
-                for c in self.checks
+                {"name": c.name, "status": c.status, "detail": c.detail} for c in self.checks
             ],
         }
 
@@ -152,8 +151,7 @@ class PreflightError(RuntimeError):
         self.report = report
         lines = [f"{c.name}: {c.detail}" for c in report.errors]
         super().__init__(
-            "replay preflight failed "
-            f"({len(report.errors)} error(s)):\n  " + "\n  ".join(lines)
+            f"replay preflight failed ({len(report.errors)} error(s)):\n  " + "\n  ".join(lines)
         )
 
 
@@ -172,9 +170,7 @@ class PreflightReads(Protocol):
 
     def universe_symbols(self, as_of: date, tiers: tuple[int, ...]) -> list[str]: ...
 
-    def symbols_with_bars(
-        self, symbols: Sequence[str], start: date, end: date
-    ) -> set[str]: ...
+    def symbols_with_bars(self, symbols: Sequence[str], start: date, end: date) -> set[str]: ...
 
     def macro_first_observation(
         self, series_ids: Sequence[str], vintage_cutoff: date
@@ -237,9 +233,7 @@ class EngineReads:
         members = MarketDataRepository(self._engine).universe_at(as_of)
         return sorted({m.symbol for m in members if int(m.tier) in tiers})
 
-    def symbols_with_bars(
-        self, symbols: Sequence[str], start: date, end: date
-    ) -> set[str]:
+    def symbols_with_bars(self, symbols: Sequence[str], start: date, end: date) -> set[str]:
         t = schema.bars_1d
         stmt = (
             select(t.c.symbol)
@@ -345,9 +339,7 @@ def session_window(center: date, n_sessions: int = BAR_WINDOW_SESSIONS) -> tuple
 # -- individual checks ------------------------------------------------------
 
 
-def _check_universe(
-    reads: PreflightReads, cfg: ReplayConfig
-) -> tuple[PreflightCheck, list[str]]:
+def _check_universe(reads: PreflightReads, cfg: ReplayConfig) -> tuple[PreflightCheck, list[str]]:
     symbols = reads.universe_symbols(cfg.start, tuple(cfg.universe_tiers))
     if not symbols:
         return (
@@ -360,9 +352,7 @@ def _check_universe(
             [],
         )
     return (
-        PreflightCheck(
-            "universe", OK, f"{len(symbols)} symbols active at {cfg.start}"
-        ),
+        PreflightCheck("universe", OK, f"{len(symbols)} symbols active at {cfg.start}"),
         symbols,
     )
 
@@ -430,8 +420,7 @@ def _check_bar_adjustment(
         return PreflightCheck(
             "bar_adjustment",
             WARNING,
-            f"no bars for the universe over [{start}, {cfg.end}] — adjustment "
-            "could not be checked",
+            f"no bars for the universe over [{start}, {cfg.end}] — adjustment could not be checked",
         )
 
     declared = _declared_raw_symbols(bars)
@@ -728,9 +717,7 @@ def _check_source_run(reads: PreflightReads, cfg: ReplayConfig) -> PreflightChec
         return PreflightCheck("source_run", OK, "no source run required")
     run = reads.get_run(str(source_run_id))
     if run is None:
-        return PreflightCheck(
-            "source_run", ERROR, f"source run {source_run_id!r} does not exist"
-        )
+        return PreflightCheck("source_run", ERROR, f"source run {source_run_id!r} does not exist")
     problems: list[str] = []
     if run.get("mode") != "committee":
         problems.append(f"mode is {run.get('mode')!r}, need 'committee'")
@@ -738,8 +725,7 @@ def _check_source_run(reads: PreflightReads, cfg: ReplayConfig) -> PreflightChec
     end_as_of = cast(date | None, run.get("end_as_of"))
     if start_as_of is None or start_as_of > cfg.start or end_as_of is None or end_as_of < cfg.end:
         problems.append(
-            f"window [{start_as_of}, {end_as_of}] does not cover "
-            f"[{cfg.start}, {cfg.end}]"
+            f"window [{start_as_of}, {end_as_of}] does not cover [{cfg.start}, {cfg.end}]"
         )
     # Universe compatibility: the committee run's verdicts only make sense
     # against the same universe tiers (checked via its stored config_json;
@@ -784,9 +770,7 @@ def run_preflight(
 
         require_shipping_bundle = bool(Settings().replay_require_shipping_bundle)
     reads: PreflightReads = (
-        EngineReads(engine_or_reads)
-        if isinstance(engine_or_reads, Engine)
-        else engine_or_reads
+        EngineReads(engine_or_reads) if isinstance(engine_or_reads, Engine) else engine_or_reads
     )
     checks: list[PreflightCheck] = []
 

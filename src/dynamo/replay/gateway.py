@@ -111,9 +111,7 @@ class HistoricalDataGateway:
         members = self._repo.universe_at(self.as_of)
         for m in members:  # tripwire: repo must never return a future start
             self._check_value("universe.valid_from", m.valid_from)
-        return sorted(
-            {m.symbol for m in members if tiers is None or int(m.tier) in tiers}
-        )
+        return sorted({m.symbol for m in members if tiers is None or int(m.tier) in tiers})
 
     def bars(self, symbols: Sequence[str] | None, lookback_days: int) -> pd.DataFrame:
         """Canonical daily bars with ``ts`` in ``[as_of - lookback, as_of]`` —
@@ -158,9 +156,7 @@ class HistoricalDataGateway:
             return []
         return sorted({str(s) for s in frame["symbol"]})
 
-    def surveillance_bars(
-        self, symbols: Sequence[str], lookback_days: int
-    ) -> pd.DataFrame:
+    def surveillance_bars(self, symbols: Sequence[str], lookback_days: int) -> pd.DataFrame:
         """Canonical daily bars for ``symbols`` with ``ts`` in
         ``[as_of - lookback, as_of]`` — bars after ``as_of`` are invisible.
 
@@ -238,9 +234,7 @@ class HistoricalDataGateway:
             if r["sector"]
         }
         cik_to_symbol = {
-            str(r["cik"]): str(r["symbol"])
-            for r in inst_df.to_dict(orient="records")
-            if r["cik"]
+            str(r["cik"]): str(r["symbol"]) for r in inst_df.to_dict(orient="records") if r["cik"]
         }
         x = schema.xbrl_facts
         fundamentals = self._read_df(
@@ -340,16 +334,10 @@ class HistoricalDataGateway:
         inst = schema.instruments
         inst_df = self._read_df(select(inst.c.symbol, inst.c.cik))
         cik_to_symbol = {
-            str(r["cik"]): str(r["symbol"])
-            for r in inst_df.to_dict(orient="records")
-            if r["cik"]
+            str(r["cik"]): str(r["symbol"]) for r in inst_df.to_dict(orient="records") if r["cik"]
         }
         wanted = set(symbols) if symbols is not None else None
-        ciks = [
-            cik
-            for cik, symbol in cik_to_symbol.items()
-            if wanted is None or symbol in wanted
-        ]
+        ciks = [cik for cik, symbol in cik_to_symbol.items() if wanted is None or symbol in wanted]
         cols = ["symbol", "tag", "period_end", "value", "filed_at"]
         if not ciks:
             return pd.DataFrame(columns=pd.Index(cols))
@@ -424,12 +412,7 @@ class HistoricalDataGateway:
         """Most recent persisted regime state with ``as_of <= self.as_of`` —
         states computed for later sessions are invisible."""
         rs = schema.regime_states
-        stmt = (
-            select(rs)
-            .where(rs.c.as_of <= self.as_of)
-            .order_by(rs.c.as_of.desc())
-            .limit(1)
-        )
+        stmt = select(rs).where(rs.c.as_of <= self.as_of).order_by(rs.c.as_of.desc()).limit(1)
         with self._engine.connect() as cx:
             row = cx.execute(stmt).first()
         if row is None:
@@ -459,9 +442,7 @@ class HistoricalDataGateway:
             out[instrument.symbol] = instrument
         return out
 
-    def news(
-        self, symbols: Sequence[str], lookback_days: int = 7
-    ) -> dict[str, list[NewsItem]]:
+    def news(self, symbols: Sequence[str], lookback_days: int = 7) -> dict[str, list[NewsItem]]:
         """symbol -> news items with ``published_at`` in
         ``[as_of - lookback, as_of]`` — items published after ``as_of`` are
         invisible. Sparse-history days simply return fewer (or no) items,
@@ -500,8 +481,7 @@ class HistoricalDataGateway:
             stmt = stmt.where(inst.c.symbol.in_(list(symbols)))
         frame = self._read_df(stmt)
         return {
-            str(r["symbol"]): str(r["sector"] or "unknown")
-            for r in frame.to_dict(orient="records")
+            str(r["symbol"]): str(r["sector"] or "unknown") for r in frame.to_dict(orient="records")
         }
 
     # -- learning-context reads -------------------------------------------
@@ -567,9 +547,7 @@ class HistoricalDataGateway:
     # -- helpers -----------------------------------------------------------
 
     def _since(self, days: int) -> datetime:
-        return datetime.combine(
-            self.as_of - timedelta(days=days), time.min, tzinfo=UTC
-        )
+        return datetime.combine(self.as_of - timedelta(days=days), time.min, tzinfo=UTC)
 
     def _read_df(self, stmt: Any, *, exempt: Sequence[str] = ()) -> pd.DataFrame:
         with self._engine.connect() as cx:
@@ -600,10 +578,7 @@ class HistoricalDataGateway:
         if isinstance(value, pd.Timestamp):
             value = value.to_pydatetime()
         if isinstance(value, datetime):
-            cutoff = (
-                self._cutoff if value.tzinfo is not None
-                else self._cutoff.replace(tzinfo=None)
-            )
+            cutoff = self._cutoff if value.tzinfo is not None else self._cutoff.replace(tzinfo=None)
             leaked = value > cutoff
         elif isinstance(value, date):
             leaked = value > self.as_of
@@ -611,6 +586,5 @@ class HistoricalDataGateway:
             return
         if leaked:
             raise ReplayLeakageError(
-                f"leakage tripwire: {label} = {value} exceeds the "
-                f"as_of {self.as_of} cutoff"
+                f"leakage tripwire: {label} = {value} exceeds the as_of {self.as_of} cutoff"
             )

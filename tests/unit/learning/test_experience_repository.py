@@ -88,15 +88,11 @@ def test_replay_rows_do_not_collide_with_live(engine) -> None:  # type: ignore[n
     # the partial unique index must not block it.
     for run in ("run-a", "run-b"):
         assert (
-            repo.insert(
-                _exp(1, source="replay", id=f"exp:{run}:AAPL", replay_run_id=run)
-            )
-            is True
+            repo.insert(_exp(1, source="replay", id=f"exp:{run}:AAPL", replay_run_id=run)) is True
         )
     # But a replay re-run with the same deterministic id is idempotent.
     assert (
-        repo.insert(_exp(1, source="replay", id="exp:run-a:AAPL", replay_run_id="run-a"))
-        is False
+        repo.insert(_exp(1, source="replay", id="exp:run-a:AAPL", replay_run_id="run-a")) is False
     )
     assert repo.count() == 3
     assert repo.count(source="live") == 1

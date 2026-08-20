@@ -34,9 +34,7 @@ def test_skips_when_no_source_configured(fake_dynamo: FakeDynamo) -> None:
     assert result.metadata["skipped"] == "no transcript source configured"
 
 
-def test_av_first_then_defeatbeta_fallback(
-    fake_dynamo: FakeDynamo, fake_repo: FakeRepo
-) -> None:
+def test_av_first_then_defeatbeta_fallback(fake_dynamo: FakeDynamo, fake_repo: FakeRepo) -> None:
     # AAA and BBB report today; AV only has AAA, defeatbeta backfills BBB.
     fake_dynamo.st.reporters = [
         {"symbol": "AAA", "event_date": TODAY, "period": "2026Q2", "call_transcript_ref": None},

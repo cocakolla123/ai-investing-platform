@@ -104,12 +104,9 @@ class TestGoldenSelection:
         assert d.strike == 105.0  # ~5% ITM put
 
     def test_bearish_put_on_unheld_name_needs_quant_agreement(self) -> None:
-        agree = make_inputs(
-            verdicts={"AAPL": make_verdict(action=Action.AVOID, conviction=0.9)}
-        )
+        agree = make_inputs(verdicts={"AAPL": make_verdict(action=Action.AVOID, conviction=0.9)})
         assert (
-            select_and_size_option_trades(agree).decisions[0].structure
-            is OptionStructure.LONG_PUT
+            select_and_size_option_trades(agree).decisions[0].structure is OptionStructure.LONG_PUT
         )
         conflict = make_inputs(
             verdicts={
@@ -280,9 +277,7 @@ maybe_price = st.one_of(
     st.just(0.0),
 )
 maybe_oi = st.one_of(st.none(), st.integers(min_value=0, max_value=5_000))
-maybe_delta = st.one_of(
-    st.none(), st.floats(min_value=-1.0, max_value=1.0), st.just(float("nan"))
-)
+maybe_delta = st.one_of(st.none(), st.floats(min_value=-1.0, max_value=1.0), st.just(float("nan")))
 actions = st.sampled_from(list(Action))
 alignments = st.sampled_from(list(QuantAlignment))
 
@@ -305,9 +300,7 @@ def scenario(draw: st.DrawFn):
             conviction=draw(st.floats(min_value=0.0, max_value=1.0)),
             quant_alignment=draw(alignments),
         )
-        spot = draw(
-            st.one_of(st.floats(min_value=1.0, max_value=500.0), st.just(float("nan")))
-        )
+        spot = draw(st.one_of(st.floats(min_value=1.0, max_value=500.0), st.just(float("nan"))))
         spots[sym] = spot
         if draw(st.booleans()):
             ranks[sym] = draw(st.floats(min_value=0.0, max_value=1.0))
@@ -340,9 +333,7 @@ def scenario(draw: st.DrawFn):
                 lt_holdings.add(sym)
         if draw(st.booleans()):
             lt_eligible.add(sym)
-    equity = draw(
-        st.one_of(st.floats(min_value=1_000.0, max_value=1e7), st.just(float("nan")))
-    )
+    equity = draw(st.one_of(st.floats(min_value=1_000.0, max_value=1e7), st.just(float("nan"))))
     cash = draw(st.floats(min_value=0.0, max_value=1e6))
     return make_inputs(
         verdicts=verdicts,

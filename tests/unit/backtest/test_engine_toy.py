@@ -64,9 +64,16 @@ EXPECTED_EQUITY = [
 
 @pytest.fixture(scope="module")
 def result():
-    script = {DATES[i]: SessionAdvice(signals=(
-        signal("AAA", DATES[i]), signal("BBB", DATES[i]), signal("CCC", DATES[i]),
-    )) for i in range(4)}
+    script = {
+        DATES[i]: SessionAdvice(
+            signals=(
+                signal("AAA", DATES[i]),
+                signal("BBB", DATES[i]),
+                signal("CCC", DATES[i]),
+            )
+        )
+        for i in range(4)
+    }
     script[DATES[4]] = SessionAdvice(
         verdicts=(
             sell_verdict("AAA", DATES[4]),
@@ -123,9 +130,16 @@ def test_deterministic_rerun(result):
         construction_config=toy_construction_config(),
         risk_config=toy_risk_config(),
     )
-    script = {DATES[i]: SessionAdvice(signals=(
-        signal("AAA", DATES[i]), signal("BBB", DATES[i]), signal("CCC", DATES[i]),
-    )) for i in range(4)}
+    script = {
+        DATES[i]: SessionAdvice(
+            signals=(
+                signal("AAA", DATES[i]),
+                signal("BBB", DATES[i]),
+                signal("CCC", DATES[i]),
+            )
+        )
+        for i in range(4)
+    }
     script[DATES[4]] = SessionAdvice(
         verdicts=(
             sell_verdict("AAA", DATES[4]),

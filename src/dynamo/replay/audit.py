@@ -46,8 +46,18 @@ KNOWN_CAVEATS: tuple[str, ...] = (
 _EXCERPT_WINDOW = 60  # chars kept either side of a flagged match
 
 _MONTHS = (
-    "january", "february", "march", "april", "may", "june",
-    "july", "august", "september", "october", "november", "december",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
 )
 _MONTH_INDEX = {m: i + 1 for i, m in enumerate(_MONTHS)}
 _MONTH_INDEX.update({m[:3]: i + 1 for i, m in enumerate(_MONTHS)})

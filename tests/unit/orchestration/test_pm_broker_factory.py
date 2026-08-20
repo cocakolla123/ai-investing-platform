@@ -76,10 +76,14 @@ def write_approval(
     approvals.mkdir(parents=True, exist_ok=True)
     body = {"scope": list(scope), "expiry": expiry}
     signature = sign_approval_body(body, key.encode())
-    lines = ["scope:"] + [f"  - {s}" for s in scope] + [
-        f"expiry: {expiry.isoformat()}",
-        f"signature: {signature}",
-    ]
+    lines = (
+        ["scope:"]
+        + [f"  - {s}" for s in scope]
+        + [
+            f"expiry: {expiry.isoformat()}",
+            f"signature: {signature}",
+        ]
+    )
     path = approvals / f"live-{utcnow().date().isoformat()}.yaml"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -99,7 +103,10 @@ def live_ready(monkeypatch, tmp_path, wallet_key_file):
     monkeypatch.setenv("DYNAMO_APPROVAL_KEY", KEY)
     monkeypatch.setattr(broker_mod, "_clob_import_error", lambda: None)
     settings = make_settings(
-        tmp_path, env="LIVE", live_enabled=True, credentialed=True,
+        tmp_path,
+        env="LIVE",
+        live_enabled=True,
+        credentialed=True,
         wallet_key_file=wallet_key_file,
     )
     write_approval(settings)

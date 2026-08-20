@@ -239,9 +239,7 @@ class ReplayConfig(BaseModel):
     @classmethod
     def _known_discovery_mode(cls, value: str) -> str:
         if value not in DISCOVERY_MODES:
-            raise ValueError(
-                f"discovery_mode {value!r} is not one of {DISCOVERY_MODES}"
-            )
+            raise ValueError(f"discovery_mode {value!r} is not one of {DISCOVERY_MODES}")
         return value
 
     @property
@@ -283,9 +281,7 @@ class DiscoveryDriver(Protocol):
     does — the loop below is byte-identical to the pre-discovery one.
     """
 
-    def universe_for(
-        self, gw: Any, day: date, base_universe: Sequence[str]
-    ) -> list[str]: ...
+    def universe_for(self, gw: Any, day: date, base_universe: Sequence[str]) -> list[str]: ...
 
 
 class ExperienceSink(Protocol):
@@ -468,9 +464,7 @@ def synthesize_watchlist(
     )
 
 
-def scores_from_frame(
-    frame: pd.DataFrame, as_of: date, max_age_days: int
-) -> dict[str, QuantScore]:
+def scores_from_frame(frame: pd.DataFrame, as_of: date, max_age_days: int) -> dict[str, QuantScore]:
     """Latest fresh persisted QuantScore per symbol from a gateway frame.
 
     Rows older than ``max_age_days`` before ``as_of`` are dropped (a stale
@@ -480,9 +474,7 @@ def scores_from_frame(
         return {}
     frame = frame.copy()
     frame["as_of"] = frame["as_of"].map(lambda v: pd.Timestamp(v).date())
-    frame = cast(
-        pd.DataFrame, frame[frame["as_of"] >= as_of - timedelta(days=max_age_days)]
-    )
+    frame = cast(pd.DataFrame, frame[frame["as_of"] >= as_of - timedelta(days=max_age_days)])
     if frame.empty:
         return {}
     frame = (
@@ -876,8 +868,7 @@ class ReplayRunner:
                 universe = self._discovery.universe_for(gw, day, universe)
             ballast = self._construction_config.ballast_symbol
             panel_symbols = sorted(
-                {*universe, *shares, *BENCHMARK_SYMBOLS}
-                | ({ballast} if ballast else set())
+                {*universe, *shares, *BENCHMARK_SYMBOLS} | ({ballast} if ballast else set())
             )
             bars = gw.bars(panel_symbols, RETURNS_LOOKBACK_DAYS)
             opens_today, closes_today = _day_prices(bars, day)
@@ -913,17 +904,24 @@ class ReplayRunner:
                     }
                     for f in day_fills
                 )
-                turnover_increment = (
-                    traded / pending_equity / 2.0 if pending_equity > 0 else 0.0
-                )
+                turnover_increment = traded / pending_equity / 2.0 if pending_equity > 0 else 0.0
                 turnover_mtd += turnover_increment
                 turnover_total += turnover_increment
                 # Entry bookkeeping + resolution of full exits.
                 # pending_equity is still YESTERDAY's decision equity here
                 # (overwritten in step 8) — the bankroll context for the lot.
                 self._track_lots(
-                    day_fills, day, i, shares, avg_cost, open_lots, gw, bars,
-                    experiences, run_id, pending_equity,
+                    day_fills,
+                    day,
+                    i,
+                    shares,
+                    avg_cost,
+                    open_lots,
+                    gw,
+                    bars,
+                    experiences,
+                    run_id,
+                    pending_equity,
                 )
                 if staged is not None:
                     fill_price = {f.symbol: f.price for f in day_fills}
@@ -1080,9 +1078,7 @@ class ReplayRunner:
                 exit_price = last_close.get(sym)
                 if exit_price is None or exit_price <= 0:
                     continue
-                experiences.append(
-                    self._resolve(lot, final_day, exit_price, final_bars, run_id)
-                )
+                experiences.append(self._resolve(lot, final_day, exit_price, final_bars, run_id))
         _flush_persistence()  # final flush: the in-progress month
         return ReplayResult(
             run_id=run_id,
@@ -1191,18 +1187,14 @@ class ReplayRunner:
             sigma = sigma_annual.get(sym, float("nan"))
             sigma_daily = sigma / _ANNUALIZE if math.isfinite(sigma) else float("nan")
             cost = _cents(
-                order_cost(
-                    value, sigma_daily, adv.get(sym, float("nan")), self._cost_params
-                )
+                order_cost(value, sigma_daily, adv.get(sym, float("nan")), self._cost_params)
             )
             if delta > 0.0:
                 cash = _cents(cash - value - cost)
                 prev_qty = shares.get(sym, 0.0)
                 prev_cost = avg_cost.get(sym, 0.0)
                 new_qty = prev_qty + qty
-                avg_cost[sym] = (
-                    (prev_qty * prev_cost + value + cost) / new_qty if new_qty else 0.0
-                )
+                avg_cost[sym] = (prev_qty * prev_cost + value + cost) / new_qty if new_qty else 0.0
                 shares[sym] = new_qty
                 realized = None
                 side = "buy"
@@ -1287,9 +1279,7 @@ class ReplayRunner:
     ) -> DecisionExperience:
         """One round trip -> a resolved DecisionExperience (source='replay')."""
         path = _path_inputs(bars, lot.symbol, lot.entry_date, exit_date)
-        pnl_pct = (
-            (exit_price / lot.entry_price - 1.0) * 100.0 if lot.entry_price > 0 else 0.0
-        )
+        pnl_pct = (exit_price / lot.entry_price - 1.0) * 100.0 if lot.entry_price > 0 else 0.0
         trade = TradeFacts(
             trade_id=f"{lot.symbol}-{lot.entry_date.isoformat()}",
             symbol=lot.symbol,
@@ -1317,9 +1307,7 @@ class ReplayRunner:
             # Bankroll context (campaign Phase 3): equity at the opening
             # decision + the realized position notional (avg entry x qty).
             equity_at_decision=lot.equity_at_decision,
-            position_notional=(
-                _cents(lot.qty * lot.entry_price) if lot.entry_price > 0 else None
-            ),
+            position_notional=(_cents(lot.qty * lot.entry_price) if lot.entry_price > 0 else None),
         )
         self._experiences.insert(exp)
         return exp
@@ -1378,12 +1366,8 @@ def _day_prices(bars: pd.DataFrame, day: date) -> tuple[dict[str, float], dict[s
     ts = pd.to_datetime(bars["ts"])
     mask = ts.dt.date == day
     sub = cast(pd.DataFrame, bars[mask])
-    opens = {
-        str(r["symbol"]): float(r["open"]) for r in sub.to_dict(orient="records")
-    }
-    closes = {
-        str(r["symbol"]): float(r["close"]) for r in sub.to_dict(orient="records")
-    }
+    opens = {str(r["symbol"]): float(r["open"]) for r in sub.to_dict(orient="records")}
+    closes = {str(r["symbol"]): float(r["close"]) for r in sub.to_dict(orient="records")}
     return opens, closes
 
 
@@ -1478,9 +1462,7 @@ def _portfolio_state(
                     sleeve=Sleeve.LONG_TERM,
                     qty=shares[s],
                     entry_price=avg_cost.get(s, 0.0),
-                    entry_date=(
-                        open_lots[s].entry_date if s in open_lots else day
-                    ),
+                    entry_date=(open_lots[s].entry_date if s in open_lots else day),
                 ),
             ),
         )

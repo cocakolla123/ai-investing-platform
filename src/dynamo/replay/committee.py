@@ -177,9 +177,7 @@ class ReplayCommitteeGateway(Protocol):
     def macro_series(self, lookback_days: int) -> pd.DataFrame: ...
     def transcripts(self, symbols: Sequence[str]) -> pd.DataFrame: ...
     def instruments(self, symbols: Sequence[str]) -> dict[str, Instrument]: ...
-    def news(
-        self, symbols: Sequence[str], lookback_days: int = 7
-    ) -> dict[str, list[NewsItem]]: ...
+    def news(self, symbols: Sequence[str], lookback_days: int = 7) -> dict[str, list[NewsItem]]: ...
     def journal_search(
         self,
         *,
@@ -294,9 +292,7 @@ def committee_shortlist(
     universe = gw.universe(config.universe_tiers)
     if discovery is not None:
         universe = discovery.universe_for(gw, day, universe)
-    scores = quant_scores_for(
-        gw, universe, day, config.quant_score_max_age_days, bundle=bundle
-    )
+    scores = quant_scores_for(gw, universe, day, config.quant_score_max_age_days, bundle=bundle)
     candidates = shortlist_candidates(
         scores,
         min_feature_coverage=config.min_feature_coverage,
@@ -348,9 +344,7 @@ def replay_journal_hits(
     if embedder is not None and symbols:
         from dynamo.learning.journal import JournalFilters, rank_similar
 
-        queries = [
-            f"{sym} investment thesis, lessons and post-trade reviews" for sym in symbols
-        ]
+        queries = [f"{sym} investment thesis, lessons and post-trade reviews" for sym in symbols]
         vectors = embedder.embed(queries)
         for sym, vector in zip(symbols, vectors, strict=True):
             # Filter to the symbol in SQL, not just via rank_similar's boost:
@@ -360,9 +354,7 @@ def replay_journal_hits(
             candidates = gw.journal_search(
                 embedding=vector, symbols=[sym], top_k=max(top_k * 4, top_k)
             )
-            ranked = rank_similar(
-                candidates, JournalFilters(symbols=frozenset({sym})), top_k=top_k
-            )
+            ranked = rank_similar(candidates, JournalFilters(symbols=frozenset({sym})), top_k=top_k)
             hits[sym] = [(r.entry.id, r.entry.text) for r in ranked]
     sectors = gw.sectors(list(symbols))
     regime = gw.regime_state()
@@ -397,9 +389,7 @@ def _macro_context_text(gw: ReplayCommitteeGateway) -> str:
     return "\n".join(sorted(lines))
 
 
-def _transcript_excerpts(
-    gw: ReplayCommitteeGateway, symbols: Sequence[str]
-) -> dict[str, str]:
+def _transcript_excerpts(gw: ReplayCommitteeGateway, symbols: Sequence[str]) -> dict[str, str]:
     """Latest-call excerpt per symbol from the gateway's 30-day transcript
     window — mirrors the live dossier builder (assets/research.py) exactly:
     latest event per symbol, same head/tail truncation."""
@@ -718,10 +708,7 @@ class CommitteeReplay:
             for day_index, day in enumerate(sessions):
                 if day in self._resume_skip_days:
                     if progress is not None:
-                        progress(
-                            f"{day.isoformat()} verdicts already persisted — "
-                            "skipped (resume)"
-                        )
+                        progress(f"{day.isoformat()} verdicts already persisted — skipped (resume)")
                     continue
                 gw = self._gateway_factory(day)
                 # Within-run learning: resolve any dive whose horizon exit
@@ -733,8 +720,7 @@ class CommitteeReplay:
                         self._resolve_pending(gw, sessions, day_index, dives, resolved, run_id)
                     )
                 history = tuple(
-                    (session, self._debated.get(session, ()))
-                    for session in sessions[:day_index]
+                    (session, self._debated.get(session, ())) for session in sessions[:day_index]
                 )
                 scores, shortlist = committee_shortlist(
                     gw,
@@ -802,9 +788,7 @@ class CommitteeReplay:
             scores,
             embedder=self._embedder,
             macro_digest_text=macro_text,
-            include_replay_run_id=(
-                self.config.run_id if self.config.within_run_learning else None
-            ),
+            include_replay_run_id=(self.config.run_id if self.config.within_run_learning else None),
         )
 
         # Stage 1: dossier.
@@ -859,9 +843,7 @@ class CommitteeReplay:
             except Exception:
                 # Fault isolation (live-path quarantine parity): one dive with
                 # unsalvageable model output must never void the day or the run.
-                log.exception(
-                    "replay_dive_quarantined", symbol=sym, as_of=day.isoformat()
-                )
+                log.exception("replay_dive_quarantined", symbol=sym, as_of=day.isoformat())
                 continue
             dives.append(
                 ReplayDeepDive(
@@ -922,9 +904,7 @@ class CommitteeReplay:
             f"## Macro series and market context\n{_macro_context_text(gw)}\n\n"
             f"## Prediction-market digest\nnone"
         )
-        instruction = _MACRO_INSTRUCTION.format(as_of=day) + TEMPORAL_DISCIPLINE.format(
-            as_of=day
-        )
+        instruction = _MACRO_INSTRUCTION.format(as_of=day) + TEMPORAL_DISCIPLINE.format(as_of=day)
         request = {
             "custom_id": custom_id_for(day, MACRO_DIGEST_SYMBOL, MACRO_DIGEST_STAGE),
             "model_tier": "analyst",

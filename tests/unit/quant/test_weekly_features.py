@@ -209,9 +209,7 @@ def test_confirmation_fires_only_when_both_timeframes_break_out() -> None:
 
     # Daily only: a six-month slide with a sharp three-week bounce. Today is a
     # 20-session high but nowhere near the 26-week high.
-    slide = np.concatenate(
-        [np.linspace(200.0, 100.0, n - 15), np.linspace(100.0, 130.0, 15)]
-    )
+    slide = np.concatenate([np.linspace(200.0, 100.0, n - 15), np.linspace(100.0, 130.0, 15)])
     assert _confirm(slide) == 0.0
 
     # Weekly only: a steady climb (so today IS the highest weekly close) with

@@ -143,9 +143,7 @@ class MockBroker:
 
     def open_orders(self) -> list[dict[str, Any]]:
         return [
-            bo.as_dict()
-            for bo in self._orders.values()
-            if bo.status in ("new", "partially_filled")
+            bo.as_dict() for bo in self._orders.values() if bo.status in ("new", "partially_filled")
         ]
 
     def positions(self) -> list[dict[str, Any]]:
@@ -156,20 +154,20 @@ class MockBroker:
         ]
 
     def account(self) -> dict[str, Any]:
-        equity = self.cash + sum(
-            p["qty"] * p["avg_entry_price"] for p in self._positions.values()
-        )
+        equity = self.cash + sum(p["qty"] * p["avg_entry_price"] for p in self._positions.values())
         return {"cash": self.cash, "equity": equity, "buying_power": self.cash}
 
     # --- test helpers ---
 
-    def force_fill(self, client_order_id: str, qty: float | None = None,
-                   price: float | None = None) -> None:
+    def force_fill(
+        self, client_order_id: str, qty: float | None = None, price: float | None = None
+    ) -> None:
         """Fill an open order out-of-band (simulates fills during downtime)."""
         bo = self._require(client_order_id)
         remaining = bo.qty - bo.filled_qty
-        self._apply_fill(bo, qty if qty is not None else remaining,
-                         price or self.default_fill_price)
+        self._apply_fill(
+            bo, qty if qty is not None else remaining, price or self.default_fill_price
+        )
 
     def knows(self, client_order_id: str) -> bool:
         return client_order_id in self._orders

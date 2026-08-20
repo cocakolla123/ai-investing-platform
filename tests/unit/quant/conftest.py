@@ -54,9 +54,7 @@ def bars() -> pd.DataFrame:
 
 @pytest.fixture
 def inputs(bars: pd.DataFrame) -> FeatureInputs:
-    return FeatureInputs(
-        bars=bars, sector_map={"AAA": "XLK", "BBB": "XLK", "CCC": "XLK"}
-    )
+    return FeatureInputs(bars=bars, sector_map={"AAA": "XLK", "BBB": "XLK", "CCC": "XLK"})
 
 
 def planted_panel(

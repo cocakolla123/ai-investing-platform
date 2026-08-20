@@ -98,8 +98,10 @@ class MockPMBroker:
         )
         self._orders[order.client_order_id] = broker_order
 
-        price = step.fill_price_cents if step.fill_price_cents is not None else float(
-            order.limit_price_cents
+        price = (
+            step.fill_price_cents
+            if step.fill_price_cents is not None
+            else float(order.limit_price_cents)
         )
         if step.behavior == "disconnect_after_accept":
             self._apply_fill(broker_order, order.contracts, price)
@@ -124,9 +126,7 @@ class MockPMBroker:
 
     def open_orders(self) -> list[dict[str, Any]]:
         return [
-            bo.as_dict()
-            for bo in self._orders.values()
-            if bo.status in ("new", "partially_filled")
+            bo.as_dict() for bo in self._orders.values() if bo.status in ("new", "partially_filled")
         ]
 
     def positions(self) -> list[dict[str, Any]]:
@@ -196,7 +196,7 @@ class MockPMBroker:
         )
         new_contracts = pos["contracts"] + contracts
         pos["avg_price_cents"] = (
-            (pos["avg_price_cents"] * pos["contracts"] + price_cents * contracts) / new_contracts
-        )
+            pos["avg_price_cents"] * pos["contracts"] + price_cents * contracts
+        ) / new_contracts
         pos["contracts"] = new_contracts
         self.balance_cents -= contracts * price_cents

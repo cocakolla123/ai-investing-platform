@@ -231,9 +231,7 @@ def _rows(df: pd.DataFrame, mask: object) -> pd.DataFrame:
     return df.loc[cast(pd.Series, mask)]
 
 
-def _apply_per_symbol(
-    df: pd.DataFrame, fn: Callable[[pd.Series], pd.Series]
-) -> pd.DataFrame:
+def _apply_per_symbol(df: pd.DataFrame, fn: Callable[[pd.Series], pd.Series]) -> pd.DataFrame:
     """Apply ``fn`` to each column's OWN non-NaN observation sequence.
 
     :func:`_pivot` indexes the panel by the UNION of every symbol's bar
@@ -556,9 +554,7 @@ def _vol_ewma_60d(ctx: FeatureContext) -> pd.Series:
     lr = _log_returns(p)
     # span/min_periods count the SYMBOL'S own return observations (an EWMA
     # over calendar rows decays ~7/5 too fast for a 5-day-a-week name).
-    ewm_std = _apply_per_symbol(
-        lr, lambda s: cast(pd.Series, s.ewm(span=60, min_periods=20).std())
-    )
+    ewm_std = _apply_per_symbol(lr, lambda s: cast(pd.Series, s.ewm(span=60, min_periods=20).std()))
     vol = ewm_std.iloc[-1] * math.sqrt(TRADING_DAYS_PER_YEAR)
     return vol.reindex(ctx.universe)
 
@@ -686,9 +682,7 @@ def pit_facts(fundamentals: pd.DataFrame | None, as_of: pd.Timestamp) -> pd.Data
     return _rows(df, df["filed_at"] <= as_of)
 
 
-def quarterly_series(
-    facts: pd.DataFrame, symbol: str, tag: str, as_of: pd.Timestamp
-) -> pd.Series:
+def quarterly_series(facts: pd.DataFrame, symbol: str, tag: str, as_of: pd.Timestamp) -> pd.Series:
     """Latest filed value per period_end, sorted by period_end ascending."""
     sub = _rows(facts, (facts["symbol"] == symbol) & (facts["tag"] == tag))
     if sub.empty:
@@ -990,9 +984,7 @@ def _estimate_at(est: pd.DataFrame, sym: str, at: pd.Timestamp) -> float:
 def _est_revision(days: int, mode: str) -> FeatureFn:
     def fn(ctx: FeatureContext) -> pd.Series:
         est = ctx.inputs.estimates
-        if est is None or est.empty or not {"symbol", "fetched_at", "eps_est"} <= set(
-            est.columns
-        ):
+        if est is None or est.empty or not {"symbol", "fetched_at", "eps_est"} <= set(est.columns):
             return _nan_series(ctx)
         e = est.copy()
         e["fetched_at"] = dt_naive_utc(e["fetched_at"])
@@ -1046,8 +1038,7 @@ def insider_net_buy_signed(
 
 def _insider_net_buy_90d(ctx: FeatureContext) -> pd.Series:
     out = {
-        sym: insider_net_buy_signed(ctx.inputs.insider, sym, ctx.as_of, 90)
-        for sym in ctx.universe
+        sym: insider_net_buy_signed(ctx.inputs.insider, sym, ctx.as_of, 90) for sym in ctx.universe
     }
     return pd.Series(out, dtype=float).reindex(ctx.universe)
 
@@ -1305,9 +1296,7 @@ def _weekly_confirms_daily_breakout(ctx: FeatureContext) -> pd.Series:
     daily_hi = _roll_per_symbol(p, DAILY_BREAKOUT_SESSIONS, "max").iloc[-1]
     weekly_hi = _roll_per_symbol(w, WEEKLY_BREAKOUT_WEEKS, "max").iloc[-1]
     last_daily, last_weekly = p.iloc[-1], w.iloc[-1]
-    known = (
-        daily_hi.notna() & weekly_hi.notna() & last_daily.notna() & last_weekly.notna()
-    )
+    known = daily_hi.notna() & weekly_hi.notna() & last_daily.notna() & last_weekly.notna()
     both = (last_daily >= daily_hi) & (last_weekly >= weekly_hi)
     flags = cast(pd.Series, both.astype(float).where(known))
     return flags.reindex(ctx.universe)
@@ -1426,14 +1415,10 @@ def _unusual_volume_no_news(ctx: FeatureContext) -> pd.Series:
     news = _news_frame(ctx)
     if v.empty or news.empty or len(v) < UNUSUAL_VOLUME_BASELINE:
         return _nan_series(ctx)
-    baseline = _shift_per_symbol(
-        _roll_per_symbol(v, UNUSUAL_VOLUME_BASELINE, "median"), 1
-    )
+    baseline = _shift_per_symbol(_roll_per_symbol(v, UNUSUAL_VOLUME_BASELINE, "median"), 1)
     heavy = v > UNUSUAL_VOLUME_MULT * baseline.where(baseline > 0)
     evidence_lo = ctx.as_of - pd.Timedelta(days=NEWS_COVERAGE_EVIDENCE_DAYS)
-    covered = set(
-        _rows(news, news["published_at"] >= evidence_lo)["symbol"].unique()
-    )
+    covered = set(_rows(news, news["published_at"] >= evidence_lo)["symbol"].unique())
     blackout = np.timedelta64(NEWS_BLACKOUT_DAYS, "D")
     out: dict[str, float] = {}
     for sym in ctx.universe:
@@ -1445,9 +1430,7 @@ def _unusual_volume_no_news(ctx: FeatureContext) -> pd.Series:
         if len(window) < UNUSUAL_VOLUME_WINDOW:
             out[sym] = float("nan")
             continue
-        published = cast(
-            pd.Series, _rows(news, news["symbol"] == sym)["published_at"]
-        ).to_numpy()
+        published = cast(pd.Series, _rows(news, news["symbol"] == sym)["published_at"]).to_numpy()
         heavy_days = cast(pd.DatetimeIndex, window.index[window.astype(bool)])
         quiet = 0
         for day in heavy_days:

@@ -98,9 +98,7 @@ AS_OF = to_ts("2026-03-03")
 
 
 def _raw(bars: pd.DataFrame, universe: list[str]) -> pd.DataFrame:
-    return build_raw_features(
-        FeatureInputs(bars=bars, sector_map=SECTOR_MAP), AS_OF, universe
-    )
+    return build_raw_features(FeatureInputs(bars=bars, sector_map=SECTOR_MAP), AS_OF, universe)
 
 
 def test_equity_features_are_invariant_to_crypto_in_the_universe(
@@ -137,9 +135,7 @@ def test_rolling_features_are_live_for_equities_in_a_mixed_calendar_universe(
     """The direct assertion: dist_ma50 (and the other 15 casualties) must be
     non-NaN for EVERY equity when crypto shares the panel. Before the fix
     exactly the crypto pairs had a computable 50-day MA."""
-    raw = _raw(
-        pd.concat([equity_bars, crypto_bars], ignore_index=True), [*EQUITIES, *CRYPTO]
-    )
+    raw = _raw(pd.concat([equity_bars, crypto_bars], ignore_index=True), [*EQUITIES, *CRYPTO])
     for feature in ROLLING_FEATURES:
         alive = raw.loc[EQUITIES, feature].notna()
         assert bool(alive.all()), f"{feature} NaN for {list(alive[~alive].index)}"
@@ -155,9 +151,7 @@ def test_positional_lookups_are_counted_in_sessions_not_calendar_days(
     """``_ret``/``_mom_12_1``/``rs_20d_sector`` indexed positionally into the
     calendar panel, so an equity's "20-day return" was 21 calendar days and
     NaN'd whenever the offset landed on a weekend."""
-    mixed = _raw(
-        pd.concat([equity_bars, crypto_bars], ignore_index=True), [*EQUITIES, *CRYPTO]
-    )
+    mixed = _raw(pd.concat([equity_bars, crypto_bars], ignore_index=True), [*EQUITIES, *CRYPTO])
     for feature in POSITIONAL_FEATURES:
         assert bool(mixed.loc[EQUITIES, feature].notna().all()), feature
     assert bool(mixed.loc[OPERATING_COMPANIES, "rs_20d_sector"].notna().all())
@@ -172,8 +166,6 @@ def test_a_50_day_ma_is_computable_for_every_symbol_in_the_mixed_universe(
     equity_bars: pd.DataFrame, crypto_bars: pd.DataFrame
 ) -> None:
     """The hand-verified 5-of-55 measurement, in miniature: 7 of 7 now."""
-    raw = _raw(
-        pd.concat([equity_bars, crypto_bars], ignore_index=True), [*EQUITIES, *CRYPTO]
-    )
+    raw = _raw(pd.concat([equity_bars, crypto_bars], ignore_index=True), [*EQUITIES, *CRYPTO])
     computable = int(raw["dist_ma50"].notna().sum())
     assert computable == len(EQUITIES) + len(CRYPTO)

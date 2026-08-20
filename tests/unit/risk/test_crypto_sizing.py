@@ -40,8 +40,7 @@ def test_single_crypto_position_capped_at_crypto_max_position() -> None:
 
 def test_crypto_positions_collectively_capped_at_sleeve_cap() -> None:
     candidates = [
-        crypto_candidate(s)
-        for s in ("AVAX/USD", "BTC/USD", "ETH/USD", "LINK/USD", "SOL/USD")
+        crypto_candidate(s) for s in ("AVAX/USD", "BTC/USD", "ETH/USD", "LINK/USD", "SOL/USD")
     ]
     sized = size_positions(candidates, CFG, CTX)
     total = sum(p.weight for p in sized)

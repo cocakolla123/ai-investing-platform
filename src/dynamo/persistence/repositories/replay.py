@@ -94,9 +94,7 @@ class ReplayRepository:
 
     def update_status(self, run_id: str, status: str) -> None:
         with self._engine.begin() as cx:
-            cx.execute(
-                update(replay_runs).where(replay_runs.c.id == run_id).values(status=status)
-            )
+            cx.execute(update(replay_runs).where(replay_runs.c.id == run_id).values(status=status))
 
     def record_spend(self, run_id: str, delta_usd: float) -> None:
         """Accumulate run-local spend (Phase 5 committee budget accounting;
@@ -245,9 +243,7 @@ class ReplayRepository:
             stmt = stmt.where(replay_flags.c.as_of == as_of)
         if promoted_only:
             stmt = stmt.where(replay_flags.c.promoted.is_(True))
-        stmt = stmt.order_by(
-            replay_flags.c.as_of, replay_flags.c.symbol, replay_flags.c.detector
-        )
+        stmt = stmt.order_by(replay_flags.c.as_of, replay_flags.c.symbol, replay_flags.c.detector)
         with self._engine.connect() as cx:
             return [dict(r._mapping) for r in cx.execute(stmt)]
 

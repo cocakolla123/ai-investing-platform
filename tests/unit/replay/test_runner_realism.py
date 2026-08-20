@@ -89,9 +89,7 @@ def test_whole_shares_floors_equity_buys_and_divergence_is_bounded(
 
 def test_min_order_notional_skips_dust_orders_at_1k(fixture_frames: Any) -> None:  # noqa: F811
     baseline = _run(fixture_frames, initial_equity=1_000.0)
-    constrained = _run(
-        fixture_frames, initial_equity=1_000.0, min_order_notional=25.0
-    )
+    constrained = _run(fixture_frames, initial_equity=1_000.0, min_order_notional=25.0)
     # The $1k fixture produces real ~$80 entries AND sub-dollar rebalance
     # trims — the floor must bite on the trims only.
     dust = [f for f in baseline.fills if f.qty * f.price < 25.0]
@@ -108,9 +106,7 @@ def test_min_order_notional_skips_dust_orders_at_1k(fixture_frames: Any) -> None
 def test_commission_reduces_equity_by_count_times_fee(fixture_frames: Any) -> None:  # noqa: F811
     fee = 1.0
     baseline = _run(fixture_frames, initial_equity=100_000.0)
-    with_fee = _run(
-        fixture_frames, initial_equity=100_000.0, commission_per_order=fee
-    )
+    with_fee = _run(fixture_frames, initial_equity=100_000.0, commission_per_order=fee)
     # First fill day: decisions were made from identical day-0 state, so the
     # fills match 1:1 and equity drops by exactly count x fee.
     first_fill_day = min(f.session for f in baseline.fills)
@@ -123,9 +119,7 @@ def test_commission_reduces_equity_by_count_times_fee(fixture_frames: Any) -> No
     )
     # Per-order cost carries the commission.
     base_costs = {
-        (f.session, f.symbol, f.side): f.cost
-        for f in baseline.fills
-        if f.session == first_fill_day
+        (f.session, f.symbol, f.side): f.cost for f in baseline.fills if f.session == first_fill_day
     }
     for f in with_fee.fills:
         if f.session == first_fill_day:

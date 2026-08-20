@@ -95,7 +95,10 @@ class StopsMaintainer:
             if quote > spec.stop_price:
                 continue
             order = self._create_exit_order(
-                spec, position, quote, decision_context_ids.get(spec.symbol, ""),
+                spec,
+                position,
+                quote,
+                decision_context_ids.get(spec.symbol, ""),
                 target_portfolio_id,
             )
             exits.append(order)

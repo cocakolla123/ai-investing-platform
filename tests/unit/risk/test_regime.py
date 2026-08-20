@@ -50,9 +50,7 @@ def test_planted_2008_like_crash_labels_risk_off_or_crisis() -> None:
     states = backfill_regimes(history, CFG)
     assert states
     crash_states = states[-(crash - 20) :]  # after the crash is well established
-    assert all(
-        s.regime in (Regime.RISK_OFF, Regime.CRISIS) for s in crash_states
-    )
+    assert all(s.regime in (Regime.RISK_OFF, Regime.CRISIS) for s in crash_states)
     assert states[-1].regime is Regime.CRISIS  # full stress: every input red
     assert states[-1].composite_score <= -1.25
 

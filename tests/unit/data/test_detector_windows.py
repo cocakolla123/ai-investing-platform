@@ -104,9 +104,7 @@ def test_requirement_is_derived_from_declared_defaults() -> None:
         "lookback": 252,
         "volume_window": 60,
     }
-    assert (
-        detector_session_requirements()["range_break"] == 252 + COMBINATION_ALLOWANCE_SESSIONS
-    )
+    assert detector_session_requirements()["range_break"] == 252 + COMBINATION_ALLOWANCE_SESSIONS
     # Non-window numeric knobs are not mistaken for lookbacks.
     assert "min_band_touches" not in declared_windows(detectors.range_bound)
     assert "band_sigma" not in declared_windows(detectors.range_bound)

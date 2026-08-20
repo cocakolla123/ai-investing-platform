@@ -113,22 +113,27 @@ def _seed(engine) -> None:  # type: ignore[no-untyped-def]
         for r in bars.to_dict(orient="records")
     )
     repo.upsert_universe_membership(
-        UniverseMembership(
-            symbol=s, tier=Tier.CORE, valid_from=date(2026, 1, 2), reason="seed"
-        )
+        UniverseMembership(symbol=s, tier=Tier.CORE, valid_from=date(2026, 1, 2), reason="seed")
         for s in UNIVERSE
     )
-    repo.upsert_instruments(
-        Instrument(symbol=s, name=s, sector="tech") for s in UNIVERSE
-    )
+    repo.upsert_instruments(Instrument(symbol=s, name=s, sector="tech") for s in UNIVERSE)
     repo.upsert_rows(
         schema.quant_scores,
         [
-            {k: r[k] for k in (
-                "symbol", "as_of", "model_version", "expected_excess_return",
-                "downside_prob", "vol_forecast", "rank", "confidence",
-                "feature_coverage",
-            )}
+            {
+                k: r[k]
+                for k in (
+                    "symbol",
+                    "as_of",
+                    "model_version",
+                    "expected_excess_return",
+                    "downside_prob",
+                    "vol_forecast",
+                    "rank",
+                    "confidence",
+                    "feature_coverage",
+                )
+            }
             for r in make_scores(sessions[-RUN_SESSIONS:]).to_dict(orient="records")
         ],
     )
@@ -138,8 +143,12 @@ def _seed(engine) -> None:  # type: ignore[no-untyped-def]
         schema.committee_verdicts,
         [
             {
-                "id": "v-live-1", "symbol": "LIQ", "as_of": date(2026, 6, 1),
-                "action": "buy", "conviction": 0.7, "disagreement_score": 0.0,
+                "id": "v-live-1",
+                "symbol": "LIQ",
+                "as_of": date(2026, 6, 1),
+                "action": "buy",
+                "conviction": 0.7,
+                "disagreement_score": 0.0,
                 "payload": {"id": "v-live-1"},
             }
         ],
@@ -213,9 +222,7 @@ def test_replay_never_touches_live_tables(engine) -> None:  # type: ignore[no-un
 
     sessions = nyse_sessions(END, HISTORY_SESSIONS)
     window = sessions[-RUN_SESSIONS:]
-    config = ReplayConfig(
-        start=window[0], end=window[-1], label="firewall", horizon_sessions=3
-    )
+    config = ReplayConfig(start=window[0], end=window[-1], label="firewall", horizon_sessions=3)
     runner = ReplayRunner(
         gateway_factory=lambda d: HistoricalDataGateway(engine, d),
         experience_repo=ExperienceRepository(engine),
@@ -251,7 +258,10 @@ def test_replay_never_touches_live_tables(engine) -> None:  # type: ignore[no-un
     }
     for f in result.fills:
         assert stored_fills[(f.session, f.symbol)] == (
-            f.side, f.qty, f.price, f.realized_pnl,
+            f.side,
+            f.qty,
+            f.price,
+            f.realized_pnl,
         )
     exp_repo = ExperienceRepository(engine)
     assert exp_repo.count(source="replay") == len(result.experiences)
@@ -336,9 +346,7 @@ def test_committee_replay_never_touches_live_tables(engine) -> None:  # type: ig
     assert len(verdicts) == len(result.deep_dives)
     assert _count(engine, "replay_verdicts") == len(verdicts)
     exp_repo = ExperienceRepository(engine)
-    assert {e.id for e in exp_repo.by_run(config.run_id)} == {
-        e.id for e in result.experiences
-    }
+    assert {e.id for e in exp_repo.by_run(config.run_id)} == {e.id for e in result.experiences}
     assert exp_repo.count(source="live") == 0
 
 

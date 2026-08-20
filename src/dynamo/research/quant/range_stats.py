@@ -161,9 +161,7 @@ def _safe_ratio(num: pd.DataFrame, den: pd.DataFrame) -> pd.DataFrame:
     return cast(pd.DataFrame, out.replace([np.inf, -np.inf], np.nan))
 
 
-def variance_ratio(
-    price: pd.DataFrame, k: int, *, window: int = VR_WINDOW
-) -> pd.DataFrame:
+def variance_ratio(price: pd.DataFrame, k: int, *, window: int = VR_WINDOW) -> pd.DataFrame:
     """Panel of ``VR_k`` (module docstring section 1), aligned to ``price``.
 
     ``window`` sample variances are strict (``min_periods == window``): a
@@ -223,9 +221,7 @@ def band_excursions(
         started = cast(pd.DataFrame, started.where(flag.notna()))
         return _roll_per_symbol(started, count_window, "sum")
 
-    return _count(cast(pd.DataFrame, price >= upper)), _count(
-        cast(pd.DataFrame, price <= lower)
-    )
+    return _count(cast(pd.DataFrame, price >= upper)), _count(cast(pd.DataFrame, price <= lower))
 
 
 def range_position(

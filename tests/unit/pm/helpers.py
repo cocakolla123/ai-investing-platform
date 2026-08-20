@@ -126,9 +126,7 @@ class FakePMOrderStore:
 
     def set_broker_order_id(self, client_order_id: str, broker_order_id: str) -> None:
         order = self.orders[client_order_id]
-        self.orders[client_order_id] = order.model_copy(
-            update={"broker_order_id": broker_order_id}
-        )
+        self.orders[client_order_id] = order.model_copy(update={"broker_order_id": broker_order_id})
 
     def set_decision_context(self, client_order_id: str, decision_context_id: str) -> None:
         order = self.orders[client_order_id]

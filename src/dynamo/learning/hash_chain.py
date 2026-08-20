@@ -69,14 +69,18 @@ def verify_chain(rows: Sequence[Mapping[str, Any]]) -> ChainVerification:
         if prev != expected_prev:
             fault = ChainFault.BAD_GENESIS if i == 0 else ChainFault.BROKEN_LINK
             return ChainVerification(
-                False, fault, i,
+                False,
+                fault,
+                i,
                 f"row {i}: prev_hash {prev[:12]}… != expected {expected_prev[:12]}…",
             )
         recomputed = row_hash(prev, chain_body(row))
         stored = str(row.get("row_hash", ""))
         if recomputed != stored:
             return ChainVerification(
-                False, ChainFault.HASH_MISMATCH, i,
+                False,
+                ChainFault.HASH_MISMATCH,
+                i,
                 f"row {i}: stored row_hash does not match recomputed body hash",
             )
         expected_prev = stored

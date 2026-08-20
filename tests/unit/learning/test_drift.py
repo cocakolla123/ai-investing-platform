@@ -42,9 +42,7 @@ def test_ic_decay_single_recovery_session_resets() -> None:
 
 def test_feature_psi_trips_only_on_top_features() -> None:
     psi = {"momentum_63d": 0.40, "obscure_feature": 0.90, "value_score": 0.05}
-    proposal = feature_psi_monitor(
-        psi, ["momentum_63d", "value_score"], "ranker-v1", AS_OF, NOW
-    )
+    proposal = feature_psi_monitor(psi, ["momentum_63d", "value_score"], "ranker-v1", AS_OF, NOW)
     assert proposal is not None
     assert proposal.kind == ProposalKind.RETRAIN
     assert "momentum_63d" in str(proposal.proposed_change["drifted_features"])

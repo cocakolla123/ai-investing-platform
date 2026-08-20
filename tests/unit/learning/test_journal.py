@@ -61,7 +61,10 @@ REVIEW = PostTradeReview(
 
 def _entry(eid: str, kind: JournalKind = JournalKind.LESSON, **kw: object) -> JournalEntry:
     defaults: dict[str, object] = {
-        "id": eid, "kind": kind, "text": f"text {eid}", "created_at": NOW,
+        "id": eid,
+        "kind": kind,
+        "text": f"text {eid}",
+        "created_at": NOW,
     }
     defaults.update(kw)
     return JournalEntry.model_validate(defaults)

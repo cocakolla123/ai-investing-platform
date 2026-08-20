@@ -191,8 +191,10 @@ class Reconciler:
         for symbol in sorted(set(internal) | set(broker)):
             iq, bq = internal.get(symbol, 0.0), broker.get(symbol, 0.0)
             if abs(iq - bq) > QTY_TOLERANCE:
-                kind = "position_qty" if symbol in internal and symbol in broker else (
-                    "unknown_position"
+                kind = (
+                    "position_qty"
+                    if symbol in internal and symbol in broker
+                    else ("unknown_position")
                 )
                 out.append(Divergence(symbol, kind, iq, bq, "position qty mismatch"))
         return out
@@ -254,7 +256,10 @@ class Reconciler:
         if abs(broker_equity - self._internal.equity()) > self._cash_tolerance:
             out.append(
                 Divergence(
-                    GLOBAL_SCOPE, "equity", self._internal.equity(), broker_equity,
+                    GLOBAL_SCOPE,
+                    "equity",
+                    self._internal.equity(),
+                    broker_equity,
                     "equity mismatch",
                 )
             )

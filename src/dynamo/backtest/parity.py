@@ -199,9 +199,7 @@ def run_parity_check(
     tolerance: float = PARITY_TOLERANCE,
 ) -> ParityResult:
     """Run both engines on one symbol and compare terminal equity."""
-    vec = vectorized_ma_cross_equity(
-        opens, closes, fast, slow, cost_bps, initial_equity
-    )
+    vec = vectorized_ma_cross_equity(opens, closes, fast, slow, cost_bps, initial_equity)
     first = _first_session(opens)
     data = BacktestData(
         opens=opens.to_frame(symbol),

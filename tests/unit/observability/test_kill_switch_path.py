@@ -82,9 +82,7 @@ def test_home_expands_a_tilde(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _settings().kill_switch_file == expected / "KILL_SWITCH"
 
 
-def test_api_wiring_uses_the_anchored_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_api_wiring_uses_the_anchored_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: build_deps used to hand FileKillSwitch the raw relative string."""
     from dynamo.api.wiring import FileKillSwitch
 

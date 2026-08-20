@@ -270,9 +270,7 @@ def _latest_pm_frames(
                 else None
             ),
             resolved_outcome=(
-                bool(row["resolved_outcome"])
-                if row.get("resolved_outcome") is not None
-                else None
+                bool(row["resolved_outcome"]) if row.get("resolved_outcome") is not None else None
             ),
         )
     return views, prices, markets
@@ -630,9 +628,7 @@ def pm_sim_execute_orders(context: OpExecutionContext, dynamo: DynamoResource) -
                 manager.submit(order.client_order_id)
                 submitted += 1
             except ExecutionError as exc:
-                context.log.error(
-                    "pm_sim_trading: %s not filled: %s", order.client_order_id, exc
-                )
+                context.log.error("pm_sim_trading: %s not filled: %s", order.client_order_id, exc)
     if live_active:
         # Real fills must never debit the SIM bankroll ledger.
         fills = _apply_new_fills(dynamo, manager, markets)
@@ -691,9 +687,7 @@ def pm_reconcile_broker_state(context: OpExecutionContext, dynamo: DynamoResourc
         manager = _pm_manager(dynamo, broker)
         fills = _apply_new_fills(dynamo, manager, markets)
 
-        reconciler = PMReconciler(
-            broker, ReconciliationRepository(dynamo.engine()), alert
-        )
+        reconciler = PMReconciler(broker, ReconciliationRepository(dynamo.engine()), alert)
         result = reconciler.reconcile(
             utcnow(), PMPositionRepository(dynamo.engine()).open_positions(venue=PM_VENUE)
         )
@@ -757,8 +751,7 @@ def _pm_live_polymarket_reconcile(
     )
     result = reconciler.reconcile(utcnow(), open_positions)
     context.log.info(
-        "pm_reconciliation (polymarket LIVE): %d new fills, %d divergences, "
-        "halted scopes %s",
+        "pm_reconciliation (polymarket LIVE): %d new fills, %d divergences, halted scopes %s",
         fills,
         len(result.divergences),
         sorted(result.halted_scopes),

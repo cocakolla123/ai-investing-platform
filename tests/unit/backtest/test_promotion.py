@@ -61,7 +61,12 @@ class TestStage1:
     def test_pass_transitions_candidate_to_validating_and_counts_trial(self):
         repo = FakeRepo()
         result = run_stage(
-            "strat-a", 1, GOOD_STAGE1, repo=repo, actor="owner", at=NOW,
+            "strat-a",
+            1,
+            GOOD_STAGE1,
+            repo=repo,
+            actor="owner",
+            at=NOW,
             clean_tree=True,
         )
         assert result.passed
@@ -70,7 +75,12 @@ class TestStage1:
         # A second run of the family increments the persistent counter.
         repo.status["strat-a"] = RegistryStatus.CANDIDATE
         again = run_stage(
-            "strat-a", 1, GOOD_STAGE1, repo=repo, actor="owner", at=NOW,
+            "strat-a",
+            1,
+            GOOD_STAGE1,
+            repo=repo,
+            actor="owner",
+            at=NOW,
             clean_tree=True,
         )
         assert again.trial_count == 2
@@ -78,9 +88,7 @@ class TestStage1:
     def test_failed_gate_writes_no_transition(self):
         repo = FakeRepo()
         bad = dict(GOOD_STAGE1, deflated_sharpe=-0.1)
-        result = run_stage(
-            "strat-a", 1, bad, repo=repo, actor="owner", at=NOW, clean_tree=True
-        )
+        result = run_stage("strat-a", 1, bad, repo=repo, actor="owner", at=NOW, clean_tree=True)
         assert not result.passed
         assert repo.records == []
         assert repo.current_status("strat-a") is RegistryStatus.CANDIDATE
@@ -88,16 +96,26 @@ class TestStage1:
     def test_dirty_tree_refused(self):
         with pytest.raises(PromotionError, match="dirty git tree"):
             run_stage(
-                "strat-a", 1, GOOD_STAGE1, repo=FakeRepo(), actor="owner",
-                at=NOW, clean_tree=False,
+                "strat-a",
+                1,
+                GOOD_STAGE1,
+                repo=FakeRepo(),
+                actor="owner",
+                at=NOW,
+                clean_tree=False,
             )
 
     def test_vectorbt_evidence_refused(self):
         evidence = dict(GOOD_STAGE1, engine="vectorbt")
         with pytest.raises(PromotionError, match="event-driven"):
             run_stage(
-                "strat-a", 1, evidence, repo=FakeRepo(), actor="owner",
-                at=NOW, clean_tree=True,
+                "strat-a",
+                1,
+                evidence,
+                repo=FakeRepo(),
+                actor="owner",
+                at=NOW,
+                clean_tree=True,
             )
 
 
@@ -112,7 +130,12 @@ class TestStateMachine:
         }
         with pytest.raises(PromotionError, match="candidate"):
             run_stage(
-                "strat-a", 4, evidence, repo=repo, actor="owner", at=NOW,
+                "strat-a",
+                4,
+                evidence,
+                repo=repo,
+                actor="owner",
+                at=NOW,
                 clean_tree=True,
             )
 
@@ -120,8 +143,13 @@ class TestStateMachine:
         repo = FakeRepo(RegistryStatus.SHADOW)
         with pytest.raises(PromotionError, match="approval"):
             run_stage(
-                "strat-a", 7, {"engine": "event_driven"}, repo=repo,
-                actor="owner", at=NOW, clean_tree=True,
+                "strat-a",
+                7,
+                {"engine": "event_driven"},
+                repo=repo,
+                actor="owner",
+                at=NOW,
+                clean_tree=True,
                 evidence_bundle_ref="artifacts/backtests/run-1/",
             )
         assert repo.records == []
@@ -131,9 +159,15 @@ class TestStateMachine:
         approval = {"target_id": "someone-else", "signature": "sig"}
         with pytest.raises(PromotionError, match="someone-else"):
             run_stage(
-                "strat-a", 7, {"engine": "event_driven"}, repo=repo,
-                actor="owner", at=NOW, clean_tree=True,
-                approval=approval, approval_valid=True,
+                "strat-a",
+                7,
+                {"engine": "event_driven"},
+                repo=repo,
+                actor="owner",
+                at=NOW,
+                clean_tree=True,
+                approval=approval,
+                approval_valid=True,
                 evidence_bundle_ref="artifacts/backtests/run-1/",
             )
 
@@ -141,10 +175,18 @@ class TestStateMachine:
         repo = FakeRepo(RegistryStatus.SHADOW)
         approval = {"target_id": "strat-a", "signature": "sig"}
         result = run_stage(
-            "strat-a", 7, {"engine": "event_driven"}, repo=repo, actor="owner",
-            at=NOW, clean_tree=True, approval=approval, approval_valid=True,
+            "strat-a",
+            7,
+            {"engine": "event_driven"},
+            repo=repo,
+            actor="owner",
+            at=NOW,
+            clean_tree=True,
+            approval=approval,
+            approval_valid=True,
             evidence_bundle_ref="artifacts/backtests/run-1/",
-            git_commit="abc123", config_hash="deadbeef",
+            git_commit="abc123",
+            config_hash="deadbeef",
         )
         assert result.passed
         assert repo.current_status("strat-a") is RegistryStatus.PRODUCTION
@@ -154,9 +196,7 @@ class TestStateMachine:
 
     def test_reject_from_any_pre_production_stage(self):
         repo = FakeRepo(RegistryStatus.VALIDATING)
-        record = reject(
-            "strat-a", repo=repo, actor="owner", at=NOW, reason="fold instability"
-        )
+        record = reject("strat-a", repo=repo, actor="owner", at=NOW, reason="fold instability")
         assert record.to_status is RegistryStatus.REJECTED
         assert repo.current_status("strat-a") is RegistryStatus.REJECTED
 
@@ -168,8 +208,13 @@ class TestStateMachine:
     def test_unknown_stage(self):
         with pytest.raises(PromotionError, match="unknown"):
             run_stage(
-                "strat-a", 9, {"engine": "event_driven"}, repo=FakeRepo(),
-                actor="owner", at=NOW, clean_tree=True,
+                "strat-a",
+                9,
+                {"engine": "event_driven"},
+                repo=FakeRepo(),
+                actor="owner",
+                at=NOW,
+                clean_tree=True,
             )
 
 
@@ -184,7 +229,12 @@ class TestPaperAndShadowGates:
             "risk_constraint_violations": 0,
         }
         result = run_stage(
-            "strat-a", 5, evidence, repo=repo, actor="owner", at=NOW,
+            "strat-a",
+            5,
+            evidence,
+            repo=repo,
+            actor="owner",
+            at=NOW,
             clean_tree=True,
         )
         assert result.passed
@@ -193,7 +243,12 @@ class TestPaperAndShadowGates:
         short = dict(evidence, paper_trading_days=12)
         repo2 = FakeRepo(RegistryStatus.PAPER)
         result = run_stage(
-            "strat-b", 5, short, repo=repo2, actor="owner", at=NOW,
+            "strat-b",
+            5,
+            short,
+            repo=repo2,
+            actor="owner",
+            at=NOW,
             clean_tree=True,
         )
         assert not result.passed

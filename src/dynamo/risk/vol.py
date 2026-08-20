@@ -48,15 +48,11 @@ def ewma_vol_by_symbol(panel: ReturnsPanel, span: int) -> dict[str, float]:
     """Annualized EWMA vol per symbol. Unusable series map to NaN."""
     out: dict[str, float] = {}
     for i, symbol in enumerate(panel.symbols):
-        out[symbol] = ewma_sigma_annual(
-            np.asarray(panel.values[:, i], dtype=np.float64), span
-        )
+        out[symbol] = ewma_sigma_annual(np.asarray(panel.values[:, i], dtype=np.float64), span)
     return out
 
 
-def portfolio_return_series(
-    panel: ReturnsPanel, weights: Mapping[str, float]
-) -> FloatArray | None:
+def portfolio_return_series(panel: ReturnsPanel, weights: Mapping[str, float]) -> FloatArray | None:
     """Full-revaluation portfolio daily returns R @ w.
 
     Returns None if any weighted symbol is missing from the panel or a weight
@@ -104,9 +100,7 @@ def atr(bars: SymbolBars, period: int = 14) -> float:
     high = bars.high[1:]
     low = bars.low[1:]
     prev_close = bars.close[:-1]
-    tr = np.maximum(
-        high - low, np.maximum(np.abs(high - prev_close), np.abs(low - prev_close))
-    )
+    tr = np.maximum(high - low, np.maximum(np.abs(high - prev_close), np.abs(low - prev_close)))
     tr = tr[np.isfinite(tr)]
     if tr.size == 0:
         return float("nan")

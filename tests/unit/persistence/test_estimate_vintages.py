@@ -18,9 +18,7 @@ def _event(
     revenue: float | None = None,
     event_date: date = EVENT_DATE,
 ) -> EarningsEvent:
-    return EarningsEvent(
-        symbol=symbol, event_date=event_date, eps_est=eps, revenue_est=revenue
-    )
+    return EarningsEvent(symbol=symbol, event_date=event_date, eps_est=eps, revenue_est=revenue)
 
 
 def test_first_sighting_appends_a_vintage() -> None:

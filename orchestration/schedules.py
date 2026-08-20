@@ -189,9 +189,7 @@ eod_ingest_schedule = _partitioned_schedule(
 )
 # Crypto trades 24/7 (ADR-0013): bars ingest EVERY day, 5 minutes after the
 # equities EOD ingest slot.
-crypto_bars_schedule = _partitioned_schedule(
-    "crypto_bars_schedule", "35 21 * * *", crypto_bars_job
-)
+crypto_bars_schedule = _partitioned_schedule("crypto_bars_schedule", "35 21 * * *", crypto_bars_job)
 insider_schedule = _partitioned_schedule("insider_schedule", "0 * * * *", insider_job)
 news_schedule = _partitioned_schedule("news_schedule", f"*/30 * * * {MARKET_DAYS}", news_job)
 macro_ingest_schedule = _partitioned_schedule(
@@ -201,9 +199,7 @@ earnings_calendar_schedule = _partitioned_schedule(
     "earnings_calendar_schedule", "0 7 * * *", earnings_calendar_job
 )
 # Transcripts run 30 minutes after the earnings calendar refresh.
-transcripts_schedule = _partitioned_schedule(
-    "transcripts_schedule", "30 7 * * *", transcripts_job
-)
+transcripts_schedule = _partitioned_schedule("transcripts_schedule", "30 7 * * *", transcripts_job)
 prediction_market_schedule = _partitioned_schedule(
     "prediction_market_schedule", "0 20 * * *", prediction_market_job
 )

@@ -32,9 +32,7 @@ class TestPriority:
             DeepDiveCandidate(symbol="ERN", earnings_in_sessions=2, last_verdict_age_days=1),
             DeepDiveCandidate(symbol="FIL", has_new_filing=True, last_verdict_age_days=1),
             DeepDiveCandidate(symbol="MOV", move_sigma=-2.5, last_verdict_age_days=1),
-            DeepDiveCandidate(
-                symbol="RNK", quant_rank_jump_pctiles=20.0, last_verdict_age_days=1
-            ),
+            DeepDiveCandidate(symbol="RNK", quant_rank_jump_pctiles=20.0, last_verdict_age_days=1),
         ]
         assert len(select_deep_dives(triggers, cap=10)) == 4
 
@@ -43,9 +41,7 @@ class TestPriority:
             fresh("AAA"),
             DeepDiveCandidate(symbol="BBB", earnings_in_sessions=5, last_verdict_age_days=1),
             DeepDiveCandidate(symbol="CCC", move_sigma=1.9, last_verdict_age_days=1),
-            DeepDiveCandidate(
-                symbol="DDD", quant_rank_jump_pctiles=19.9, last_verdict_age_days=1
-            ),
+            DeepDiveCandidate(symbol="DDD", quant_rank_jump_pctiles=19.9, last_verdict_age_days=1),
         ]
         assert select_deep_dives(duds, cap=10) == []
 
@@ -190,9 +186,7 @@ class TestDiversityLayer:
 
         candidates = [stale("RECENT", age=100), stale("NEVER", age=20)]
         history = [(date(2026, 8, 16), ["RECENT"]), (date(2026, 8, 17), ["RECENT"])]
-        selected = select_deep_dives(
-            candidates, cap=1, history=history, cooldown_sessions=2
-        )
+        selected = select_deep_dives(candidates, cap=1, history=history, cooldown_sessions=2)
         assert [c.symbol for c in selected] == ["NEVER"]
 
     def test_still_deterministic_with_the_diversity_layer_on(self) -> None:

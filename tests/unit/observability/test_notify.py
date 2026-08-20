@@ -77,9 +77,7 @@ def test_below_the_floor_is_not_transmitted() -> None:
 
 def test_lowering_the_floor_transmits_warnings() -> None:
     post = FakePost()
-    assert _telegram(post, min_severity="warn").send(
-        severity="warn", name="x", message="y"
-    ) is True
+    assert _telegram(post, min_severity="warn").send(severity="warn", name="x", message="y") is True
     assert len(post.calls) == 1
 
 
@@ -154,9 +152,7 @@ class FakeRepo:
 def test_dispatcher_writes_the_row_and_pages() -> None:
     repo, notifier = FakeRepo(), RecordingNotifier()
     assert AlertDispatcher(repo.add_alert, notifier)("page", "dd20", "stop") is True
-    assert repo.rows == [
-        {"severity": "page", "name": "dd20", "message": "stop", "ackable": True}
-    ]
+    assert repo.rows == [{"severity": "page", "name": "dd20", "message": "stop", "ackable": True}]
     assert notifier.sent == [("page", "dd20", "stop")]
 
 

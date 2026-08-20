@@ -51,17 +51,101 @@ _SEVERITY_PREFIX_RE = re.compile(r"^\s*(?:high|medium|low|critical|severe)\s*[:â
 _WORD_RE = re.compile(r"[a-z0-9]+")
 # Function words carry no topical signal; keeping them inflates Jaccard on
 # unrelated pairs and deflates it on paraphrases of different length.
-_STOPWORDS: frozenset[str] = frozenset({
-    "a", "an", "the", "and", "or", "but", "if", "of", "to", "in", "on", "for", "with", "without",
-    "by", "as", "at", "from", "into", "is", "are", "was", "were", "be", "been", "being", "that",
-    "this", "these", "those", "it", "its", "their", "there", "which", "who", "whom", "what",
-    "when", "while", "than", "then", "so", "not", "no", "any", "all", "some", "more", "most",
-    "other", "such", "only", "own", "same", "can", "could", "may", "might", "will", "would",
-    "shall", "should", "must", "do", "does", "did", "has", "have", "had", "over", "under",
-    "above", "below", "between", "through", "during", "before", "after", "up", "down", "out",
-    "off", "again", "further", "also", "both", "each", "few", "per", "via",
-})
-
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "if",
+        "of",
+        "to",
+        "in",
+        "on",
+        "for",
+        "with",
+        "without",
+        "by",
+        "as",
+        "at",
+        "from",
+        "into",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "that",
+        "this",
+        "these",
+        "those",
+        "it",
+        "its",
+        "their",
+        "there",
+        "which",
+        "who",
+        "whom",
+        "what",
+        "when",
+        "while",
+        "than",
+        "then",
+        "so",
+        "not",
+        "no",
+        "any",
+        "all",
+        "some",
+        "more",
+        "most",
+        "other",
+        "such",
+        "only",
+        "own",
+        "same",
+        "can",
+        "could",
+        "may",
+        "might",
+        "will",
+        "would",
+        "shall",
+        "should",
+        "must",
+        "do",
+        "does",
+        "did",
+        "has",
+        "have",
+        "had",
+        "over",
+        "under",
+        "above",
+        "below",
+        "between",
+        "through",
+        "during",
+        "before",
+        "after",
+        "up",
+        "down",
+        "out",
+        "off",
+        "again",
+        "further",
+        "also",
+        "both",
+        "each",
+        "few",
+        "per",
+        "via",
+    }
+)
 
 
 log = structlog.get_logger(__name__)
@@ -295,9 +379,7 @@ def _unrebutted_high_kill_cases(
     label when restating an objection â€” making ``buy`` unreachable.
     """
     substantive = [r for r in rebuttals if len(r.evidence) >= 1]
-    indexed: set[int] = {
-        r.kill_case_index for r in substantive if r.kill_case_index is not None
-    }
+    indexed: set[int] = {r.kill_case_index for r in substantive if r.kill_case_index is not None}
     unindexed_texts = [r.kill_case for r in substantive if r.kill_case_index is None]
 
     unmatched: list[KillCase] = []
@@ -367,7 +449,8 @@ class CommitteeEngine:
         journal_context_used: Sequence[str] = (),
     ) -> tuple[DossierAnalysis, AdvocateBrief, AdvocateBrief, CommitteeVerdict]:
         dossier_raw = self._call_stage("dossier", symbol, as_of, context)
-        dossier = _validated(DossierAnalysis,
+        dossier = _validated(
+            DossierAnalysis,
             _filtered_payload(
                 DossierAnalysis,
                 dossier_raw,
@@ -376,17 +459,19 @@ class CommitteeEngine:
                     "as_of": as_of,
                     "prompt_version": self._prompts["dossier_analyst"].version,
                 },
-            )
+            ),
         )
 
         advocate_context = advocate_context_for(context, dossier_raw)
         bull_raw = self._call_stage("bull", symbol, as_of, advocate_context)
-        bull = _validated(AdvocateBrief,
-            _filtered_payload(AdvocateBrief, bull_raw, {"symbol": symbol, "side": Side.BULL})
+        bull = _validated(
+            AdvocateBrief,
+            _filtered_payload(AdvocateBrief, bull_raw, {"symbol": symbol, "side": Side.BULL}),
         )
         bear_raw = self._call_stage("bear", symbol, as_of, advocate_context)
-        bear = _validated(AdvocateBrief,
-            _filtered_payload(AdvocateBrief, bear_raw, {"symbol": symbol, "side": Side.BEAR})
+        bear = _validated(
+            AdvocateBrief,
+            _filtered_payload(AdvocateBrief, bear_raw, {"symbol": symbol, "side": Side.BEAR}),
         )
 
         arb_context = arbiter_context_for(context, dossier_raw, bull_raw, bear_raw, quant_score)
@@ -444,8 +529,7 @@ class CommitteeEngine:
                 )
             unrebutted = _unrebutted_high_kill_cases(bear.kill_cases, rebuttals)
             reasons.extend(
-                f"unrebutted high-severity bear kill case: {kc.description}"
-                for kc in unrebutted
+                f"unrebutted high-severity bear kill case: {kc.description}" for kc in unrebutted
             )
             if reasons:
                 reason_text = "; ".join(reasons)

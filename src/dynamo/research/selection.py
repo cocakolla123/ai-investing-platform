@@ -115,10 +115,7 @@ def _priority(candidate: DeepDiveCandidate) -> int | None:
 
 def _ranked_band(candidates: Sequence[DeepDiveCandidate]) -> list[str]:
     """Symbols of one priority band, most urgent first, symbol as last resort."""
-    return [
-        c.symbol
-        for c in sorted(candidates, key=lambda c: (-urgency(c), c.symbol))
-    ]
+    return [c.symbol for c in sorted(candidates, key=lambda c: (-urgency(c), c.symbol))]
 
 
 def select_deep_dives(

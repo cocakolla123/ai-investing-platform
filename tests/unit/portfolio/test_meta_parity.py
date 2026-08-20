@@ -59,9 +59,7 @@ def _construct(inputs: AdvisoryInputs) -> str:
 def test_default_and_empty_mapping_are_bit_identical() -> None:
     """The parity contract: constructing with the field left at its default
     and with an explicitly empty mapping produce byte-identical JSON."""
-    assert _construct(_fixture_inputs()) == _construct(
-        _fixture_inputs(effective_probability={})
-    )
+    assert _construct(_fixture_inputs()) == _construct(_fixture_inputs(effective_probability={}))
 
 
 def test_mapping_for_absent_symbols_is_still_bit_identical() -> None:

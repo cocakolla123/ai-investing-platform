@@ -98,10 +98,7 @@ def gap_check(
     if bars.empty:
         return []
     calendar = xcals.get_calendar(calendar_name)
-    sessions = {
-        s.date()
-        for s in calendar.sessions_in_range(start.isoformat(), end.isoformat())
-    }
+    sessions = {s.date() for s in calendar.sessions_in_range(start.isoformat(), end.isoformat())}
     issues: list[QualityIssue] = []
     for symbol, grp in bars.groupby("symbol"):
         have = {_to_date(t) for t in grp["ts"]}
@@ -305,9 +302,7 @@ def extreme_move_census(
     extreme = valid & ((ret < down) | (ret > up))
     events = cast(pd.DataFrame, frame[extreme]).copy()
     events["split_ratio"] = [
-        nearest_split_ratio(float(r), ratios=ratios, tolerance=tolerance)
-        if pd.notna(r)
-        else None
+        nearest_split_ratio(float(r), ratios=ratios, tolerance=tolerance) if pd.notna(r) else None
         for r in cast(pd.Series, events["ratio"])
     ]
     artifacts = cast(pd.DataFrame, events[cast(pd.Series, events["split_ratio"]).notna()])

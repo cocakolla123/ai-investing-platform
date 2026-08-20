@@ -26,8 +26,15 @@ UNIVERSE = ["AAA", "BBB", "CCC", "ILLQ", "LIQ"]
 ALL_SYMBOLS = [*UNIVERSE, "SPY", "TLT"]
 # eer ranks (desc): ILLQ 1.0, LIQ 0.8 -> both BUY; CCC bottom -> AVOID.
 EER = {"ILLQ": 0.06, "LIQ": 0.05, "AAA": 0.01, "BBB": 0.005, "CCC": -0.01}
-BASE = {"AAA": 90.0, "BBB": 80.0, "CCC": 70.0, "ILLQ": 50.0, "LIQ": 100.0,
-        "SPY": 400.0, "TLT": 90.0}
+BASE = {
+    "AAA": 90.0,
+    "BBB": 80.0,
+    "CCC": 70.0,
+    "ILLQ": 50.0,
+    "LIQ": 100.0,
+    "SPY": 400.0,
+    "TLT": 90.0,
+}
 VOLUME = {s: 1_000_000 for s in ALL_SYMBOLS}
 VOLUME["ILLQ"] = 10  # ~ $500/day ADV -> real liquidity veto from the RiskEngine
 
@@ -176,9 +183,7 @@ def fixture_frames() -> tuple[list[date], pd.DataFrame, pd.DataFrame]:
 def _run(fixture_frames: Any) -> tuple[Any, FakeExperienceRepo, FakeRunRepo]:
     sessions, bars, scores = fixture_frames
     window = sessions[-RUN_SESSIONS:]
-    config = ReplayConfig(
-        start=window[0], end=window[-1], label="test", horizon_sessions=3
-    )
+    config = ReplayConfig(start=window[0], end=window[-1], label="test", horizon_sessions=3)
     exp_repo = FakeExperienceRepo()
     run_repo = FakeRunRepo()
     runner = ReplayRunner(
@@ -201,9 +206,7 @@ def test_runner_is_quant_only_committee_goes_through_committee_replay() -> None:
             gateway_factory=lambda d: None,  # type: ignore[arg-type,return-value]
             experience_repo=FakeExperienceRepo(),
             run_repo=FakeRunRepo(),
-            config=ReplayConfig(
-                start=date(2026, 6, 1), end=date(2026, 6, 5), mode="committee"
-            ),
+            config=ReplayConfig(start=date(2026, 6, 1), end=date(2026, 6, 5), mode="committee"),
         )
 
 
@@ -223,9 +226,7 @@ def test_real_risk_engine_vetoes_illiquid_candidate(result: Any) -> None:
     all_vetoes = {(s, r) for rec in res.session_records for s, r in rec.vetoes}
     assert ("ILLQ", "liquidity") in all_vetoes
     assert not any(f.symbol == "ILLQ" for f in res.fills)
-    illq_weights = [
-        d["target_weight"] for d in res.decisions if d["symbol"] == "ILLQ"
-    ]
+    illq_weights = [d["target_weight"] for d in res.decisions if d["symbol"] == "ILLQ"]
     assert illq_weights and all(w == 0.0 for w in illq_weights)
     # The equally-scored liquid name IS bought through the same pipeline.
     assert any(f.symbol == "LIQ" and f.side == "buy" for f in res.fills)
@@ -257,9 +258,7 @@ def test_horizon_exit_resolves_replay_experiences(result: Any) -> None:
 def test_decisions_recorded_with_fill_prices(result: Any) -> None:
     res, _, run_repo = result
     assert res.decisions == tuple(run_repo.decisions)
-    liq_buys = [
-        d for d in res.decisions if d["symbol"] == "LIQ" and d["target_weight"] > 0.0
-    ]
+    liq_buys = [d for d in res.decisions if d["symbol"] == "LIQ" and d["target_weight"] > 0.0]
     assert liq_buys
     assert any(d["fill_price"] is not None for d in liq_buys)
     for d in res.decisions:
@@ -277,9 +276,7 @@ def test_same_config_twice_is_bit_identical(fixture_frames: Any) -> None:
     assert [e.model_dump() for e in res_a.experiences] == [
         e.model_dump() for e in res_b.experiences
     ]
-    assert [e.model_dump() for e in exp_a.inserted] == [
-        e.model_dump() for e in exp_b.inserted
-    ]
+    assert [e.model_dump() for e in exp_a.inserted] == [e.model_dump() for e in exp_b.inserted]
 
 
 def test_aligned_macro_handles_tz_aware_session_index() -> None:
@@ -305,6 +302,4 @@ def test_aligned_macro_handles_tz_aware_session_index() -> None:
     assert np.allclose(out, [3.0, 4.5, 4.5])
     # naive index keeps working identically
     naive_idx = pd.DatetimeIndex(pd.to_datetime(["2026-02-02", "2026-02-04"]))
-    assert np.allclose(
-        _aligned_macro(macro, "BAMLH0A0HYM2", naive_idx, default=4.0), [3.0, 4.5]
-    )
+    assert np.allclose(_aligned_macro(macro, "BAMLH0A0HYM2", naive_idx, default=4.0), [3.0, 4.5])

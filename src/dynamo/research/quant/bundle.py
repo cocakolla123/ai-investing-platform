@@ -97,9 +97,7 @@ def _quantiles_to_json(quantiles: pd.DataFrame | None) -> dict[str, dict[str, fl
 def _quantiles_from_json(payload: Mapping[str, Mapping[str, Any]]) -> pd.DataFrame | None:
     if not payload:
         return None
-    frame = pd.DataFrame(
-        {row: dict(values) for row, values in payload.items()}
-    ).T.astype(float)
+    frame = pd.DataFrame({row: dict(values) for row, values in payload.items()}).T.astype(float)
     return frame.reindex([r for r in QUANTILE_ROWS if r in frame.index])
 
 
@@ -214,9 +212,7 @@ def _check_feature_drift(
     missing = [n for n in manifest_names if n not in set(current_names)]
     added = [n for n in current_names if n not in set(manifest_names)]
     if missing or added:
-        detail = (
-            f"trained-only features {missing[:8]}, catalog-only features {added[:8]}"
-        )
+        detail = f"trained-only features {missing[:8]}, catalog-only features {added[:8]}"
     else:
         detail = "same names, different ORDER"
     raise QuantBundleError(
@@ -247,9 +243,7 @@ def bundle_from_version(
 
     names = [str(n) for n in manifest.get("feature_names", ())]
     current = (
-        list(current_feature_names)
-        if current_feature_names is not None
-        else list(FEATURE_CATALOG)
+        list(current_feature_names) if current_feature_names is not None else list(FEATURE_CATALOG)
     )
     _check_feature_drift(model_version, names, current)
 
@@ -258,9 +252,7 @@ def bundle_from_version(
     for task in BUNDLE_TASKS:
         spec = tasks.get(task)
         if not spec:
-            raise QuantBundleError(
-                f"bundle {model_version!r} manifest has no {task!r} task entry"
-            )
+            raise QuantBundleError(f"bundle {model_version!r} manifest has no {task!r} task entry")
         # load_model re-hashes the artifact and refuses on any mismatch with
         # the sidecar manifest AND the bundle-recorded sha (double-checked).
         members = spec.get("members")
@@ -279,9 +271,7 @@ def bundle_from_version(
         ranker=models["ranker"],
         downside=models["downside"],
         vol=models["vol"],
-        train_feature_quantiles=_quantiles_from_json(
-            manifest.get("train_feature_quantiles") or {}
-        ),
+        train_feature_quantiles=_quantiles_from_json(manifest.get("train_feature_quantiles") or {}),
         fold_ic_dispersion=float(manifest.get("fold_ic_dispersion") or 0.0),
         vol_is_log=bool(manifest.get("vol_is_log", True)),
     )

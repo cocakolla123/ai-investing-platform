@@ -42,17 +42,13 @@ def test_engine_refuses_symbols_outside_membership():
     # Signal fires every session, but the symbol is a member only for d2-d3:
     # nothing may be bought outside that window, and the refusals are logged.
     universe = {SYM: ((DATES[2], DATES[3]),)}
-    script = {
-        d: SessionAdvice(signals=(signal(SYM, d),)) for d in DATES
-    }
+    script = {d: SessionAdvice(signals=(signal(SYM, d),)) for d in DATES}
     engine = BacktestEngine(
         toy_backtest_config(cost_bps=0.0),
         construction_config=toy_construction_config(),
         risk_config=toy_risk_config(),
     )
-    result = engine.run(
-        toy_data(PRICES, PRICES, DATES, universe), ScriptedProvider(script)
-    )
+    result = engine.run(toy_data(PRICES, PRICES, DATES, universe), ScriptedProvider(script))
     buys = [f for f in result.fills if f.side == "buy"]
     # Only decisions taken on d2/d3 can buy (fills land d3/d4).
     assert all(f.session in (DATES[3], DATES[4]) for f in buys)

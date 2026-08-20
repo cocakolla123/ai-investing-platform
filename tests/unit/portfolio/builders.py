@@ -58,9 +58,7 @@ def make_verdict(
         sector_caps=dict(sector_caps or {}),
         cluster_caps=dict(cluster_caps or {}),
         clusters=dict(clusters or {}),
-        vetoes=tuple(
-            Veto(symbol=s, rule="test", reason="test veto") for s in vetoed
-        ),
+        vetoes=tuple(Veto(symbol=s, rule="test", reason="test veto") for s in vetoed),
         metrics=RiskMetrics(as_of=AS_OF),
     )
 
@@ -119,9 +117,7 @@ def make_row(
     )
 
 
-def make_cverdict(
-    symbol: str, action: Action, conviction: float = 0.6
-) -> CommitteeVerdict:
+def make_cverdict(symbol: str, action: Action, conviction: float = 0.6) -> CommitteeVerdict:
     return CommitteeVerdict(
         id=f"cv-{symbol}",
         symbol=symbol,

@@ -72,8 +72,7 @@ def test_lookback_windows_match_the_gateway() -> None:
     assert research_mod.FEATURE_MACRO_LOOKBACK_DAYS == gw.MACRO_LOOKBACK_DAYS
     assert research_mod.FEATURE_NEWS_LOOKBACK_DAYS == gw.FEATURE_NEWS_LOOKBACK_DAYS
     assert (
-        research_mod.FEATURE_SHORT_INTEREST_LOOKBACK_DAYS
-        == gw.FEATURE_SHORT_INTEREST_LOOKBACK_DAYS
+        research_mod.FEATURE_SHORT_INTEREST_LOOKBACK_DAYS == gw.FEATURE_SHORT_INTEREST_LOOKBACK_DAYS
     )
     assert research_mod.FEATURE_EARNINGS_LOOKAHEAD_DAYS == gw.EARNINGS_LOOKAHEAD_DAYS
 

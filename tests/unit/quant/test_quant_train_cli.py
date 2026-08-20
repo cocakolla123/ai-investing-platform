@@ -25,9 +25,7 @@ TRAIN_START = date(2024, 1, 2)
 TRAIN_END = date(2025, 3, 1)
 
 
-def separable_panel(
-    n_symbols: int = 30, n_sessions: int = 300, seed: int = 11
-) -> qt.TrainingPanel:
+def separable_panel(n_symbols: int = 30, n_sessions: int = 300, seed: int = 11) -> qt.TrainingPanel:
     """~30 symbols x 300 sessions with one strongly predictive feature across
     all three labels — the model should crush the featureless baseline."""
     rng = np.random.default_rng(seed)
@@ -189,10 +187,14 @@ def test_gate_maps_to_exit_code_2(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("dynamo.replay.gateway.HistoricalDataGateway", FakeGateway)
     rc = qt.main(
         [
-            "--train-start", "2026-01-05",
-            "--train-end", "2026-02-27",
-            "--label", "gate-test",
-            "--database-url", "postgresql://unused/unused",
+            "--train-start",
+            "2026-01-05",
+            "--train-end",
+            "2026-02-27",
+            "--label",
+            "gate-test",
+            "--database-url",
+            "postgresql://unused/unused",
             "--no-cache",  # unit test: never write the real artifacts/ cache
         ]
     )
@@ -212,10 +214,14 @@ def test_existing_registry_version_is_refused(monkeypatch: pytest.MonkeyPatch) -
     )
     rc = qt.main(
         [
-            "--train-start", "2026-01-05",
-            "--train-end", "2026-02-27",
-            "--label", "campaign-v1",
-            "--database-url", "postgresql://unused/unused",
+            "--train-start",
+            "2026-01-05",
+            "--train-end",
+            "2026-02-27",
+            "--label",
+            "campaign-v1",
+            "--database-url",
+            "postgresql://unused/unused",
         ]
     )
     assert rc == 1
@@ -238,11 +244,7 @@ def test_walkforward_scales_down_honestly_for_short_windows() -> None:
         assert folds, f"{n} sessions must yield at least one fold"
         # Purge discipline: >= 20 sessions between train end and test start.
         for fold in folds:
-            gap = list(
-                pd.bdate_range(
-                    fold.train_sessions[-1], fold.test_sessions[0]
-                )
-            )
+            gap = list(pd.bdate_range(fold.train_sessions[-1], fold.test_sessions[0]))
             assert len(gap) - 2 >= 20
 
 
@@ -282,9 +284,7 @@ def test_build_panel_mixed_equity_crypto_no_crash_and_nan_coverage() -> None:
     day = panel.features.xs(last_ts, level="ts")
     scores = {
         s.symbol: s
-        for s in score_universe(
-            ModelBundle(model_version="baseline-v0"), day, panel.sessions[-1]
-        )
+        for s in score_universe(ModelBundle(model_version="baseline-v0"), day, panel.sessions[-1])
     }
     assert 0.0 < scores["BTC/USD"].feature_coverage < 1.0
     # Coverage is asset-class aware: the pair is measured against the features
@@ -333,10 +333,15 @@ def test_tuning_flags_parse_and_default_off() -> None:
     tuned = qt._build_parser().parse_args(
         [
             *base,
-            "--lgbm-max-depth", "4",
-            "--lgbm-min-data-in-leaf", "40",
-            "--lgbm-lambda-l2", "0.5",
-            "--feature-groups", "momentum", "volatility",
+            "--lgbm-max-depth",
+            "4",
+            "--lgbm-min-data-in-leaf",
+            "40",
+            "--lgbm-lambda-l2",
+            "0.5",
+            "--feature-groups",
+            "momentum",
+            "volatility",
         ]
     )
     assert tuned.lgbm_max_depth == 4
@@ -508,10 +513,14 @@ def test_train_quant_bundle_refuses_unknown_label_kind(tmp_path: Path) -> None:
 def test_main_refuses_unknown_feature_group_before_any_db_work() -> None:
     rc = qt.main(
         [
-            "--train-start", "2026-01-05",
-            "--train-end", "2026-02-27",
-            "--label", "typo-test",
-            "--feature-groups", "momentumm",
+            "--train-start",
+            "2026-01-05",
+            "--train-end",
+            "2026-02-27",
+            "--label",
+            "typo-test",
+            "--feature-groups",
+            "momentumm",
             "--no-cache",
         ]
     )
@@ -526,9 +535,7 @@ def _panel_fixtures() -> tuple[Any, Any, dict[str, str], list[str], list[date]]:
     bars = make_bars([*universe, "XLK", "SPY"], n_sessions=60)
     inputs = FeatureInputs(bars=bars, sector_map={"AAA": "XLK"})
     sector_map = {"AAA": "XLK", "BBB": "SPY"}
-    sessions = [
-        cast(pd.Timestamp, t).date() for t in pd.bdate_range("2024-01-02", periods=60)
-    ]
+    sessions = [cast(pd.Timestamp, t).date() for t in pd.bdate_range("2024-01-02", periods=60)]
     return inputs, bars, sector_map, universe, sessions
 
 
@@ -538,7 +545,11 @@ def test_progress_file_is_written_and_parseable(tmp_path: Path) -> None:
     inputs, bars, sector_map, universe, sessions = _panel_fixtures()
     progress_path = tmp_path / "progress.jsonl"
     panel = qt.build_panel(
-        lambda d: inputs, bars, sector_map, universe, sessions,
+        lambda d: inputs,
+        bars,
+        sector_map,
+        universe,
+        sessions,
         horizon_sessions=20,
         on_session=qt.progress_file_writer(progress_path),
     )
@@ -556,8 +567,13 @@ def test_progress_lines_carry_elapsed_and_eta() -> None:
     inputs, bars, sector_map, universe, sessions = _panel_fixtures()
     lines: list[str] = []
     qt.build_panel(
-        lambda d: inputs, bars, sector_map, universe, sessions,
-        horizon_sessions=20, progress=lines.append,
+        lambda d: inputs,
+        bars,
+        sector_map,
+        universe,
+        sessions,
+        horizon_sessions=20,
+        progress=lines.append,
     )
     assert lines, "40 feature sessions must produce a 25-session progress line"
     assert all("elapsed " in line and "ETA " in line for line in lines)
@@ -598,9 +614,7 @@ def test_horizons_and_ensemble_flags_parse_with_safe_defaults() -> None:
     args = qt._build_parser().parse_args(base)
     assert args.horizons is None
     assert args.ensemble_seeds == 1
-    tuned = qt._build_parser().parse_args(
-        [*base, "--horizons", "5", "20", "--ensemble-seeds", "3"]
-    )
+    tuned = qt._build_parser().parse_args([*base, "--horizons", "5", "20", "--ensemble-seeds", "3"])
     assert tuned.horizons == [5, 20]
     assert tuned.ensemble_seeds == 3
 
@@ -622,9 +636,7 @@ def test_build_panel_multi_horizon_label_columns_and_exclusion() -> None:
     inputs = FeatureInputs(bars=bars, sector_map={"AAA": "XLK", "BBB": "XLK"})
     sector_map = {"AAA": "XLK", "BBB": "XLK"}
     sessions = [cast(pd.Timestamp, t).date() for t in pd.bdate_range("2024-01-02", periods=90)]
-    panel = qt.build_panel(
-        lambda d: inputs, bars, sector_map, universe, sessions, horizons=(5, 20)
-    )
+    panel = qt.build_panel(lambda d: inputs, bars, sector_map, universe, sessions, horizons=(5, 20))
     assert len(panel.sessions) == 70  # excluded by max(horizons)=20, not 5
     for h in (5, 20):
         for stem in ("excess_return", "downside", "realized_vol", "residual_return"):
@@ -635,9 +647,7 @@ def test_build_panel_multi_horizon_label_columns_and_exclusion() -> None:
     )
     multi = panel.labels.xs(pd.Timestamp(day), level="ts")
     for col in ("excess_return_5d", "downside_5d", "realized_vol_5d"):
-        pd.testing.assert_series_equal(
-            multi[col], direct[col].reindex(universe), check_names=False
-        )
+        pd.testing.assert_series_equal(multi[col], direct[col].reindex(universe), check_names=False)
 
 
 def test_horizons_move_config_hash_and_registry_hyperparams(tmp_path: Path) -> None:
@@ -696,9 +706,7 @@ def test_ensemble_seeds_train_n_members_and_persist_through_the_bundle(
         assert len(members) == 2
         for m in members:
             assert (tmp_path / m["artifact_file"]).is_file()
-    bundle = bundle_from_version(
-        "ens-cli-v1", tmp_path, current_feature_names=report.feature_names
-    )
+    bundle = bundle_from_version("ens-cli-v1", tmp_path, current_feature_names=report.feature_names)
     assert isinstance(bundle.ranker, AveragingEnsemble)
     last_ts = panel.features.index.get_level_values(0)[-1]
     day = panel.features.xs(last_ts, level="ts")

@@ -576,7 +576,7 @@ def test_tiny_cap_refuses_first_submission_and_marks_exhausted(frames: Any) -> N
     result = replay.run()
     assert result.status == "budget_exhausted"
     assert (config.run_id, "budget_exhausted") in run_repo.statuses
-    assert ("failed" not in {s for _, s in run_repo.statuses})
+    assert "failed" not in {s for _, s in run_repo.statuses}
     assert model.submitted == []  # refused BEFORE any submission
     assert result.deep_dives == () and run_repo.verdicts == []
 
@@ -585,9 +585,7 @@ def test_exhaustion_midway_keeps_partial_results(frames: Any) -> None:
     # Each batch "costs" $1.00 of metered spend. Day 1 (3 stage batches)
     # spends $3.00; day 2's projections then blow the $3.50 cap and the run
     # stops — with day 1's verdicts persisted and its experiences resolved.
-    replay, _model, run_repo, _exp_repo, config = _replay(
-        frames, cap=3.5, cost_per_batch=1.0
-    )
+    replay, _model, run_repo, _exp_repo, config = _replay(frames, cap=3.5, cost_per_batch=1.0)
     result = replay.run()
     assert result.status == "budget_exhausted"
     assert (config.run_id, "budget_exhausted") in run_repo.statuses
@@ -599,9 +597,7 @@ def test_exhaustion_midway_keeps_partial_results(frames: Any) -> None:
     assert result.experiences
     assert all(e.as_of == day1 for e in result.experiences)
     # Durable checkpoints flowed through record_spend as the money was spent.
-    assert run_repo.spends and sum(d for _, d in run_repo.spends) == pytest.approx(
-        result.spent_usd
-    )
+    assert run_repo.spends and sum(d for _, d in run_repo.spends) == pytest.approx(result.spent_usd)
 
 
 # --------------------------------------------------------------------------
@@ -626,9 +622,7 @@ def test_resume_skip_days_are_never_resubmitted(frames: Any) -> None:
     sessions, _, _ = frames
     window = sessions[-RUN_SESSIONS:]
     done = frozenset(window[:2])
-    replay, model, run_repo, _exp_repo, config = _replay(
-        frames, resume_skip_days=done
-    )
+    replay, model, run_repo, _exp_repo, config = _replay(frames, resume_skip_days=done)
     progress: list[str] = []
     result = replay.run(progress=progress.append)
     assert result.status == "completed"
@@ -668,9 +662,7 @@ def test_resume_seeds_the_cooldown_from_persisted_verdicts(frames: Any) -> None:
     replay.run()
     first_resumed = min(r["as_of"] for r in run_repo.verdicts)
     assert first_resumed == window[1]
-    assert "AAA" in {
-        r["symbol"] for r in run_repo.verdicts if r["as_of"] == first_resumed
-    }
+    assert "AAA" in {r["symbol"] for r in run_repo.verdicts if r["as_of"] == first_resumed}
 
 
 def test_no_resume_skip_by_default(frames: Any) -> None:

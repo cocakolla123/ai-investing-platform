@@ -86,15 +86,11 @@ def derive_turnover_total(
     """
     ordered = sorted(equity_rows, key=lambda r: _as_date(r["as_of"]))
     dates = [_as_date(r["as_of"]) for r in ordered]
-    prev_equity = {
-        dates[i]: float(ordered[i - 1]["equity"]) for i in range(1, len(dates))
-    }
+    prev_equity = {dates[i]: float(ordered[i - 1]["equity"]) for i in range(1, len(dates))}
     traded_by_session: dict[date, float] = {}
     for f in fills:
         session = _as_date(f["session"])
-        traded_by_session[session] = traded_by_session.get(session, 0.0) + float(
-            f["trade_value"]
-        )
+        traded_by_session[session] = traded_by_session.get(session, 0.0) + float(f["trade_value"])
     total = 0.0
     for session in sorted(traded_by_session):
         decision_equity = prev_equity.get(session, 0.0)
@@ -164,8 +160,7 @@ def replay_report(
     regimes = [str(r["regime"]) for r in ordered]
     gross = [float(r["gross"]) for r in ordered]
     cash_fractions = [
-        float(r["cash"]) / float(r["equity"]) if float(r["equity"]) > 0 else 1.0
-        for r in ordered
+        float(r["cash"]) / float(r["equity"]) if float(r["equity"]) > 0 else 1.0 for r in ordered
     ]
     benchmark = None
     if benchmark_closes is not None:
@@ -190,7 +185,5 @@ def replay_report(
         benchmark_closes=benchmark,
         constraint_violations=int(sum(int(r["vetoes"]) for r in ordered)),
     )
-    write_backtest_artifacts(
-        report, curve, artifact_dir=artifact_dir, benchmark_closes=benchmark
-    )
+    write_backtest_artifacts(report, curve, artifact_dir=artifact_dir, benchmark_closes=benchmark)
     return report

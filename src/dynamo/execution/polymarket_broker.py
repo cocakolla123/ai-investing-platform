@@ -358,9 +358,7 @@ class PolymarketBroker:
                     continue
                 if status is not None and int(status) >= 500:
                     raise HaltSignal(f"polymarket unavailable after retry: {exc}") from exc
-                raise BrokerUnavailable(
-                    f"polymarket connection failed after retry: {exc}"
-                ) from exc
+                raise BrokerUnavailable(f"polymarket connection failed after retry: {exc}") from exc
 
     # --- internals ---------------------------------------------------------
 
@@ -398,9 +396,7 @@ class PolymarketBroker:
             out[no_token] = (market_id, PMSide.NO.value)
         return out
 
-    def _normalize_order(
-        self, d: dict[str, Any], client_order_id: str = ""
-    ) -> dict[str, Any]:
+    def _normalize_order(self, d: dict[str, Any], client_order_id: str = "") -> dict[str, Any]:
         original = int(float(d.get("original_size") or d.get("size") or 0))
         matched = int(float(d.get("size_matched") or 0))
         status = str(d.get("status", "")).lower()

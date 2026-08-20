@@ -92,9 +92,7 @@ def test_every_request_persists_a_context_row(frames: Any) -> None:  # noqa: F81
     replay, model, run_repo, _, config = _build(frames)
     result = replay.run()
     assert result.deep_dives and run_repo.contexts
-    submitted_ids = {
-        str(req["custom_id"]) for batch in model.submitted for req in batch
-    }
+    submitted_ids = {str(req["custom_id"]) for batch in model.submitted for req in batch}
     # One context row per submitted request, id = the namespaced custom id.
     assert {r["id"] for r in run_repo.contexts} == submitted_ids
     for row in run_repo.contexts:
@@ -103,9 +101,9 @@ def test_every_request_persists_a_context_row(frames: Any) -> None:  # noqa: F81
         assert row["as_of"] == as_of and row["symbol"] == symbol and row["stage"] == stage
         assert stage in ("dossier", "bull", "bear", "arbiter")
         # sha matches the exact persisted text; text = context + instruction.
-        assert row["context_sha256"] == hashlib.sha256(
-            row["context_text"].encode("utf-8")
-        ).hexdigest()
+        assert (
+            row["context_sha256"] == hashlib.sha256(row["context_text"].encode("utf-8")).hexdigest()
+        )
         assert f"as of {as_of.isoformat()}" in row["context_text"]  # instruction included
         assert "system prompt for" not in row["context_text"]  # system excluded
         assert row["model_id"] == TIER_MODELS["arbiter" if stage == "arbiter" else "analyst"]
@@ -134,9 +132,7 @@ def test_stage_payloads_land_in_replay_verdict_payload(frames: Any) -> None:  # 
         from dynamo.domain.models.research import CommitteeVerdict
 
         fields = set(CommitteeVerdict.model_fields)
-        CommitteeVerdict.model_validate(
-            {k: v for k, v in row["payload"].items() if k in fields}
-        )
+        CommitteeVerdict.model_validate({k: v for k, v in row["payload"].items() if k in fields})
 
 
 # --------------------------------------------------------------------------
@@ -157,9 +153,7 @@ class TranscriptGateway(CommitteeGateway):
             if r["symbol"] in set(symbols) and r["event_date"] <= self.as_of
         ]
         if not rows:
-            return pd.DataFrame(
-                {"symbol": [], "event_date": [], "source": [], "content": []}
-            )
+            return pd.DataFrame({"symbol": [], "event_date": [], "source": [], "content": []})
         return pd.DataFrame(rows)
 
 
@@ -216,9 +210,7 @@ class NoMacroGateway(CommitteeGateway):
                 "series_id": ["DFF", "DFF"],
                 "ts": [self.as_of.replace(day=1), self.as_of],
                 "value": [4.25, 4.50],
-                "vintage_ts": [
-                    datetime(self.as_of.year, self.as_of.month, 1, tzinfo=UTC)
-                ] * 2,
+                "vintage_ts": [datetime(self.as_of.year, self.as_of.month, 1, tzinfo=UTC)] * 2,
             }
         )
 
@@ -391,8 +383,7 @@ def test_later_days_see_this_runs_resolved_experiences_only(frames: Any) -> None
     assert final_dossiers
     own_ids = {e.id for e in resolved_before_final}
     assert any(
-        "Prior similar case (evidence, not rule):" in req["context"]
-        for req in final_dossiers
+        "Prior similar case (evidence, not rule):" in req["context"] for req in final_dossiers
     )
     # ...and the other run's row is NEVER cited (its id appears nowhere in
     # any journal_context_used of any verdict, nor could the gateway see it).
@@ -402,9 +393,7 @@ def test_later_days_see_this_runs_resolved_experiences_only(frames: Any) -> None
     # The verdicts on the final day actually recorded the journal context.
     final_dives = [d for d in result.deep_dives if d.as_of == final_day]
     assert final_dives
-    assert any(
-        set(d.verdict.journal_context_used) & own_ids for d in final_dives
-    )
+    assert any(set(d.verdict.journal_context_used) & own_ids for d in final_dives)
     LearningGateway.store = []
 
 
@@ -412,7 +401,9 @@ def test_within_run_learning_off_keeps_days_isolated(frames: Any) -> None:  # no
     LearningGateway.store = []
     config = _config(frames, within_run_learning=False)
     replay, model, _, _, _ = _build(
-        frames, gateway_cls=LearningGateway, exp_repo=StoreExperienceRepo(),
+        frames,
+        gateway_cls=LearningGateway,
+        exp_repo=StoreExperienceRepo(),
         config=config,
     )
     result = replay.run()

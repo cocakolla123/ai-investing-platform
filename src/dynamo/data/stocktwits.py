@@ -95,9 +95,7 @@ class StockTwitsProvider:
         if published_at is None:
             return None
         tagged = {
-            str(s.get("symbol")).upper()
-            for s in message.get("symbols") or []
-            if s.get("symbol")
+            str(s.get("symbol")).upper() for s in message.get("symbols") or [] if s.get("symbol")
         }
         tagged.add(queried_symbol.upper())
         sentiment = (((message.get("entities") or {}).get("sentiment")) or {}).get("basic")

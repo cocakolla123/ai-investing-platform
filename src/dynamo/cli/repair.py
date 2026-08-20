@@ -296,8 +296,7 @@ def _build_parser() -> argparse.ArgumentParser:
     bd.add_argument(
         "--source",
         default=None,
-        help="restrict the first-bar lookup to one bars_1d source "
-        "(default: any source)",
+        help="restrict the first-bar lookup to one bars_1d source (default: any source)",
     )
     bd.add_argument(
         "--report-as-of",

@@ -43,9 +43,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _registry_at_shadow(path: Path, target: str) -> None:
-    path.write_text(
-        json.dumps({"status": {target: "shadow"}, "trials": {}, "records": []})
-    )
+    path.write_text(json.dumps({"status": {target: "shadow"}, "trials": {}, "records": []}))
 
 
 def _evidence(path: Path) -> None:
@@ -58,9 +56,19 @@ def _run_stage7(workspace: Path, approval: Path | None, target: str = "strat-a")
     evidence = workspace / "evidence.json"
     _evidence(evidence)
     argv = [
-        "run", "--target", target, "--stage", "7",
-        "--evidence", str(evidence), "--registry", str(registry),
-        "--actor", "owner", "--evidence-bundle", "artifacts/backtests/run-1",
+        "run",
+        "--target",
+        target,
+        "--stage",
+        "7",
+        "--evidence",
+        str(evidence),
+        "--registry",
+        str(registry),
+        "--actor",
+        "owner",
+        "--evidence-bundle",
+        "artifacts/backtests/run-1",
     ]
     if approval is not None:
         argv += ["--approval", str(approval)]
@@ -191,10 +199,24 @@ def test_approve_sign_then_promotion_accepts_it(
     monkeypatch.setenv(APPROVAL_KEY_ENV, KEY)
     out = workspace / "approvals" / "promotion-strat-a.yaml"
     expiry = (datetime.now(UTC).date() + timedelta(days=10)).isoformat()
-    assert approve.main(
-        ["sign", "--kind", "promotion", "--target", "strat-a",
-         "--expiry", expiry, "--approver", "owner", "--out", str(out)]
-    ) == 0
+    assert (
+        approve.main(
+            [
+                "sign",
+                "--kind",
+                "promotion",
+                "--target",
+                "strat-a",
+                "--expiry",
+                expiry,
+                "--approver",
+                "owner",
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
     assert out.exists()
     assert approve.main(["verify", "--file", str(out), "--target", "strat-a"]) == 0
     assert _run_stage7(workspace, out) == 0
@@ -204,10 +226,22 @@ def test_approve_refuses_without_key(
     workspace: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.delenv(APPROVAL_KEY_ENV, raising=False)
-    assert approve.main(
-        ["sign", "--kind", "promotion", "--target", "x",
-         "--expiry", "2099-01-01", "--approver", "owner"]
-    ) == 2
+    assert (
+        approve.main(
+            [
+                "sign",
+                "--kind",
+                "promotion",
+                "--target",
+                "x",
+                "--expiry",
+                "2099-01-01",
+                "--approver",
+                "owner",
+            ]
+        )
+        == 2
+    )
     assert "keygen" in capsys.readouterr().err
 
 
@@ -218,24 +252,32 @@ def test_approve_keygen_emits_a_usable_key(capsys: pytest.CaptureFixture[str]) -
     assert APPROVAL_KEY_ENV in captured.err
 
 
-def test_approve_verify_detects_tampering(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_approve_verify_detects_tampering(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(APPROVAL_KEY_ENV, KEY)
     out = workspace / "a.yaml"
-    assert approve.main(
-        ["sign", "--target", "strat-a", "--expiry", "2099-01-01",
-         "--approver", "owner", "--out", str(out)]
-    ) == 0
+    assert (
+        approve.main(
+            [
+                "sign",
+                "--target",
+                "strat-a",
+                "--expiry",
+                "2099-01-01",
+                "--approver",
+                "owner",
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
     data = yaml.safe_load(out.read_text())
     data["expiry"] = "2100-01-01"
     out.write_text(yaml.safe_dump(data))
     assert approve.main(["verify", "--file", str(out), "--target", "strat-a"]) == 1
 
 
-def test_approve_sign_refuses_to_clobber(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_approve_sign_refuses_to_clobber(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(APPROVAL_KEY_ENV, KEY)
     out = workspace / "a.yaml"
     args = ["sign", "--target", "s", "--expiry", "2099-01-01", "--approver", "o", "--out", str(out)]

@@ -143,9 +143,7 @@ def _instrument_sectors(dynamo: DynamoResource) -> dict[str, str]:
     inst = schema.instruments
     frame = _read_df(dynamo, select(inst.c.symbol, inst.c.sector))
     return {
-        str(r["symbol"]): str(r["sector"])
-        for r in frame.to_dict(orient="records")
-        if r["sector"]
+        str(r["symbol"]): str(r["sector"]) for r in frame.to_dict(orient="records") if r["sector"]
     }
 
 
@@ -561,9 +559,7 @@ def quant_features_scores(
 
     production = ModelRegistryRepository(dynamo.engine()).latest_production("quant_bundle")
     if production is not None:
-        artifact_dir = (
-            Path(production.artifact_path).parent if production.artifact_path else None
-        )
+        artifact_dir = Path(production.artifact_path).parent if production.artifact_path else None
         bundle = bundle_from_version(production.id, artifact_dir)
         context.log.info("quant_features_scores: production bundle %s", production.id)
     else:
@@ -1007,9 +1003,7 @@ def deep_dive_selection(
 
 
 @dagster_asset(group_name=RESEARCH_GROUP, deps=["deep_dive_selection"])
-def universe_lifecycle(
-    context: AssetExecutionContext, dynamo: DynamoResource
-) -> MaterializeResult:
+def universe_lifecycle(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Close lapsed promotions, and file Tier-1 add/demote recommendations.
 
     Three things that existed in :class:`UniverseManager` but had no
@@ -1047,9 +1041,7 @@ def universe_lifecycle(
     # twice inside the promotion window and never rated a SELL. Repeat
     # conviction is the signal; a single dive is not.
     window_start = as_of - timedelta(days=settings.tier3_promotion_window_days)
-    promoted = {
-        m.symbol for m in repo.universe_at(as_of) if int(m.tier) == 3
-    }
+    promoted = {m.symbol for m in repo.universe_at(as_of) if int(m.tier) == 3}
     recommended: list[str] = []
     if promoted:
         v = schema.committee_verdicts
@@ -1203,15 +1195,11 @@ def _all_sectors(dynamo: DynamoResource) -> dict[str, str]:
     inst = schema.instruments
     frame = _read_df(dynamo, select(inst.c.symbol, inst.c.sector))
     return {
-        str(r["symbol"]): str(r["sector"])
-        for r in frame.to_dict(orient="records")
-        if r["sector"]
+        str(r["symbol"]): str(r["sector"]) for r in frame.to_dict(orient="records") if r["sector"]
     }
 
 
-def _dossier_fundamentals(
-    dynamo: DynamoResource, symbols: Sequence[str], as_of: date
-) -> Any:
+def _dossier_fundamentals(dynamo: DynamoResource, symbols: Sequence[str], as_of: date) -> Any:
     """``xbrl_facts`` as ``[symbol, tag, period_end, value, filed_at]`` with
     ``filed_at <= as_of`` — the live twin of
     ``HistoricalDataGateway.fundamentals`` (same columns, same bounds, same
@@ -1329,9 +1317,7 @@ def _journal_hits_for(
                 allow_hash_fallback=allow_fallback,
             )
             dropped += n
-            ranked = rank_similar(
-                candidates, JournalFilters(symbols=frozenset({sym})), top_k=top_k
-            )
+            ranked = rank_similar(candidates, JournalFilters(symbols=frozenset({sym})), top_k=top_k)
             hits[sym] = [(r.entry.id, r.entry.text) for r in ranked]
         if dropped:
             _log.warning(

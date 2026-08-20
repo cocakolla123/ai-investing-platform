@@ -34,8 +34,9 @@ EQUITY = 100_000.0
 PARAMS = PMSizingParams()
 
 
-def run(views, prices=None, markets=None, equity=EQUITY, positions=(), params=None,
-        cross_venue=None):
+def run(
+    views, prices=None, markets=None, equity=EQUITY, positions=(), params=None, cross_venue=None
+):
     prices = (
         prices
         if prices is not None
@@ -45,7 +46,13 @@ def run(views, prices=None, markets=None, equity=EQUITY, positions=(), params=No
         markets if markets is not None else {v.market_id: make_market(v.market_id) for v in views}
     )
     return select_and_size_pm_trades(
-        views, prices, markets, equity, list(positions), NOW, params or PARAMS,
+        views,
+        prices,
+        markets,
+        equity,
+        list(positions),
+        NOW,
+        params or PARAMS,
         cross_venue=cross_venue,
     )
 
@@ -209,7 +216,10 @@ class TestCrossVenueCorroboration:
         assert len(result.decisions) == 1
         d, b = result.decisions[0], base.decisions[0]
         assert (d.side, d.contracts, d.price_cents, d.kelly_fraction) == (
-            b.side, b.contracts, b.price_cents, b.kelly_fraction,
+            b.side,
+            b.contracts,
+            b.price_cents,
+            b.kelly_fraction,
         )
         assert "cross-venue corroborated (mirror yes 0.55)" in d.rationale
         assert "corroborated" not in b.rationale
@@ -248,8 +258,14 @@ class TestCrossVenueCorroboration:
     def test_missing_match_and_nan_unchanged(self) -> None:
         view = make_view(estimated=0.60, implied=0.43)
         base = run([view])
-        for mapping in (None, {}, {"OTHER": 0.10}, {view.market_id: float("nan")},
-                        {view.market_id: float("inf")}, {view.market_id: 1.5}):
+        for mapping in (
+            None,
+            {},
+            {"OTHER": 0.10},
+            {view.market_id: float("nan")},
+            {view.market_id: float("inf")},
+            {view.market_id: 1.5},
+        ):
             assert run([view], cross_venue=mapping).decisions == base.decisions
 
     def test_deterministic_under_reordering_with_mapping(self) -> None:
@@ -353,9 +369,7 @@ def test_invariants(data) -> None:
         dollars = d.contracts * d.price_cents / 100.0
         new_total += dollars
         # Per-market cap: existing + new never exceeds it.
-        assert exposure.get(d.market_id, 0.0) + dollars <= (
-            PARAMS.per_market_cap * equity + 1e-6
-        )
+        assert exposure.get(d.market_id, 0.0) + dollars <= (PARAMS.per_market_cap * equity + 1e-6)
     if result.decisions:
         held_markets = {p.market_id for p in positions}
         new_markets = seen - held_markets
@@ -401,9 +415,7 @@ def test_invariants_with_cross_venue(data, cross_venue) -> None:
         assert abs(d.edge) >= PARAMS.min_edge
         dollars = d.contracts * d.price_cents / 100.0
         new_total += dollars
-        assert exposure.get(d.market_id, 0.0) + dollars <= (
-            PARAMS.per_market_cap * equity + 1e-6
-        )
+        assert exposure.get(d.market_id, 0.0) + dollars <= (PARAMS.per_market_cap * equity + 1e-6)
     if result.decisions:
         assert sum(exposure.values()) + new_total <= PARAMS.sleeve_cap * equity + 1e-6
 
@@ -421,7 +433,13 @@ def test_invariants_with_cross_venue(data, cross_venue) -> None:
 
     # Deterministic under input reordering with the mapping applied.
     again = select_and_size_pm_trades(
-        list(reversed(views)), prices, markets, equity, positions, NOW, PARAMS,
+        list(reversed(views)),
+        prices,
+        markets,
+        equity,
+        positions,
+        NOW,
+        PARAMS,
         cross_venue=dict(cross_venue),
     )
     assert again.decisions == result.decisions

@@ -36,8 +36,9 @@ UNREADY = Readiness(
 )
 
 
-def _approval(*, expiry: date = date(2026, 8, 31), key: bytes = KEY,
-              scope: tuple[str, ...] = ("all",)) -> ApprovalArtifact:
+def _approval(
+    *, expiry: date = date(2026, 8, 31), key: bytes = KEY, scope: tuple[str, ...] = ("all",)
+) -> ApprovalArtifact:
     body = {"scope": list(scope), "expiry": expiry.isoformat(), "date": TODAY.isoformat()}
     return ApprovalArtifact(
         scope=scope, expiry=expiry, signature=sign_approval_body(body, key), body=body
@@ -53,9 +54,7 @@ READINESS = {"ready": READY, "unready": UNREADY}
 
 
 def _gate(env: DynamoEnv, approval: ApprovalArtifact | None, kill: bool, readiness: Readiness):
-    return live_orders_permitted(
-        env, approval, kill, readiness, approval_key=KEY, today=TODAY
-    )
+    return live_orders_permitted(env, approval, kill, readiness, approval_key=KEY, today=TODAY)
 
 
 def test_full_truth_table_exactly_one_live_permitted() -> None:
@@ -108,12 +107,22 @@ def test_kill_switch_halts_every_environment(env: DynamoEnv) -> None:
 def test_out_of_scope_symbol_refused() -> None:
     scoped = _approval(scope=("AAPL",))
     ok = live_orders_permitted(
-        DynamoEnv.LIVE, scoped, False, READY, approval_key=KEY, today=TODAY,
+        DynamoEnv.LIVE,
+        scoped,
+        False,
+        READY,
+        approval_key=KEY,
+        today=TODAY,
         scope_target="AAPL",
     )
     assert ok.permitted
     refused = live_orders_permitted(
-        DynamoEnv.LIVE, scoped, False, READY, approval_key=KEY, today=TODAY,
+        DynamoEnv.LIVE,
+        scoped,
+        False,
+        READY,
+        approval_key=KEY,
+        today=TODAY,
         scope_target="TSLA",
     )
     assert not refused.permitted
@@ -125,7 +134,7 @@ def test_load_approval_roundtrip(tmp_path: Path) -> None:
     signature = sign_approval_body(body, KEY)
     path = tmp_path / "live-2026-08-03.yaml"
     path.write_text(
-        "scope: [all]\nexpiry: 2026-08-31\ndate: 2026-08-03\n" f"signature: {signature}\n",
+        f"scope: [all]\nexpiry: 2026-08-31\ndate: 2026-08-03\nsignature: {signature}\n",
         encoding="utf-8",
     )
     approval = load_approval(path)

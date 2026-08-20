@@ -56,9 +56,7 @@ class TickerTickClient:
         """
         wanted = [s for s in symbols][: self._symbol_cap]
         if len(symbols) > len(wanted):
-            log.info(
-                "tickertick_symbol_cap", requested=len(symbols), fetched=len(wanted)
-            )
+            log.info("tickertick_symbol_cap", requested=len(symbols), fetched=len(wanted))
         universe = {s.upper() for s in symbols}
         seen: set[str] = set()
         for symbol in wanted:

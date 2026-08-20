@@ -126,9 +126,7 @@ def known_symbols(engine: Any) -> list[str]:
 
     with engine.connect() as conn:
         symbols = {str(s) for (s,) in conn.execute(select(schema.instruments.c.symbol))}
-        symbols |= {
-            str(s) for (s,) in conn.execute(select(schema.universe_membership.c.symbol))
-        }
+        symbols |= {str(s) for (s,) in conn.execute(select(schema.universe_membership.c.symbol))}
     return sorted(s for s in symbols if s and not is_crypto_symbol(s))
 
 

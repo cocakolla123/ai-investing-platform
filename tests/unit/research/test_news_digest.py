@@ -45,9 +45,7 @@ def test_only_items_naming_the_subject_lead_the_digest() -> None:
 
 def test_items_not_tagged_with_the_symbol_are_dropped_entirely() -> None:
     foreign = item("x1", "NVDA mentioned in passing", symbols=("AMD",), day=6)
-    primary, market = partition_news(
-        (*NVDA_ITEMS, foreign), symbol="NVDA", name="NVIDIA Corp"
-    )
+    primary, market = partition_news((*NVDA_ITEMS, foreign), symbol="NVDA", name="NVIDIA Corp")
     assert "x1" not in {n.id for n in primary} | {n.id for n in market}
 
 

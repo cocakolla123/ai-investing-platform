@@ -218,9 +218,7 @@ def test_crypto_trades_on_equity_sessions_only(result: Any) -> None:
 
 def test_crypto_sleeve_cap_binds_in_replay(result: Any) -> None:
     res, _ = result
-    btc_targets = [
-        d["target_weight"] for d in res.decisions if d["symbol"] == CRYPTO
-    ]
+    btc_targets = [d["target_weight"] for d in res.decisions if d["symbol"] == CRYPTO]
     assert btc_targets
     assert all(w <= 0.05 + 1e-9 for w in btc_targets)  # crypto_max_position
     assert any(w > 0.0 for w in btc_targets)

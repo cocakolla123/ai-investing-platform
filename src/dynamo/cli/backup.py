@@ -129,14 +129,14 @@ def main(argv: list[str] | None = None) -> int:
             if fout is not subprocess.PIPE:
                 fout.close()  # type: ignore[union-attr]
         out = b"" if stdout else (proc.stdout or b"")
-        return proc.returncode, out.decode("utf-8", "replace"), (
-            proc.stderr or b""
-        ).decode("utf-8", "replace")
+        return (
+            proc.returncode,
+            out.decode("utf-8", "replace"),
+            (proc.stderr or b"").decode("utf-8", "replace"),
+        )
 
     def counts(db: str) -> dict[str, int]:
-        sql = " UNION ALL ".join(
-            f"SELECT '{t}', count(*) FROM {t}" for t in CRITICAL_TABLES
-        )
+        sql = " UNION ALL ".join(f"SELECT '{t}', count(*) FROM {t}" for t in CRITICAL_TABLES)
         code, out, err = run(psql_argv(target, executor, sql, database=db))
         if code != 0:
             raise BackupError(f"row count query failed on {db}: {err.strip()}")
@@ -201,8 +201,9 @@ def main(argv: list[str] | None = None) -> int:
             record_backup_metric(engine(), KIND_LOGICAL, now)
             say(f"  metric: backup_last_success_timestamp{{kind=logical}} = {now.isoformat()}")
         except Exception as exc:
-            print(f"WARNING: backup succeeded but the metric write failed: {exc!r}",
-                  file=sys.stderr)
+            print(
+                f"WARNING: backup succeeded but the metric write failed: {exc!r}", file=sys.stderr
+            )
             return 1
         return 0
 
@@ -268,13 +269,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"refused: could not create scratch database: {err.strip()}", file=sys.stderr)
         return 1
 
-    result = VerificationResult(scratch_database=scratch, source_counts=source,
-                                dump_bytes=dump_path.stat().st_size)
+    result = VerificationResult(
+        scratch_database=scratch, source_counts=source, dump_bytes=dump_path.stat().st_size
+    )
     try:
         started = time.monotonic()
-        code, _, err = run(
-            restore_argv(target.with_database(scratch), executor), stdin=dump_path
-        )
+        code, _, err = run(restore_argv(target.with_database(scratch), executor), stdin=dump_path)
         result.restore_seconds = time.monotonic() - started
         if code != 0:
             raise BackupError(f"pg_restore failed (exit {code}): {err.strip()[:800]}")
@@ -284,18 +284,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"RESTORE DRILL FAILED: {exc}", file=sys.stderr)
         alert("restore_drill_failed", str(exc))
         if not args.keep_scratch:
-            run(psql_argv(target, executor, f'DROP DATABASE IF EXISTS "{scratch}"',
-                          database="postgres"))
+            run(
+                psql_argv(
+                    target, executor, f'DROP DATABASE IF EXISTS "{scratch}"', database="postgres"
+                )
+            )
         return 1
     finally:
         if not args.keep_scratch:
-            run(psql_argv(target, executor, f'DROP DATABASE IF EXISTS "{scratch}"',
-                          database="postgres"))
+            run(
+                psql_argv(
+                    target, executor, f'DROP DATABASE IF EXISTS "{scratch}"', database="postgres"
+                )
+            )
 
     for table in CRITICAL_TABLES:
         say(f"  {table}: {source.get(table, 0):,} -> {result.restored_counts.get(table, 0):,}")
-    say(f"  restore took {result.restore_seconds:.1f}s from a "
-        f"{result.dump_bytes:,}-byte archive")
+    say(f"  restore took {result.restore_seconds:.1f}s from a {result.dump_bytes:,}-byte archive")
 
     if not result.ok:
         for problem in result.mismatches:

@@ -63,11 +63,16 @@ def test_json_mode_still_works(clean_repo: Path, capsys: pytest.CaptureFixture[s
     code = main(
         [
             "run",
-            "--target", "meta-x",
-            "--stage", "1",
-            "--evidence", str(evidence),
-            "--registry", str(registry),
-            "--actor", "owner",
+            "--target",
+            "meta-x",
+            "--stage",
+            "1",
+            "--evidence",
+            str(evidence),
+            "--registry",
+            str(registry),
+            "--actor",
+            "owner",
         ]
     )
     assert code == 0
@@ -84,10 +89,14 @@ def test_refuses_without_any_registry_backend(
     code = main(
         [
             "run",
-            "--target", "meta-x",
-            "--stage", "1",
-            "--evidence", str(evidence),
-            "--actor", "owner",
+            "--target",
+            "meta-x",
+            "--stage",
+            "1",
+            "--evidence",
+            str(evidence),
+            "--actor",
+            "owner",
         ]
     )
     assert code == 2

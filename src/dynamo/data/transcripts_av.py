@@ -87,9 +87,7 @@ class AlphaVantageTranscripts:
             log.info("alphavantage_skipped", reason="ALPHAVANTAGE_API_KEY unset", symbol=symbol)
             return None
         if not self._budget_ok():
-            log.info(
-                "alphavantage_daily_cap_reached", symbol=symbol, daily_cap=self._daily_cap
-            )
+            log.info("alphavantage_daily_cap_reached", symbol=symbol, daily_cap=self._daily_cap)
             return None
         quarter = period or reported_quarter(event_date)
         self._calls_today += 1

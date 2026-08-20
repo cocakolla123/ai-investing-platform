@@ -62,9 +62,7 @@ def ballast_result(fixture_frames: Any) -> tuple[Any, FakeRunRepo]:
 
 def test_ballast_participates_in_config_hash_and_run_id() -> None:
     base = ReplayConfig(start=date(2026, 6, 1), end=date(2026, 6, 30))
-    ballast = ReplayConfig(
-        start=date(2026, 6, 1), end=date(2026, 6, 30), ballast_symbol=BALLAST
-    )
+    ballast = ReplayConfig(start=date(2026, 6, 1), end=date(2026, 6, 30), ballast_symbol=BALLAST)
     assert base.config_hash != ballast.config_hash
     assert base.run_id != ballast.run_id
 

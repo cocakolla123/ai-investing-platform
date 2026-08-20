@@ -33,9 +33,7 @@ class TestTable:
 
 class TestCalculator:
     def test_basic_input_output(self) -> None:
-        cost = calculate_cost(
-            "claude-sonnet-4-6", input_tokens=1_000_000, output_tokens=1_000_000
-        )
+        cost = calculate_cost("claude-sonnet-4-6", input_tokens=1_000_000, output_tokens=1_000_000)
         assert cost == pytest.approx(3.0 + 15.0)
 
     def test_batch_halves_both(self) -> None:

@@ -97,8 +97,7 @@ class ConstructionConfig(BaseModel):
         for rung, multiplier in v:
             if not 0.0 <= multiplier <= 1.0:
                 raise ValueError(
-                    f"ballast multiplier for {rung.value} must be in [0, 1], "
-                    f"got {multiplier}"
+                    f"ballast multiplier for {rung.value} must be in [0, 1], got {multiplier}"
                 )
         return v
 

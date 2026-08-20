@@ -139,12 +139,8 @@ def test_overlap_dedup_winner_by_strength() -> None:
     # Ten symbols so the momentum quantile depth is graded: AAA sits at the
     # 90th percentile (depth 0.5, strength ~0.917) and also fires meanrev
     # (strength 1.0) -> meanrev wins, momentum is suppressed.
-    others: dict[str, dict[str, object]] = {
-        f"S{i}": dict(BASE, mom_12_1=0.1 * i) for i in range(9)
-    }
-    history = _history(
-        {**others, "AAA": dict(BASE, mom_12_1=0.75, rsi_14=25.0, ret_5d_z=-2.5)}
-    )
+    others: dict[str, dict[str, object]] = {f"S{i}": dict(BASE, mom_12_1=0.1 * i) for i in range(9)}
+    history = _history({**others, "AAA": dict(BASE, mom_12_1=0.75, rsi_14=25.0, ret_5d_z=-2.5)})
     signals = evaluate_strategies([momentum_rs_v1(), meanrev_v1()], history, AS_OF)
     aaa = [s for s in signals if s.symbol == "AAA"]
     assert len(aaa) == 2

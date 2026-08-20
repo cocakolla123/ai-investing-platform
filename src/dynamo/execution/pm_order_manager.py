@@ -344,8 +344,8 @@ class PMReconciler:
             ours, theirs = internal.get(market_id), broker.get(market_id)
             if ours == theirs:
                 continue
-            kind = "position_qty" if ours is not None and theirs is not None else (
-                "unknown_position"
+            kind = (
+                "position_qty" if ours is not None and theirs is not None else ("unknown_position")
             )
             divergences.append(
                 Divergence(
@@ -372,9 +372,13 @@ class PMReconciler:
         clean = not divergences
         run_id = self._store.record_run(
             now,
-            self._run_scope if clean else (f"{self._run_scope}:global" if any(
-                d.scope == GLOBAL_SCOPE for d in divergences
-            ) else f"{self._run_scope}:markets"),
+            self._run_scope
+            if clean
+            else (
+                f"{self._run_scope}:global"
+                if any(d.scope == GLOBAL_SCOPE for d in divergences)
+                else f"{self._run_scope}:markets"
+            ),
             "clean" if clean else "divergent",
             [d.as_dict() for d in divergences],
         )

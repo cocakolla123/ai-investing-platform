@@ -39,9 +39,35 @@ SUMMARY_MAX_CHARS = 500
 # token match is meaningless for these, so they require a $ cashtag.
 AMBIGUOUS_SYMBOLS: frozenset[str] = frozenset(
     {
-        "A", "ALL", "ANY", "ARE", "BE", "BY", "CAN", "COST", "DD", "EDIT",
-        "FOR", "GO", "IT", "KEY", "LOVE", "NEW", "NOW", "ON", "ONE", "OR",
-        "OUT", "PLAY", "REAL", "RH", "SO", "SEE", "TELL", "WELL", "YOLO",
+        "A",
+        "ALL",
+        "ANY",
+        "ARE",
+        "BE",
+        "BY",
+        "CAN",
+        "COST",
+        "DD",
+        "EDIT",
+        "FOR",
+        "GO",
+        "IT",
+        "KEY",
+        "LOVE",
+        "NEW",
+        "NOW",
+        "ON",
+        "ONE",
+        "OR",
+        "OUT",
+        "PLAY",
+        "REAL",
+        "RH",
+        "SO",
+        "SEE",
+        "TELL",
+        "WELL",
+        "YOLO",
     }
 )
 

@@ -95,9 +95,7 @@ class TestCompleteJson:
         assert complete(client) == GOOD
         call = messages.calls[0]
         assert call["model"] == "claude-sonnet-5"
-        assert call["output_config"] == {
-            "format": {"type": "json_schema", "schema": SCHEMA}
-        }
+        assert call["output_config"] == {"format": {"type": "json_schema", "schema": SCHEMA}}
         assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
         blocks = call["messages"][0]["content"]
         assert blocks[0]["text"] == "CONTEXT"
@@ -135,9 +133,7 @@ class TestCompleteJson:
         assert complete(client) == GOOD
 
     def test_invalid_output_retries_once_then_raises(self) -> None:
-        messages = StubMessages(
-            [make_response({"wrong": 1}), make_response({"also_wrong": 2})]
-        )
+        messages = StubMessages([make_response({"wrong": 1}), make_response({"also_wrong": 2})])
         client, _, writer = make_client(messages)
         with pytest.raises(SchemaValidationError):
             complete(client)
@@ -145,9 +141,7 @@ class TestCompleteJson:
         assert len(writer.entries) == 2  # cost still recorded for both attempts
 
     def test_refusal_counts_as_invalid(self) -> None:
-        messages = StubMessages(
-            [make_response(GOOD, stop_reason="refusal"), make_response(GOOD)]
-        )
+        messages = StubMessages([make_response(GOOD, stop_reason="refusal"), make_response(GOOD)])
         client, _, _ = make_client(messages)
         assert complete(client) == GOOD
         assert len(messages.calls) == 2

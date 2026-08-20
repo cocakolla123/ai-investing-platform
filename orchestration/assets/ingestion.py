@@ -121,9 +121,7 @@ def insider_tx(context: AssetExecutionContext, dynamo: DynamoResource) -> Materi
             "insider_tx: no instrument carries a CIK — sweeping the whole market; "
             "run `python -m dynamo.cli.reference ciks` to scope this"
         )
-    txs = edgar.insider_transactions_in_range(
-        since, as_of, ciks=list(ciks.values()) or None
-    )
+    txs = edgar.insider_transactions_in_range(since, as_of, ciks=list(ciks.values()) or None)
     rows = dynamo.market_repo().upsert_insider_tx(txs)
     return MaterializeResult(metadata={"rows": rows, "scoped_to_ciks": len(ciks)})
 
@@ -190,9 +188,7 @@ def earnings_calendar(context: AssetExecutionContext, dynamo: DynamoResource) ->
     if finnhub is None:
         context.log.warning("earnings_calendar: FINNHUB_API_KEY unset — skipping")
         return _skipped("finnhub not configured")
-    events = list(
-        finnhub.earnings_calendar(as_of - timedelta(days=7), as_of + timedelta(days=21))
-    )
+    events = list(finnhub.earnings_calendar(as_of - timedelta(days=7), as_of + timedelta(days=21)))
     repo = dynamo.market_repo()
     rows = repo.upsert_earnings(events)
     vintages = repo.append_estimate_vintages(events)
@@ -216,8 +212,7 @@ def transcripts(context: AssetExecutionContext, dynamo: DynamoResource) -> Mater
     defeatbeta = dynamo.defeatbeta_transcripts()
     if av is None and defeatbeta is None:
         context.log.warning(
-            "transcripts: ALPHAVANTAGE_API_KEY unset and transcripts extra "
-            "not installed — skipping"
+            "transcripts: ALPHAVANTAGE_API_KEY unset and transcripts extra not installed — skipping"
         )
         return _skipped("no transcript source configured")
     universe = set(dynamo.universe_symbols(as_of))
@@ -234,9 +229,7 @@ def transcripts(context: AssetExecutionContext, dynamo: DynamoResource) -> Mater
     fetched = []
     missing = []
     for r in reporters:
-        transcript = (
-            av.fetch(r["symbol"], r["event_date"], period=r["period"]) if av else None
-        )
+        transcript = av.fetch(r["symbol"], r["event_date"], period=r["period"]) if av else None
         if transcript is not None:
             fetched.append(transcript)
         else:
@@ -254,9 +247,7 @@ def transcripts(context: AssetExecutionContext, dynamo: DynamoResource) -> Mater
     rows = repo.upsert_transcripts(fetched)
     linked = 0
     for transcript in fetched:
-        linked += repo.link_transcript_ref(
-            transcript.symbol, transcript.event_date, transcript.ref
-        )
+        linked += repo.link_transcript_ref(transcript.symbol, transcript.event_date, transcript.ref)
     return MaterializeResult(
         metadata={
             "rows": rows,

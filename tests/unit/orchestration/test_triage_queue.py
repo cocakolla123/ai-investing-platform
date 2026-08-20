@@ -99,9 +99,7 @@ def repo_with(*flags: Any) -> FakeRepo:
 
 def triage(repo: FakeRepo, model: StubModel | None, **kwargs: Any) -> int:
     dynamo = StubDynamo(repo, model)
-    return research_mod._triage_flags(
-        cast(Any, dynamo), cast(Any, dynamo), AS_OF, **kwargs
-    )
+    return research_mod._triage_flags(cast(Any, dynamo), cast(Any, dynamo), AS_OF, **kwargs)
 
 
 class TestD3QueueIsRead:

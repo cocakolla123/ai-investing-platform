@@ -64,9 +64,7 @@ def active_total(target) -> float:
 
 
 def test_disabled_is_bit_identical_no_ballast_weight() -> None:
-    inputs = advisory(
-        watchlist=[make_row("AAA", 1)], verdicts=[make_cverdict("AAA", Action.BUY)]
-    )
+    inputs = advisory(watchlist=[make_row("AAA", 1)], verdicts=[make_cverdict("AAA", Action.BUY)])
     off = construct(ConstructionConfig(), inputs=inputs)
     off_again = construct(ConstructionConfig(), inputs=inputs)
     assert off.model_dump_json() == off_again.model_dump_json()  # determinism
@@ -87,9 +85,7 @@ def test_enabled_active_weights_identical_to_disabled_run() -> None:
     on = construct(cfg(), inputs=inputs)
     actives_off = {(w.symbol, w.sleeve): w.weight for w in off.weights}
     actives_on = {
-        (w.symbol, w.sleeve): w.weight
-        for w in on.weights
-        if w.sleeve is not Sleeve.BALLAST
+        (w.symbol, w.sleeve): w.weight for w in on.weights if w.sleeve is not Sleeve.BALLAST
     }
     assert actives_on == actives_off
 
@@ -98,9 +94,7 @@ def test_enabled_active_weights_identical_to_disabled_run() -> None:
 
 
 def test_ballast_fills_residual_to_one_minus_floor() -> None:
-    inputs = advisory(
-        watchlist=[make_row("AAA", 1)], verdicts=[make_cverdict("AAA", Action.BUY)]
-    )
+    inputs = advisory(watchlist=[make_row("AAA", 1)], verdicts=[make_cverdict("AAA", Action.BUY)])
     verdict = make_verdict(gross_cap=0.95, cash_floor=0.05)
     target = construct(cfg(), verdict=verdict, inputs=inputs)
     ballast = weight_of(target, BALLAST, Sleeve.BALLAST)
@@ -153,9 +147,9 @@ def test_ballast_ladder_schedule_is_a_configurable_table() -> None:
     """The schedule is a documented, overridable table — not magic numbers."""
     verdict = make_verdict(ladder=LadderRung.DD5)
     strict = cfg(ballast_ladder_multipliers=((LadderRung.DD5, 0.5),))
-    assert weight_of(
-        construct(strict, verdict=verdict), BALLAST, Sleeve.BALLAST
-    ) == pytest.approx(0.95 * 0.5)
+    assert weight_of(construct(strict, verdict=verdict), BALLAST, Sleeve.BALLAST) == pytest.approx(
+        0.95 * 0.5
+    )
     assert ConstructionConfig(ballast_symbol=BALLAST).config_hash != strict.config_hash
     with pytest.raises(ValueError, match=r"must be in \[0, 1\]"):
         cfg(ballast_ladder_multipliers=((LadderRung.DD5, 1.5),))
@@ -253,9 +247,7 @@ def test_active_ladder_behavior_is_bit_identical_with_and_without_ballast() -> N
         on = construct(cfg(), verdict=verdict, inputs=inputs)
         actives_off = [w for w in off.weights if w.sleeve is not Sleeve.BALLAST]
         actives_on = [w for w in on.weights if w.sleeve is not Sleeve.BALLAST]
-        assert [w.model_dump() for w in actives_on] == [
-            w.model_dump() for w in actives_off
-        ], rung
+        assert [w.model_dump() for w in actives_on] == [w.model_dump() for w in actives_off], rung
 
 
 def test_active_ladder_table_is_unchanged() -> None:
@@ -310,9 +302,7 @@ def test_active_verdict_on_ballast_symbol_active_wins_ballast_residual_on_top() 
     assert active_w > 0.0  # SPY is a real active pick in the baseline
     target = construct(cfg(), inputs=inputs)
     assert weight_of(target, BALLAST, Sleeve.LONG_TERM) == pytest.approx(active_w)
-    assert weight_of(target, BALLAST, Sleeve.BALLAST) == pytest.approx(
-        0.95 - active_w, abs=1e-9
-    )
+    assert weight_of(target, BALLAST, Sleeve.BALLAST) == pytest.approx(0.95 - active_w, abs=1e-9)
     assert weight_of(target, BALLAST) == pytest.approx(0.95, abs=1e-9)
 
 
@@ -333,9 +323,7 @@ def test_ballast_trades_never_charge_the_turnover_budget() -> None:
 
 
 def test_active_trades_still_charge_the_budget_with_ballast_on() -> None:
-    inputs = advisory(
-        watchlist=[make_row("AAA", 1)], verdicts=[make_cverdict("AAA", Action.BUY)]
-    )
+    inputs = advisory(watchlist=[make_row("AAA", 1)], verdicts=[make_cverdict("AAA", Action.BUY)])
     target = construct(cfg(), inputs=inputs)
     active_w = weight_of(target, "AAA")
     assert active_w > 0.0

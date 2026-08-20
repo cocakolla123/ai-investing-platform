@@ -117,9 +117,7 @@ def test_volume_source_is_the_column_the_scaler_must_be_handed() -> None:
     )
     row = canonical_bars(frame).iloc[0]
     observed = float(row["close"]) * float(row["volume"])
-    by_volume_source = consolidated_equivalent_dollar_volume(
-        observed, str(row["volume_source"])
-    )
+    by_volume_source = consolidated_equivalent_dollar_volume(observed, str(row["volume_source"]))
     by_price_source = consolidated_equivalent_dollar_volume(observed, str(row["source"]))
     assert by_volume_source > 10.0 * by_price_source
     assert abs(by_volume_source / observed - 1.0 / 0.066) < 0.01
@@ -175,8 +173,9 @@ def test_the_two_feeds_stamp_of_one_session_collapses_to_one_row() -> None:
     symbol's own series."""
     frame = pd.DataFrame(
         [
-            raw_row("XLE", "tiingo", close=61.03, adj_close=61.03,
-                    volume=22_584_153, ts=TIINGO_STAMP),
+            raw_row(
+                "XLE", "tiingo", close=61.03, adj_close=61.03, volume=22_584_153, ts=TIINGO_STAMP
+            ),
             raw_row("XLE", "alpaca", close=61.02, volume=1_752_526, ts=ALPACA_STAMP),
         ]
     )
@@ -194,8 +193,9 @@ def test_every_symbol_shares_one_session_index() -> None:
     half-empty rows just because the names came from different feeds."""
     frame = pd.DataFrame(
         [
-            raw_row("DUAL", "tiingo", close=61.0, adj_close=61.0,
-                    volume=22_000_000, ts=TIINGO_STAMP),
+            raw_row(
+                "DUAL", "tiingo", close=61.0, adj_close=61.0, volume=22_000_000, ts=TIINGO_STAMP
+            ),
             raw_row("DUAL", "alpaca", close=61.0, volume=1_700_000, ts=ALPACA_STAMP),
             raw_row("WIDE", "alpaca", close=5.0, volume=1_200, ts=ALPACA_STAMP),
         ]
@@ -211,8 +211,7 @@ def test_distinct_sessions_are_still_distinct() -> None:
     frame = pd.DataFrame(
         [
             raw_row("XLE", "alpaca", close=61.0, volume=1, ts=ALPACA_STAMP),
-            raw_row("XLE", "alpaca", close=62.0, volume=2,
-                    ts=ALPACA_STAMP + timedelta(days=1)),
+            raw_row("XLE", "alpaca", close=62.0, volume=2, ts=ALPACA_STAMP + timedelta(days=1)),
         ]
     )
     out = canonical_bars(frame)

@@ -75,9 +75,7 @@ class TestStoredABBVPayloads:
         assert fixture["stored_action"] == "hold"
         # And none of these rebuttals carries an index — they exercise the
         # tier-2 text fallback exactly as stored history will.
-        assert all(
-            r.get("kill_case_index") is None for r in fixture["arbiter"]["bear_rebuttals"]
-        )
+        assert all(r.get("kill_case_index") is None for r in fixture["arbiter"]["bear_rebuttals"])
 
         verdict = assemble(fixture)
         assert verdict.action is Action.BUY
@@ -98,16 +96,12 @@ class TestStoredABBVPayloads:
         )
 
     @pytest.mark.parametrize("path", ABBV_FIXTURES, ids=lambda p: p.stem)
-    def test_dropping_evidence_from_rebuttals_reinstates_the_downgrade(
-        self, path: Path
-    ) -> None:
+    def test_dropping_evidence_from_rebuttals_reinstates_the_downgrade(self, path: Path) -> None:
         """Substance is required: the matcher alone must not clear the bar."""
         fixture = load_fixture(path)
         stripped = {
             **fixture["arbiter"],
-            "bear_rebuttals": [
-                {**r, "evidence": []} for r in fixture["arbiter"]["bear_rebuttals"]
-            ],
+            "bear_rebuttals": [{**r, "evidence": []} for r in fixture["arbiter"]["bear_rebuttals"]],
         }
         verdict = CommitteeEngine.assemble_verdict(
             symbol=fixture["symbol"],
@@ -124,9 +118,7 @@ class TestMatchingTiers:
     AS_OF = date(2026, 8, 3)
 
     def _verdict(self, rebuttals: list[dict[str, Any]], bear_payload: Any = None) -> Any:
-        bear = AdvocateBrief.model_validate(
-            {**(bear_payload or BEAR_PAYLOAD), "conviction": 0.2}
-        )
+        bear = AdvocateBrief.model_validate({**(bear_payload or BEAR_PAYLOAD), "conviction": 0.2})
         return CommitteeEngine.assemble_verdict(
             symbol="ACME",
             as_of=self.AS_OF,

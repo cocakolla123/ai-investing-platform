@@ -44,7 +44,12 @@ MATERIAL_8K_ITEMS: frozenset[str] = frozenset(
 )
 MATERIAL_FORMS: frozenset[str] = frozenset({"S-1", "13D", "13G", "SC 13D", "SC 13G"})
 MNA_KEYWORDS: tuple[str, ...] = (
-    "merger", "acquisition", "acquire", "buyout", "takeover", "tender offer",
+    "merger",
+    "acquisition",
+    "acquire",
+    "buyout",
+    "takeover",
+    "tender offer",
 )
 
 # --- range_bound liquidity floor ------------------------------------------

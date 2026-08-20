@@ -73,9 +73,7 @@ class FunnelBudget:
         if not 0.0 < self.triage_material_rate <= 1.0:
             raise ValueError("triage_material_rate must be in (0, 1]")
         if self.deep_dive_promotion_slots > self.deep_dive_cap_per_night:
-            raise ValueError(
-                "deep_dive_promotion_slots cannot exceed deep_dive_cap_per_night"
-            )
+            raise ValueError("deep_dive_promotion_slots cannot exceed deep_dive_cap_per_night")
         if min(self.deep_dive_cap_per_night, self.promotion_window_days) < 0:
             raise ValueError("caps and windows must be non-negative")
 

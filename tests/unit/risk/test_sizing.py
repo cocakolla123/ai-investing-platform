@@ -34,6 +34,7 @@ CFG = RiskConfig()
 EQUITY = 100_000.0
 BIG_ADV = 1e9  # liquidity cap never binds
 
+
 def _wild(bounded: st.SearchStrategy[float]) -> st.SearchStrategy[float]:
     """Bounded floats plus the adversarial specials: NaN and +/-inf."""
     return st.one_of(
@@ -116,28 +117,18 @@ def test_sizing_never_exceeds_any_cap_and_never_raises(
         if cand.sector is not None:
             sector_totals[cand.sector] = sector_totals.get(cand.sector, 0.0) + w
         if cand.cluster_id is not None:
-            cluster_totals[cand.cluster_id] = (
-                cluster_totals.get(cand.cluster_id, 0.0) + w
-            )
+            cluster_totals[cand.cluster_id] = cluster_totals.get(cand.cluster_id, 0.0) + w
         total += w
 
-    existing = {
-        s: w
-        for s, w in ctx.existing_weights.items()
-        if math.isfinite(w) and w > 0.0
-    }
+    existing = {s: w for s, w in ctx.existing_weights.items() if math.isfinite(w) and w > 0.0}
     existing_gross = sum(existing.values())
     # New weight never exceeds the remaining headroom under each cap (existing
     # overweight cannot be fixed by sizing; it just leaves zero headroom).
     for sector, new_weight in sector_totals.items():
-        used = sum(
-            w for s, w in existing.items() if ctx.sector_by_symbol.get(s) == sector
-        )
+        used = sum(w for s, w in existing.items() if ctx.sector_by_symbol.get(s) == sector)
         assert new_weight <= max(0.0, CFG.sector_cap * tighten - used) + 1e-9
     for cluster, new_weight in cluster_totals.items():
-        used = sum(
-            w for s, w in existing.items() if ctx.cluster_by_symbol.get(s) == cluster
-        )
+        used = sum(w for s, w in existing.items() if ctx.cluster_by_symbol.get(s) == cluster)
         assert new_weight <= max(0.0, CFG.cluster_cap * tighten - used) + 1e-9
     assert total <= max(0.0, CFG.gross_cap - CFG.cash_floor - existing_gross) + 1e-9
 
@@ -148,9 +139,7 @@ def test_sizing_never_exceeds_any_cap_and_never_raises(
     bump=st.floats(min_value=1e-3, max_value=2.0),
     budget=st.floats(min_value=0.0, max_value=1.0),
 )
-def test_higher_sigma_never_bigger_base(
-    sigma_low: float, bump: float, budget: float
-) -> None:
+def test_higher_sigma_never_bigger_base(sigma_low: float, bump: float, budget: float) -> None:
     def cand(symbol: str, sigma: float) -> SizingCandidate:
         return SizingCandidate(
             symbol=symbol,
@@ -161,9 +150,7 @@ def test_higher_sigma_never_bigger_base(
         )
 
     ctx = SizingContext(equity=EQUITY, sleeve_budget=budget)
-    low, high = size_positions(
-        [cand("LOW", sigma_low), cand("HIGH", sigma_low + bump)], CFG, ctx
-    )
+    low, high = size_positions([cand("LOW", sigma_low), cand("HIGH", sigma_low + bump)], CFG, ctx)
     assert high.base_weight <= low.base_weight + 1e-12
 
 
@@ -301,9 +288,7 @@ class TestRobustness:
 def test_veto_contract_high_conviction_buy_still_zero() -> None:
     """Committee buy at conviction 0.9 on a vetoed symbol -> weight 0."""
     cand = _plain(symbol="EVIL", conviction=0.9)
-    ctx = SizingContext(
-        equity=EQUITY, vetoed=frozenset({"EVIL"}), sleeve_budget=0.10
-    )
+    ctx = SizingContext(equity=EQUITY, vetoed=frozenset({"EVIL"}), sleeve_budget=0.10)
     weight, clamps, base, _ = _single(cand, ctx)
     assert weight == 0.0
     assert clamps == (CLAMP_VETO,)

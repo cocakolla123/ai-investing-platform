@@ -383,8 +383,13 @@ def test_range_reversion_candidate_loads_and_scores_a_synthetic_panel() -> None:
         for t, p in zip(sessions, prices, strict=True)
     ]
     rows += [
-        {"symbol": "NEW", "ts": t, "close": 10.0 + i * 0.01, "adj_close": 10.0 + i * 0.01,
-         "volume": 500_000}
+        {
+            "symbol": "NEW",
+            "ts": t,
+            "close": 10.0 + i * 0.01,
+            "adj_close": 10.0 + i * 0.01,
+            "volume": 500_000,
+        }
         for i, t in enumerate(sessions[-30:])
     ]
     ctx = build_context(FeatureInputs(bars=pd.DataFrame(rows)), date(2026, 3, 3), ["OSC", "NEW"])

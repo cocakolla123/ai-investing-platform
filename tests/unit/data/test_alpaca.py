@@ -22,7 +22,11 @@ class FakeDataClient:
         self.bars_request = request
         bar = SimpleNamespace(
             timestamp=datetime(2026, 7, 31, 4, 0, tzinfo=UTC),
-            open=10.0, high=11.0, low=9.5, close=10.5, volume=1234,
+            open=10.0,
+            high=11.0,
+            low=9.5,
+            close=10.5,
+            volume=1234,
         )
         return SimpleNamespace(data={"ACME": [bar]})
 
@@ -38,19 +42,31 @@ class FakeTradingClient:
     def get_corporate_announcements(self, request: Any) -> Any:
         return [
             SimpleNamespace(
-                initiating_symbol="ACME", target_symbol=None,
-                ex_date=date(2026, 8, 1), ca_type="split",
-                old_rate=1.0, new_rate=2.0, cash=None,
+                initiating_symbol="ACME",
+                target_symbol=None,
+                ex_date=date(2026, 8, 1),
+                ca_type="split",
+                old_rate=1.0,
+                new_rate=2.0,
+                cash=None,
             ),
             SimpleNamespace(
-                initiating_symbol=None, target_symbol="XYZ",
-                ex_date=date(2026, 8, 2), ca_type="dividend",
-                old_rate=None, new_rate=None, cash=0.5,
+                initiating_symbol=None,
+                target_symbol="XYZ",
+                ex_date=date(2026, 8, 2),
+                ca_type="dividend",
+                old_rate=None,
+                new_rate=None,
+                cash=0.5,
             ),
             SimpleNamespace(  # no symbol → dropped
-                initiating_symbol=None, target_symbol=None,
-                ex_date=date(2026, 8, 3), ca_type="merger",
-                old_rate=None, new_rate=None, cash=None,
+                initiating_symbol=None,
+                target_symbol=None,
+                ex_date=date(2026, 8, 3),
+                ca_type="merger",
+                old_rate=None,
+                new_rate=None,
+                cash=None,
             ),
         ]
 

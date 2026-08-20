@@ -12,13 +12,25 @@ from dynamo.data.tiingo import TiingoClient
 PRICES = [
     {
         "date": "2026-07-30T00:00:00.000Z",
-        "open": 10.0, "high": 11.0, "low": 9.5, "close": 10.5,
-        "volume": 1000, "adjClose": 10.4, "splitFactor": 1.0, "divCash": 0.0,
+        "open": 10.0,
+        "high": 11.0,
+        "low": 9.5,
+        "close": 10.5,
+        "volume": 1000,
+        "adjClose": 10.4,
+        "splitFactor": 1.0,
+        "divCash": 0.0,
     },
     {
         "date": "2026-07-31T00:00:00.000Z",
-        "open": 10.5, "high": 12.0, "low": 10.0, "close": 11.0,
-        "volume": 2000, "adjClose": 11.0, "splitFactor": 2.0, "divCash": 0.25,
+        "open": 10.5,
+        "high": 12.0,
+        "low": 10.0,
+        "close": 11.0,
+        "volume": 2000,
+        "adjClose": 11.0,
+        "splitFactor": 2.0,
+        "divCash": 0.25,
     },
 ]
 
@@ -48,9 +60,7 @@ def test_daily_bars_parse_adj_close_and_provenance() -> None:
 
 
 def test_corporate_actions_for_derives_splits_and_dividends() -> None:
-    client = make_client(
-        httpx.MockTransport(lambda req: httpx.Response(200, json=PRICES))
-    )
+    client = make_client(httpx.MockTransport(lambda req: httpx.Response(200, json=PRICES)))
     actions = list(client.corporate_actions_for(["ACME"], date(2026, 7, 30), date(2026, 7, 31)))
     kinds = {(a.action_type, a.ex_date) for a in actions}
     assert ("split", date(2026, 7, 31)) in kinds

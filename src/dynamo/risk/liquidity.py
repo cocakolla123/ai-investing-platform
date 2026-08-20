@@ -39,9 +39,7 @@ class LiquidityReport:
     concentration_flag: bool
 
 
-def max_entry_weight(
-    adv_dollar_20d: float, equity: float, config: RiskConfig
-) -> float:
+def max_entry_weight(adv_dollar_20d: float, equity: float, config: RiskConfig) -> float:
     """Largest openable weight: <= max_days x participation x ADV / equity,
     and 0 below the absolute ``min_adv_dollar`` floor.
 
@@ -65,12 +63,7 @@ def max_entry_weight(
         return 0.0
     if not (math.isfinite(equity) and equity > 0.0):
         return 0.0
-    cap = (
-        config.liquidity_max_days
-        * config.liquidity_adv_participation
-        * adv_dollar_20d
-        / equity
-    )
+    cap = config.liquidity_max_days * config.liquidity_adv_participation * adv_dollar_20d / equity
     return max(cap, 0.0) if math.isfinite(cap) else 0.0
 
 
@@ -109,9 +102,7 @@ def portfolio_liquidity(
         if not math.isfinite(weight) or weight <= 0.0 or not equity_ok:
             d = 0.0 if weight == 0.0 else float("inf")
         else:
-            d = days_to_liquidate(
-                weight * equity, adv_dollar_20d.get(symbol, 0.0), participation
-            )
+            d = days_to_liquidate(weight * equity, adv_dollar_20d.get(symbol, 0.0), participation)
         days[symbol] = d
         worst = max(worst, d if math.isfinite(d) else float("inf"))
         if d > CONCENTRATION_DAYS and math.isfinite(weight) and weight > 0.0:

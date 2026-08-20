@@ -103,9 +103,7 @@ def test_journal_insert_and_text_search(engine) -> None:  # type: ignore[no-unty
     )
     repo.insert(entry, embedding=[0.1] * 384, embedding_version="bge-small-v1")
     repo.insert(
-        JournalEntry(
-            id="j-2", kind=JournalKind.INCIDENT, text="Provider outage.", created_at=NOW
-        )
+        JournalEntry(id="j-2", kind=JournalKind.INCIDENT, text="Provider outage.", created_at=NOW)
     )
 
     hits = repo.search(text_query="semis", kinds=[JournalKind.LESSON])
@@ -133,12 +131,18 @@ def test_journal_search_as_of_hides_future_entries(engine) -> None:  # type: ign
     embedder = LocalEmbedder()
     repo = JournalRepository(engine)  # type: ignore[arg-type]
     past = JournalEntry(
-        id="j-past", kind=JournalKind.LESSON, symbols=("AAPL",),
-        text="AAPL: cut losers at the stop.", created_at=NOW,
+        id="j-past",
+        kind=JournalKind.LESSON,
+        symbols=("AAPL",),
+        text="AAPL: cut losers at the stop.",
+        created_at=NOW,
     )
     future = JournalEntry(
-        id="j-future", kind=JournalKind.LESSON, symbols=("AAPL",),
-        text="AAPL: future hindsight entry.", created_at=NOW + timedelta(days=5),
+        id="j-future",
+        kind=JournalKind.LESSON,
+        symbols=("AAPL",),
+        text="AAPL: future hindsight entry.",
+        created_at=NOW + timedelta(days=5),
     )
     for entry in (past, future):
         repo.insert(entry, embedder.embed([entry.text])[0], embedding_version=embedder.backend)
@@ -171,8 +175,11 @@ def test_vector_search_excludes_hash_fallback_entries_by_default(engine) -> None
     for entry_id, version in stamps.items():
         repo.insert(
             JournalEntry(
-                id=entry_id, kind=JournalKind.LESSON, symbols=("AAPL",),
-                text=f"AAPL lesson {entry_id}", created_at=NOW,
+                id=entry_id,
+                kind=JournalKind.LESSON,
+                symbols=("AAPL",),
+                text=f"AAPL lesson {entry_id}",
+                created_at=NOW,
             ),
             embedding=[0.1] * 384,
             embedding_version=version,
@@ -201,9 +208,7 @@ def test_proposal_calibration_metrics_roundtrip(engine) -> None:  # type: ignore
 
     proposals = ProposalRepository(engine)  # type: ignore[arg-type]
     proposals.insert(
-        ImprovementProposal(
-            id="p-1", created_at=NOW, kind=ProposalKind.RETRAIN, target="ranker-v1"
-        )
+        ImprovementProposal(id="p-1", created_at=NOW, kind=ProposalKind.RETRAIN, target="ranker-v1")
     )
     assert [p["id"] for p in proposals.open_proposals()] == ["p-1"]
     proposals.set_status("p-1", ProposalStatus.ACCEPTED)
@@ -211,11 +216,7 @@ def test_proposal_calibration_metrics_roundtrip(engine) -> None:  # type: ignore
 
     cal = CalibrationRepository(engine)  # type: ignore[arg-type]
     points = compute_calibration(
-        [
-            CalibrationObservation(
-                scope_type="agent", scope_id="bull", conviction=0.8, outcome=True
-            )
-        ],
+        [CalibrationObservation(scope_type="agent", scope_id="bull", conviction=0.8, outcome=True)],
         date(2026, 8, 3),
     )
     cal.upsert(points)
@@ -230,9 +231,7 @@ def test_registry_status_changes_only_via_apply_promotion(engine) -> None:  # ty
     from dynamo.persistence.repositories.learning import ModelRegistryRepository
 
     repo = ModelRegistryRepository(engine)  # type: ignore[arg-type]
-    repo.insert_candidate(
-        ModelVersion(id="m-1", model_type="ranker", algo="lgbm", created_at=NOW)
-    )
+    repo.insert_candidate(ModelVersion(id="m-1", model_type="ranker", algo="lgbm", created_at=NOW))
     assert repo.status_of("m-1") == RegistryStatus.CANDIDATE
 
     record = promote("m-1", RegistryStatus.CANDIDATE, RegistryStatus.VALIDATING, "owner", NOW)

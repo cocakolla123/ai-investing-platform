@@ -21,8 +21,14 @@ AS_OF = date(2026, 6, 15)
 RUN_ID = "replay-abc123def456"
 
 
-def _context_row(text: str, *, stage: str = "dossier", symbol: str = "LIQ",
-                 as_of: date = AS_OF, sha: str | None = None) -> dict[str, Any]:
+def _context_row(
+    text: str,
+    *,
+    stage: str = "dossier",
+    symbol: str = "LIQ",
+    as_of: date = AS_OF,
+    sha: str | None = None,
+) -> dict[str, Any]:
     return {
         "id": f"{RUN_ID}:{as_of.isoformat()}-{symbol}-{stage}",
         "run_id": RUN_ID,
@@ -56,8 +62,14 @@ def _run_row(**config: Any) -> dict[str, Any]:
 
 
 def _verdict_row(payload: dict[str, Any], as_of: date = AS_OF) -> dict[str, Any]:
-    return {"id": f"{RUN_ID}:v-1", "run_id": RUN_ID, "symbol": "LIQ",
-            "as_of": as_of, "action": "buy", "payload": payload}
+    return {
+        "id": f"{RUN_ID}:v-1",
+        "run_id": RUN_ID,
+        "symbol": "LIQ",
+        "as_of": as_of,
+        "action": "buy",
+        "payload": payload,
+    }
 
 
 CLEAN_TEXT = (
@@ -114,8 +126,9 @@ def test_allowlist_admits_horizon_and_expiry_phrasing() -> None:
 
 def test_clean_run_passes_all_categories(tmp_path: Path) -> None:
     contexts = [_context_row(CLEAN_TEXT)]
-    verdicts = [_verdict_row({"thesis": "buy on momentum", "horizon_days": 20,
-                              "as_of": AS_OF.isoformat()})]
+    verdicts = [
+        _verdict_row({"thesis": "buy on momentum", "horizon_days": 20, "as_of": AS_OF.isoformat()})
+    ]
     report = audit_run(_run_row(), contexts, verdicts)
     assert report.passed
     assert {c.status for c in report.categories.values()} == {"PASS"}
@@ -147,8 +160,10 @@ def test_sha_tamper_flags() -> None:
 
 
 def test_verdict_payload_scanned_against_row_as_of() -> None:
-    payload = {"thesis": "the 2026-07-20 earnings beat is already public",
-               "as_of": AS_OF.isoformat()}
+    payload = {
+        "thesis": "the 2026-07-20 earnings beat is already public",
+        "as_of": AS_OF.isoformat(),
+    }
     report = audit_run(_run_row(), [], [_verdict_row(payload)])
     assert report.categories["verdict_dates"].status == "FLAGGED"
 

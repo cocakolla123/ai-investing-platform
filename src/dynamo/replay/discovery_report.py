@@ -321,8 +321,7 @@ def render_discovery_report(report: DiscoveryReport) -> str:
         )
     lines.append("")
     lines.append(
-        f"  {'detector':<18}{'flags':>7}{'scored':>8}{'spread':>10}"
-        f"{'eff n':>8}{'t':>7}  verdict"
+        f"  {'detector':<18}{'flags':>7}{'scored':>8}{'spread':>10}{'eff n':>8}{'t':>7}  verdict"
     )
     for d in report.detectors:
         lines.append(

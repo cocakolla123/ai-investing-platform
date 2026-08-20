@@ -64,8 +64,7 @@ _FILTER_BOOST = 0.05  # per matched structured filter, on top of cosine sim
 HASH_FALLBACK_BACKEND = "hash-fallback"
 
 HASH_FALLBACK_REMEDIATION = (
-    "uv sync --extra embeddings && "
-    "uv run python -m dynamo.cli.journal_seed --reembed"
+    "uv sync --extra embeddings && uv run python -m dynamo.cli.journal_seed --reembed"
 )
 
 

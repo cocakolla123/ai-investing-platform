@@ -131,9 +131,7 @@ def _truncate_at_extreme(prices: list[float], *, kind: str, window: int = 60) ->
     series = pd.Series(prices)
     rolling = series.rolling(window, min_periods=window)
     extreme = (rolling.min() if kind == "low" else rolling.max()).to_numpy()
-    hits = np.flatnonzero(
-        np.isclose(series.to_numpy(), extreme) & (np.arange(len(series)) >= 200)
-    )
+    hits = np.flatnonzero(np.isclose(series.to_numpy(), extreme) & (np.arange(len(series)) >= 200))
     assert hits.size, f"no running {kind} late enough in the series"
     return prices[: int(hits[-1]) + 1]
 
@@ -177,9 +175,7 @@ def test_range_bound_is_silent_below_the_liquidity_floor() -> None:
     assert range_bound(liquid(prices, shares=1_000_000), as_of=AS_OF) != []
     assert range_bound(liquid(prices, shares=100_000), as_of=AS_OF) == []
     # The floor is a knob, not a hidden constant: lower it and the name returns.
-    revived = range_bound(
-        liquid(prices, shares=100_000), as_of=AS_OF, min_dollar_volume=250_000.0
-    )
+    revived = range_bound(liquid(prices, shares=100_000), as_of=AS_OF, min_dollar_volume=250_000.0)
     assert len(revived) == 1
     assert revived[0].details["min_dollar_volume"] == 250_000.0
 
@@ -218,16 +214,30 @@ def test_earnings_surprise() -> None:
 def test_filing_event_material_forms_and_items() -> None:
     filings = [
         Filing(
-            accession_no="a1", cik="1", symbol="ACME", form_type="8-K",
-            filed_at=AS_OF, url="u", items=("5.02", "9.01"),
+            accession_no="a1",
+            cik="1",
+            symbol="ACME",
+            form_type="8-K",
+            filed_at=AS_OF,
+            url="u",
+            items=("5.02", "9.01"),
         ),
         Filing(
-            accession_no="a2", cik="2", symbol="NEWCO", form_type="S-1",
-            filed_at=AS_OF, url="u",
+            accession_no="a2",
+            cik="2",
+            symbol="NEWCO",
+            form_type="S-1",
+            filed_at=AS_OF,
+            url="u",
         ),
         Filing(  # non-material 8-K items → no flag
-            accession_no="a3", cik="3", symbol="BORING", form_type="8-K",
-            filed_at=AS_OF, url="u", items=("9.01",),
+            accession_no="a3",
+            cik="3",
+            symbol="BORING",
+            form_type="8-K",
+            filed_at=AS_OF,
+            url="u",
+            items=("9.01",),
         ),
     ]
     flags = filing_event(filings, as_of=AS_OF)
@@ -237,8 +247,12 @@ def test_filing_event_material_forms_and_items() -> None:
 def test_insider_cluster_requires_two_big_buyers() -> None:
     def buy(name: str, shares: float, price: float, days_ago: int = 1) -> InsiderTx:
         return InsiderTx(
-            accession_no=f"acc-{name}", symbol="ACME", insider_name=name,
-            tx_type="P", shares=shares, price=price,
+            accession_no=f"acc-{name}",
+            symbol="ACME",
+            insider_name=name,
+            tx_type="P",
+            shares=shares,
+            price=price,
             filed_at=AS_OF - timedelta(days=days_ago),
         )
 
@@ -249,19 +263,23 @@ def test_insider_cluster_requires_two_big_buyers() -> None:
 
     # one buyer / small buys / stale buys → no flag
     assert insider_cluster([buy("CEO", 20_000, 10.0)], as_of=AS_OF) == []
-    assert insider_cluster(
-        [buy("CEO", 100, 10.0), buy("CFO", 100, 10.0)], as_of=AS_OF
-    ) == []
-    assert insider_cluster(
-        [buy("CEO", 20_000, 10.0, days_ago=30), buy("CFO", 15_000, 10.0, days_ago=30)],
-        as_of=AS_OF,
-    ) == []
+    assert insider_cluster([buy("CEO", 100, 10.0), buy("CFO", 100, 10.0)], as_of=AS_OF) == []
+    assert (
+        insider_cluster(
+            [buy("CEO", 20_000, 10.0, days_ago=30), buy("CFO", 15_000, 10.0, days_ago=30)],
+            as_of=AS_OF,
+        )
+        == []
+    )
 
 
 def test_news_burst_zscore_and_mna_keyword() -> None:
     def item(i: int, days_ago: float, headline: str = "Quarterly update") -> NewsItem:
         return NewsItem(
-            id=f"n{i}", symbols=("ACME",), headline=headline, source="t",
+            id=f"n{i}",
+            symbols=("ACME",),
+            headline=headline,
+            source="t",
             published_at=AS_OF - timedelta(days=days_ago),
         )
 
@@ -285,9 +303,7 @@ def test_run_detectors_assembles_catalog() -> None:
     inputs = DetectorInputs(
         bars=bars,
         as_of=AS_OF,
-        earnings=[
-            EarningsEvent(symbol="BEAT", event_date=AS_OF.date(), eps_est=1.0, eps_act=2.0)
-        ],
+        earnings=[EarningsEvent(symbol="BEAT", event_date=AS_OF.date(), eps_est=1.0, eps_act=2.0)],
     )
     flags = run_detectors(inputs)
     detectors = {f.detector for f in flags}
@@ -310,9 +326,7 @@ def test_run_detectors_registers_range_bound() -> None:
 
 def test_run_detectors_passes_the_spread_map_through_to_range_bound() -> None:
     bars = liquid(_truncate_at_extreme(oscillator(), kind="low"))
-    wide = run_detectors(
-        DetectorInputs(bars=bars, as_of=AS_OF, spreads_bps={"OSC": 500.0})
-    )
+    wide = run_detectors(DetectorInputs(bars=bars, as_of=AS_OF, spreads_bps={"OSC": 500.0}))
     assert [f for f in wide if f.detector == "range_bound"] == []
 
 
@@ -373,9 +387,9 @@ def test_split_shaped_move_never_reaches_the_trading_branch() -> None:
     flags = price_zscore(
         zbars("RCON", closes, volume=50_000_000),
         as_of=AS_OF,
-        k=0.0001,               # would flag anything
-        sigma_floor=0.0,        # no floor
-        min_abs_return=0.0,     # no numerator floor
+        k=0.0001,  # would flag anything
+        sigma_floor=0.0,  # no floor
+        min_abs_return=0.0,  # no numerator floor
         min_dollar_volume=0.0,  # no liquidity gate
     )
     assert {f.detector for f in flags} == {"data_quality"}

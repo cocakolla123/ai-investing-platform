@@ -41,16 +41,12 @@ class TestLedger:
     def test_record_usage_computes_cost(self) -> None:
         meter, writer = make_meter()
         usage = SimpleNamespace(input_tokens=1_000_000, output_tokens=0)
-        meter.record_usage(
-            model_id="claude-haiku-4-5", call_kind="triage", usage=usage, batch=True
-        )
+        meter.record_usage(model_id="claude-haiku-4-5", call_kind="triage", usage=usage, batch=True)
         assert writer.entries[0].cost_usd == pytest.approx(0.5)  # $1/MTok halved
 
     def test_month_to_date_excludes_prior_months(self) -> None:
         meter, writer = make_meter()
-        meter.record(
-            model_id="m", call_kind="k", input_tokens=1, output_tokens=1, cost_usd=2.0
-        )
+        meter.record(model_id="m", call_kind="k", input_tokens=1, output_tokens=1, cost_usd=2.0)
         # simulate a July row
         july = writer.entries[0]
         writer.entries.append(

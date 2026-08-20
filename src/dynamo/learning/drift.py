@@ -96,11 +96,7 @@ def feature_psi_monitor(
     threshold: float = PSI_THRESHOLD,
 ) -> ImprovementProposal | None:
     """PSI above threshold on any top-importance feature → retrain proposal."""
-    drifted = {
-        f: psi_by_feature[f]
-        for f in top_features
-        if psi_by_feature.get(f, 0.0) > threshold
-    }
+    drifted = {f: psi_by_feature[f] for f in top_features if psi_by_feature.get(f, 0.0) > threshold}
     if not drifted:
         return None
     evidence = [

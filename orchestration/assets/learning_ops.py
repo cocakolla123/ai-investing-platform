@@ -801,10 +801,7 @@ def _tonights_decisions(
     ec = schema.equity_curve
     with engine.connect() as cx:
         equity_row = cx.execute(
-            sa_select(ec.c.equity)
-            .where(ec.c.as_of <= as_of)
-            .order_by(ec.c.as_of.desc())
-            .limit(1)
+            sa_select(ec.c.equity).where(ec.c.as_of <= as_of).order_by(ec.c.as_of.desc()).limit(1)
         ).first()
     equity_at_decision = float(equity_row.equity) if equity_row is not None else None
 
@@ -901,9 +898,7 @@ def meta_scoring(context: AssetExecutionContext, dynamo: DynamoResource) -> Mate
     def _load(mv: Any) -> Any:
         artifact = Path(mv.artifact_path)
         expected = (mv.metrics or {}).get("artifact_sha256")
-        return load_model(
-            artifact.parent, mv.id, expected_sha=str(expected) if expected else None
-        )
+        return load_model(artifact.parent, mv.id, expected_sha=str(expected) if expected else None)
 
     def _insert(row: dict[str, Any]) -> bool:
         t = schema.meta_decision_scores
@@ -1079,9 +1074,7 @@ def upsert_learning_metrics(
     return len(metric_rows)
 
 
-@dagster_asset(
-    name="learning_metrics", group_name=LEARNING_GROUP, deps=["calibration_update"]
-)
+@dagster_asset(name="learning_metrics", group_name=LEARNING_GROUP, deps=["calibration_update"])
 def learning_metrics_asset(
     context: AssetExecutionContext, dynamo: DynamoResource
 ) -> MaterializeResult:
@@ -1102,9 +1095,7 @@ def learning_metrics_asset(
     experiences = dynamo.experience_repo().resolved_live()
 
     v = schema.committee_verdicts
-    actions = _read_df(
-        dynamo, select(v.c.action, func.count().label("n")).group_by(v.c.action)
-    )
+    actions = _read_df(dynamo, select(v.c.action, func.count().label("n")).group_by(v.c.action))
     action_counts = (
         {str(r["action"]): int(r["n"]) for r in actions.to_dict(orient="records")}
         if not actions.empty
@@ -1112,18 +1103,12 @@ def learning_metrics_asset(
     )
 
     gr = schema.generation_results
-    generations = _read_df(
-        dynamo, select(gr.c.generation, gr.c.value_of_learning, gr.c.n_test)
-    )
+    generations = _read_df(dynamo, select(gr.c.generation, gr.c.value_of_learning, gr.c.n_test))
     generation_rows = generations.to_dict(orient="records") if not generations.empty else []
 
     rows = learning_metric_rows(experiences, action_counts, generation_rows)
-    written = upsert_learning_metrics(
-        rows, MetricsRepository(dynamo.engine()).upsert_metric, as_of
-    )
-    headline = {
-        metric: value for metric, scope_type, _, value in rows if scope_type == "platform"
-    }
+    written = upsert_learning_metrics(rows, MetricsRepository(dynamo.engine()).upsert_metric, as_of)
+    headline = {metric: value for metric, scope_type, _, value in rows if scope_type == "platform"}
     return MaterializeResult(
         metadata={
             "rows_upserted": written,
@@ -1220,8 +1205,7 @@ def failure_clustering_asset(
     failures = [
         e
         for e in dynamo.experience_repo().resolved_live()
-        if e.failure_primary is not None
-        and e.failure_primary != FailureClass.NORMAL_UNCERTAINTY
+        if e.failure_primary is not None and e.failure_primary != FailureClass.NORMAL_UNCERTAINTY
     ]
 
     r = schema.post_trade_reviews
@@ -1374,9 +1358,7 @@ def parquet_export_asset(
 
 
 @dagster_asset(name="chain_verify_check", group_name=LEARNING_GROUP)
-def chain_verify_check(
-    context: AssetExecutionContext, dynamo: DynamoResource
-) -> MaterializeResult:
+def chain_verify_check(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Nightly decision_context hash-chain verification; page on any fault."""
     from dynamo.persistence.repositories.learning import DecisionContextRepository
 

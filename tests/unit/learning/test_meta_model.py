@@ -148,9 +148,7 @@ def test_snapshot_paths_agree_on_shared_fields() -> None:
         quant_alignment=QuantAlignment.CONFLICT,
         self_critique="might be wrong",
     )
-    from_decision = snapshot_from_decision(
-        verdict, sector="tech", sleeve="long_term", vix=22.5
-    )
+    from_decision = snapshot_from_decision(verdict, sector="tech", sleeve="long_term", vix=22.5)
     from_experience = snapshot_from_experience(_exp())
     row_d = build_features(from_decision, None, [])
     row_e = build_features(from_experience, None, [])

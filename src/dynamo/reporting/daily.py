@@ -281,9 +281,7 @@ def _decision_line(verdict: Row, badges_by_symbol: dict[str, tuple[str, ...]]) -
 
 
 def _decisions(verdicts: list[Row], watchlist: list[Row]) -> Decisions:
-    badges = {
-        str(w["symbol"]): tuple(w.get("badges") or ()) for w in watchlist if w.get("badges")
-    }
+    badges = {str(w["symbol"]): tuple(w.get("badges") or ()) for w in watchlist if w.get("badges")}
     lines = sorted(
         (_decision_line(v, badges) for v in verdicts),
         key=lambda line: (-line.conviction, line.symbol),
@@ -349,8 +347,11 @@ def _trades(source: ReportSource, day: date) -> list[TradeLine]:
     return sorted(lines, key=lambda ln: (ln.filled_at, ln.market, ln.instrument, ln.side))
 
 
-_TIER_LABELS = (("haiku", "Haiku (fast screening)"), ("sonnet", "Sonnet (analysts)"),
-                ("opus", "Opus (final arbiter)"))
+_TIER_LABELS = (
+    ("haiku", "Haiku (fast screening)"),
+    ("sonnet", "Sonnet (analysts)"),
+    ("opus", "Opus (final arbiter)"),
+)
 
 
 def _tier_label(model_id: str) -> str:
@@ -537,9 +538,7 @@ def _render_glance(g: Glance, lines: list[str]) -> None:
         lines.append(f"- **Portfolio value:** {_usd(g.equity)}{change}")
     if g.cash_pct is not None:
         lines.append(f"- **Cash on hand:** {g.cash_pct:.1f}% of the portfolio")
-    ballast = (
-        f"{g.open_ballast} index ballast (idle cash at work), " if g.open_ballast else ""
-    )
+    ballast = f"{g.open_ballast} index ballast (idle cash at work), " if g.open_ballast else ""
     positions_line = (
         f"- **Open positions:** {g.open_equities} stocks, {ballast}"
         f"{g.open_crypto} crypto, "
@@ -619,9 +618,7 @@ def _render_trades(trades: list[TradeLine], lines: list[str]) -> None:
         "per contract."
     )
     if any(t.market == "polymarket-sim" for t in trades):
-        lines.append(
-            "Polymarket rows are SIMULATED — tracked internally, no real orders sent."
-        )
+        lines.append("Polymarket rows are SIMULATED — tracked internally, no real orders sent.")
     lines.append("")
     rows = [
         [
@@ -638,8 +635,16 @@ def _render_trades(trades: list[TradeLine], lines: list[str]) -> None:
     ]
     lines.extend(
         _table(
-            ["Time (UTC)", "Market", "Symbol", "Side", "Quantity", "Fill price", "Slippage",
-             "Sleeve"],
+            [
+                "Time (UTC)",
+                "Market",
+                "Symbol",
+                "Side",
+                "Quantity",
+                "Fill price",
+                "Slippage",
+                "Sleeve",
+            ],
             rows,
         )
     )
@@ -653,8 +658,15 @@ def _render_cost(c: CostSummary, lines: list[str]) -> None:
         return
     lines.extend(
         _table(
-            ["Model tier", "Calls", "Input tokens", "Output tokens", "Cache reads",
-             "Prompt from cache", "Cost"],
+            [
+                "Model tier",
+                "Calls",
+                "Input tokens",
+                "Output tokens",
+                "Cache reads",
+                "Prompt from cache",
+                "Cost",
+            ],
             [
                 [
                     t.label,
@@ -702,6 +714,7 @@ def _render_movers(movers: list[MoverLine], lines: list[str]) -> None:
     if not movers:
         _none_today(lines)
         return
+
     def _change(m: MoverLine) -> str:
         if m.prior_rank is None:
             return "new"
@@ -714,10 +727,7 @@ def _render_movers(movers: list[MoverLine], lines: list[str]) -> None:
     lines.extend(
         _table(
             ["Sleeve", "Rank", "Symbol", "Change vs prior day", "Blend score"],
-            [
-                [m.sleeve, str(m.rank), m.symbol, _change(m), f"{m.blend_score:.2f}"]
-                for m in movers
-            ],
+            [[m.sleeve, str(m.rank), m.symbol, _change(m), f"{m.blend_score:.2f}"] for m in movers],
         )
     )
     lines.append("")
@@ -759,12 +769,7 @@ def _render_surveillance(s: Surveillance, lines: list[str]) -> None:
 
 def _render_alerts(a: AlertsIssues, lines: list[str]) -> None:
     lines.append("## Alerts & issues")
-    if (
-        not a.unacked_alerts
-        and not a.quarantines
-        and not a.batch_failures
-        and not a.reconciliation
-    ):
+    if not a.unacked_alerts and not a.quarantines and not a.batch_failures and not a.reconciliation:
         _none_today(lines)
         return
     if a.unacked_alerts:
@@ -784,8 +789,10 @@ def _render_alerts(a: AlertsIssues, lines: list[str]) -> None:
         lines.append("")
     for r in a.reconciliation:
         n = len(r.get("divergences") or [])
-        status = "clean — our books match the broker" if r.get("result") == "clean" else (
-            f"{n} difference(s) found between our books and the broker"
+        status = (
+            "clean — our books match the broker"
+            if r.get("result") == "clean"
+            else (f"{n} difference(s) found between our books and the broker")
         )
         lines.append(f"- Reconciliation ({r.get('scope')}): {status}.")
     if a.reconciliation:

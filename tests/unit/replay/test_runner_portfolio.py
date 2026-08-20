@@ -120,9 +120,7 @@ def test_portfolio_mode_requires_source_run_id() -> None:
             gateway_factory=lambda d: None,  # type: ignore[arg-type,return-value]
             experience_repo=FakeExperienceRepo(),
             run_repo=FakeRunRepo(),
-            config=ReplayConfig(
-                start=date(2026, 6, 1), end=date(2026, 6, 5), mode="portfolio"
-            ),
+            config=ReplayConfig(start=date(2026, 6, 1), end=date(2026, 6, 5), mode="portfolio"),
             verdict_source=lambda run_id: [],
         )
 
@@ -146,7 +144,8 @@ def test_portfolio_mode_requires_verdict_source() -> None:
 
 
 def test_portfolio_run_never_touches_llm_or_synthesis(
-    fixture_frames: Any, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    fixture_frames: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The firewall test: a full portfolio run on fixtures with (a) the
     AnthropicClient constructor rigged to explode, (b) the quant-mode verdict
@@ -245,9 +244,7 @@ def test_same_config_twice_is_bit_identical(fixture_frames: Any) -> None:  # noq
     assert res_a.decisions == res_b.decisions
     assert res_a.equity_curve == res_b.equity_curve
     assert res_a.fills == res_b.fills
-    assert [e.model_dump() for e in exp_a.inserted] == [
-        e.model_dump() for e in exp_b.inserted
-    ]
+    assert [e.model_dump() for e in exp_a.inserted] == [e.model_dump() for e in exp_b.inserted]
 
 
 # -- run-id determinism across bankrolls -------------------------------------
@@ -262,8 +259,7 @@ def test_three_bankrolls_same_source_three_distinct_run_ids() -> None:
         "source_run_id": SOURCE_RUN_ID,
     }
     configs = [
-        ReplayConfig(**base, initial_equity=equity)
-        for equity in (1_000.0, 10_000.0, 100_000.0)
+        ReplayConfig(**base, initial_equity=equity) for equity in (1_000.0, 10_000.0, 100_000.0)
     ]
     assert len({c.run_id for c in configs}) == 3
     # Same config twice -> same run id (idempotent re-runs).
@@ -273,8 +269,6 @@ def test_three_bankrolls_same_source_three_distinct_run_ids() -> None:
     # run can never collide with the fractional run.
     sensitivity = ReplayConfig(**base, initial_equity=1_000.0, whole_shares=True)
     assert sensitivity.run_id != configs[0].run_id
-    with_commission = ReplayConfig(
-        **base, initial_equity=1_000.0, commission_per_order=1.0
-    )
+    with_commission = ReplayConfig(**base, initial_equity=1_000.0, commission_per_order=1.0)
     with_min = ReplayConfig(**base, initial_equity=1_000.0, min_order_notional=25.0)
     assert len({configs[0].run_id, with_commission.run_id, with_min.run_id}) == 3

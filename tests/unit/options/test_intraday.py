@@ -69,9 +69,7 @@ def run(
         if verdicts is not None
         else {s: make_verdict(s, action=Action.BUY) for s in promoted}
     )
-    candidates = (
-        candidates if candidates is not None else {s: candidate(s) for s in symbols}
-    )
+    candidates = candidates if candidates is not None else {s: candidate(s) for s in symbols}
     return select_intraday_entries(
         promoted_material=list(promoted),
         breakout_signals=list(signals),

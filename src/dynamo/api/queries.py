@@ -384,9 +384,7 @@ class SqlAdminStore:
         rows = _rows(self._engine, select(t).where(t.c.id == event_id))
         return rows[0] if rows else None
 
-    def ack_ladder_event(
-        self, event_id: int, acked_by: str, note: str, now: datetime
-    ) -> bool:
+    def ack_ladder_event(self, event_id: int, acked_by: str, note: str, now: datetime) -> bool:
         """Clear one drawdown-ladder halt (doc 06 §3). Never automatic."""
         from dynamo.persistence.repositories.risk import LadderEventRepository
         from dynamo.risk.ladder_response import ack_note_required

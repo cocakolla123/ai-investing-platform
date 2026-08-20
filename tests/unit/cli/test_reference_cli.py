@@ -92,9 +92,7 @@ def wired(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(reference, "_edgar", lambda _s: edgar)
     monkeypatch.setattr(reference, "_sec_reference", lambda _s: sec)
     monkeypatch.setattr(reference, "known_symbols", lambda _e: list(known))
-    monkeypatch.setattr(
-        reference, "instrument_ciks", lambda _e: {**on_file, **repo.ciks}
-    )
+    monkeypatch.setattr(reference, "instrument_ciks", lambda _e: {**on_file, **repo.ciks})
     monkeypatch.setattr(reference, "instrument_sectors", lambda _e: dict(repo.sectors))
     monkeypatch.setattr(
         reference,
@@ -138,9 +136,7 @@ def test_sectors_maps_cik_to_sic_to_gics(wired: dict[str, Any]) -> None:
         "BIOTECHCO": "Health Care",
         "REITCO": "Real Estate",
     }
-    assert repo.industries["BIOTECHCO"] == (
-        "Engineering, Accounting, Research and Management"
-    )
+    assert repo.industries["BIOTECHCO"] == ("Engineering, Accounting, Research and Management")
 
 
 def test_sectors_defaults_to_the_four_most_recent_published_quarters(
@@ -207,9 +203,19 @@ DERA_SIC = {  # only operating companies file XBRL financial statements
     "0002115436": "2911",
 }
 UNIVERSE = [
-    "AAPL", "JPM", "XOM",                      # operating companies
-    "SPY", "QQQ",                              # funds WITH a CIK
-    "IWM", "VTWO", "IEFA", "EWA", "GSY", "AVLV", "BSCZ", "ROM",  # no CIK
+    "AAPL",
+    "JPM",
+    "XOM",  # operating companies
+    "SPY",
+    "QQQ",  # funds WITH a CIK
+    "IWM",
+    "VTWO",
+    "IEFA",
+    "EWA",
+    "GSY",
+    "AVLV",
+    "BSCZ",
+    "ROM",  # no CIK
 ]
 
 
@@ -275,9 +281,7 @@ def test_classification_is_idempotent_and_total() -> None:
 @pytest.fixture
 def etf_wired(monkeypatch: pytest.MonkeyPatch) -> FakeRepo:
     repo = FakeRepo()
-    repo.sectors.update(
-        {"AAPL": "Information Technology", "JPM": "Financials", "XOM": "Energy"}
-    )
+    repo.sectors.update({"AAPL": "Information Technology", "JPM": "Financials", "XOM": "Energy"})
     monkeypatch.setattr(reference, "_repo", lambda _url: (object(), repo))
     monkeypatch.setattr(reference, "_settings", lambda: object())
     monkeypatch.setattr(reference, "known_symbols", lambda _e: list(UNIVERSE))

@@ -208,9 +208,7 @@ class FakeRiskStore:
 
     def unacked_ladder_events(self) -> list[dict[str, Any]]:
         return [
-            e
-            for e in self.ladder_event_rows
-            if e.get("requires_ack") and e.get("acked_at") is None
+            e for e in self.ladder_event_rows if e.get("requires_ack") and e.get("acked_at") is None
         ]
 
 
@@ -310,9 +308,7 @@ class FakeAdminStore:
             def record_run(self, *args: Any, **kwargs: Any) -> int:  # pragma: no cover
                 raise AssertionError("ack path never records runs")
 
-            def record_ack(
-                self, run_id: int, acked_by: str, acked_at: datetime, note: str
-            ) -> None:
+            def record_ack(self, run_id: int, acked_by: str, acked_at: datetime, note: str) -> None:
                 store.reconciliation_ack_rows.append(
                     {"run_id": run_id, "acked_by": acked_by, "at": acked_at, "note": note}
                 )
@@ -322,9 +318,7 @@ class FakeAdminStore:
     def get_ladder_event(self, event_id: int) -> dict[str, Any] | None:
         return self.ladder_events.get(event_id)
 
-    def ack_ladder_event(
-        self, event_id: int, acked_by: str, note: str, now: datetime
-    ) -> bool:
+    def ack_ladder_event(self, event_id: int, acked_by: str, note: str, now: datetime) -> bool:
         from dynamo.risk.ladder_response import ack_note_required
 
         event = self.ladder_events.get(event_id)

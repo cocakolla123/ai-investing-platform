@@ -83,9 +83,7 @@ class DefeatBetaTranscripts:
             if report_date < since:
                 continue
             paragraphs = holder.get_transcript(int(year), int(quarter))
-            transcript = _build_transcript(
-                symbol, report_date, int(year), int(quarter), paragraphs
-            )
+            transcript = _build_transcript(symbol, report_date, int(year), int(quarter), paragraphs)
             if transcript is not None:
                 out.append(transcript)
         return out

@@ -49,9 +49,7 @@ def _require_production_prerequisites(
         raise PromotionError(f"approval artifact for {target_id} failed signature/expiry checks")
     approved_target = str(approval.get("target_id", ""))
     if approved_target and approved_target != target_id:
-        raise PromotionError(
-            f"approval artifact targets {approved_target!r}, not {target_id!r}"
-        )
+        raise PromotionError(f"approval artifact targets {approved_target!r}, not {target_id!r}")
     if not evidence_bundle_ref:
         raise PromotionError(f"shadow -> production for {target_id} requires an evidence bundle")
     if not clean_tree:

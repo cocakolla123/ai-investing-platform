@@ -114,8 +114,7 @@ def build_prediction_market_views(
                 break
         if parsed is None:
             log.warning(
-                "dropping prediction-market view %s/%s: empty uncertainties/why_wrong "
-                "after retry",
+                "dropping prediction-market view %s/%s: empty uncertainties/why_wrong after retry",
                 market.venue,
                 market.market_id,
             )

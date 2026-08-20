@@ -86,9 +86,7 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 def _apply(rig: Any, frm: LadderRung, to: LadderRung, dd: float) -> int | None:
-    return pexec._apply_ladder_transition(
-        build_asset_context(), rig.dynamo, frm, to, dd, AS_OF
-    )
+    return pexec._apply_ladder_transition(build_asset_context(), rig.dynamo, frm, to, dd, AS_OF)
 
 
 def test_dd20_writes_the_kill_switch_file_and_cancels_open_orders(rig: Any) -> None:
@@ -145,9 +143,7 @@ def test_recovery_alerts_but_never_writes_the_switch_file(rig: Any) -> None:
     assert [a[0] for a in rig.dynamo.alerts] == ["info"]
 
 
-def test_a_failed_kill_switch_write_still_pages(
-    rig: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_failed_kill_switch_write_still_pages(rig: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """If the freeze cannot be performed, the operator must be told to do it."""
     import dynamo.execution.gate as gate
 

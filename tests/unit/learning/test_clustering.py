@@ -166,6 +166,4 @@ def test_proposal_ids_deterministic_for_reruns() -> None:
 
 
 def test_mapping_covers_every_failure_class_except_normal_uncertainty() -> None:
-    assert set(KIND_BY_FAILURE_CLASS) == set(FailureClass) - {
-        FailureClass.NORMAL_UNCERTAINTY
-    }
+    assert set(KIND_BY_FAILURE_CLASS) == set(FailureClass) - {FailureClass.NORMAL_UNCERTAINTY}

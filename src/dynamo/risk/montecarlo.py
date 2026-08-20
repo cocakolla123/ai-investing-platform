@@ -140,9 +140,7 @@ def run_monte_carlo(
     equity_paths = equity * growth
     terminal_loss = 1.0 - growth[:, -1]
 
-    loss_probabilities = {
-        float(x): float(np.mean(terminal_loss > float(x))) for x in loss_grid
-    }
+    loss_probabilities = {float(x): float(np.mean(terminal_loss > float(x))) for x in loss_grid}
     tail_n = max(1, round(0.05 * n_paths))
     worst = np.sort(terminal_loss)[-tail_n:]
     expected_shortfall_95 = float(np.mean(worst))
@@ -151,10 +149,7 @@ def run_monte_carlo(
     hwm = max(hwm, equity)
     min_equity = np.min(equity_paths, axis=1)
     path_dd = min_equity / hwm - 1.0
-    rung_hit = {
-        rung: float(np.mean(path_dd <= trigger))
-        for rung, trigger in RUNG_TRIGGERS.items()
-    }
+    rung_hit = {rung: float(np.mean(path_dd <= trigger)) for rung, trigger in RUNG_TRIGGERS.items()}
 
     return MonteCarloResult(
         n_paths=n_paths,

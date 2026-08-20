@@ -66,8 +66,9 @@ def _reconciler(broker: Broker, internal: FakeInternal) -> tuple[Reconciler, Fak
 
 
 def _broker_with_position(qty: float = 10, price: float = 100.0) -> MockBroker:
-    broker = MockBroker(cash=100_000.0 + qty * price, script=[ScriptStep(behavior="fill",
-                                                                         fill_price=price)])
+    broker = MockBroker(
+        cash=100_000.0 + qty * price, script=[ScriptStep(behavior="fill", fill_price=price)]
+    )
     broker.submit(make_order(coid="seed", qty=qty))
     return broker
 

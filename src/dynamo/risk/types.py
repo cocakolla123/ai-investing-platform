@@ -70,9 +70,7 @@ class ReturnsPanel:
     def tail(self, sessions: int) -> ReturnsPanel:
         if sessions >= self.n_sessions:
             return self
-        return ReturnsPanel(
-            self.dates[-sessions:], self.symbols, self.values[-sessions:, :]
-        )
+        return ReturnsPanel(self.dates[-sessions:], self.symbols, self.values[-sessions:, :])
 
 
 @dataclass(frozen=True)

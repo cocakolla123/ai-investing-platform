@@ -34,9 +34,7 @@ def test_ma_cross_positions_basic():
 
 def test_event_driven_matches_vectorized_within_half_percent():
     opens, closes = _seeded_series()
-    parity = run_parity_check(
-        opens, closes, symbol="SPY", fast=5, slow=20, cost_bps=5.0
-    )
+    parity = run_parity_check(opens, closes, symbol="SPY", fast=5, slow=20, cost_bps=5.0)
     assert parity.event_result.fills  # the strategy actually traded
     assert parity.relative_difference <= parity.tolerance, (
         f"event {parity.terminal_event_driven:.2f} vs "

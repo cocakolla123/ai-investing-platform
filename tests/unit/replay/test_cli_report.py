@@ -51,21 +51,39 @@ EQUITY: dict[str, list[float]] = {
 FILLS: dict[str, list[dict[str, Any]]] = {
     "replay-aaa": [
         {
-            "run_id": "replay-aaa", "session": DATES[1], "symbol": "AAA",
-            "side": "buy", "qty": 5.0, "price": 100.0, "trade_value": 500.0,
-            "cost": 1.0, "realized_pnl": None,
+            "run_id": "replay-aaa",
+            "session": DATES[1],
+            "symbol": "AAA",
+            "side": "buy",
+            "qty": 5.0,
+            "price": 100.0,
+            "trade_value": 500.0,
+            "cost": 1.0,
+            "realized_pnl": None,
         },
         {
-            "run_id": "replay-aaa", "session": DATES[2], "symbol": "AAA",
-            "side": "sell", "qty": 5.0, "price": 108.0, "trade_value": 540.0,
-            "cost": 1.0, "realized_pnl": 38.0,
+            "run_id": "replay-aaa",
+            "session": DATES[2],
+            "symbol": "AAA",
+            "side": "sell",
+            "qty": 5.0,
+            "price": 108.0,
+            "trade_value": 540.0,
+            "cost": 1.0,
+            "realized_pnl": 38.0,
         },
     ],
     "replay-bbb": [
         {
-            "run_id": "replay-bbb", "session": DATES[2], "symbol": "BBB",
-            "side": "sell", "qty": 10.0, "price": 50.0, "trade_value": 500.0,
-            "cost": 2.0, "realized_pnl": -20.0,
+            "run_id": "replay-bbb",
+            "session": DATES[2],
+            "symbol": "BBB",
+            "side": "sell",
+            "qty": 10.0,
+            "price": 50.0,
+            "trade_value": 500.0,
+            "cost": 2.0,
+            "realized_pnl": -20.0,
         },
     ],
 }
@@ -126,9 +144,7 @@ def test_report_committee_run_without_curve_exits_1(
 def test_report_writes_artifacts_and_prints_headline(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    rc = replay_cli.main(
-        ["report", "--run-id", "replay-aaa", "--artifact-dir", str(tmp_path)]
-    )
+    rc = replay_cli.main(["report", "--run-id", "replay-aaa", "--artifact-dir", str(tmp_path)])
     assert rc == 0
     out = capsys.readouterr().out
     assert "total return:     +5.00%" in out
@@ -138,9 +154,7 @@ def test_report_writes_artifacts_and_prints_headline(
 
 
 def test_compare_unknown_run_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
-    rc = replay_cli.main(
-        ["compare", "--run-ids", "replay-aaa", "replay-missing"]
-    )
+    rc = replay_cli.main(["compare", "--run-ids", "replay-aaa", "replay-missing"])
     assert rc == 2
     assert "not found" in capsys.readouterr().out
 
@@ -169,9 +183,7 @@ def test_compare_table_values_and_order(capsys: pytest.CaptureFixture[str]) -> N
 def test_compare_png_written_when_matplotlib_present(tmp_path: Path) -> None:
     pytest.importorskip("matplotlib")
     png = tmp_path / "compare.png"
-    rc = replay_cli.main(
-        ["compare", "--run-ids", "replay-aaa", "replay-bbb", "--png", str(png)]
-    )
+    rc = replay_cli.main(["compare", "--run-ids", "replay-aaa", "replay-bbb", "--png", str(png)])
     assert rc == 0
     assert png.exists() and png.stat().st_size > 0
 
@@ -192,9 +204,7 @@ def test_compare_png_missing_matplotlib_is_a_note_not_an_error(
 
     monkeypatch.setattr(importlib, "import_module", block_matplotlib)
     png = tmp_path / "compare.png"
-    rc = replay_cli.main(
-        ["compare", "--run-ids", "replay-aaa", "--png", str(png)]
-    )
+    rc = replay_cli.main(["compare", "--run-ids", "replay-aaa", "--png", str(png)])
     assert rc == 0
     assert "png skipped" in capsys.readouterr().out
     assert not png.exists()

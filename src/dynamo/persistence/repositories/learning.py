@@ -103,9 +103,7 @@ class DecisionContextRepository:
 
     def get(self, dc_id: str) -> DecisionContext | None:
         with self._engine.connect() as cx:
-            r = cx.execute(
-                select(decision_context).where(decision_context.c.id == dc_id)
-            ).first()
+            r = cx.execute(select(decision_context).where(decision_context.c.id == dc_id)).first()
         if r is None:
             return None
         return DecisionContext(
@@ -279,9 +277,7 @@ class JournalRepository:
                 # IS DISTINCT FROM, not !=: a NULL stamp predates the column
                 # and must stay visible, where `!=` would drop it silently.
                 stmt = stmt.where(
-                    journal_entries.c.embedding_version.is_distinct_from(
-                        HASH_FALLBACK_BACKEND
-                    )
+                    journal_entries.c.embedding_version.is_distinct_from(HASH_FALLBACK_BACKEND)
                 )
         else:
             if text_query:
@@ -312,9 +308,7 @@ class JournalRepository:
         """Entries whose vectors came from a given embedding backend — the
         input to a re-embed once a better backend is installed (entries
         written under the hash fallback are retrievable but not semantic)."""
-        stmt = select(journal_entries).where(
-            journal_entries.c.embedding_version == version
-        )
+        stmt = select(journal_entries).where(journal_entries.c.embedding_version == version)
         with self._engine.connect() as cx:
             rows = cx.execute(stmt).all()
         return [

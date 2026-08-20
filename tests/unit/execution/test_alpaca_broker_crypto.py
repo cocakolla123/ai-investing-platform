@@ -20,10 +20,8 @@ from dynamo.execution.alpaca_broker import AlpacaBroker
 class FakeTradingClient:
     def get_all_positions(self) -> Any:
         return [
-            {"symbol": "BTCUSD", "qty": "0.5", "avg_entry_price": "60000",
-             "asset_class": "crypto"},
-            {"symbol": "AAPL", "qty": "10", "avg_entry_price": "230",
-             "asset_class": "us_equity"},
+            {"symbol": "BTCUSD", "qty": "0.5", "avg_entry_price": "60000", "asset_class": "crypto"},
+            {"symbol": "AAPL", "qty": "10", "avg_entry_price": "230", "asset_class": "us_equity"},
         ]
 
 
@@ -44,9 +42,7 @@ def _order(symbol: str, order_type: OrderType, **kwargs: Any) -> Order:
 
 def test_crypto_marketable_limit_uses_gtc() -> None:
     broker = make_broker()
-    req = broker._build_request(
-        _order("BTC/USD", OrderType.MARKETABLE_LIMIT, limit_price=61_000.0)
-    )
+    req = broker._build_request(_order("BTC/USD", OrderType.MARKETABLE_LIMIT, limit_price=61_000.0))
     assert isinstance(req, LimitOrderRequest)
     assert req.time_in_force == TimeInForce.GTC  # crypto rejects DAY
     assert req.symbol == "BTC/USD"
@@ -113,8 +109,14 @@ def test_positions_normalize_crypto_symbols_for_reconciliation() -> None:
 
 def test_order_payload_normalizes_crypto_symbol() -> None:
     normalized = AlpacaBroker._normalize_order(
-        {"client_order_id": "c1", "id": "b1", "symbol": "ETHUSD",
-         "asset_class": "crypto", "qty": "0.1", "filled_qty": "0",
-         "status": "new"}
+        {
+            "client_order_id": "c1",
+            "id": "b1",
+            "symbol": "ETHUSD",
+            "asset_class": "crypto",
+            "qty": "0.1",
+            "filled_qty": "0",
+            "status": "new",
+        }
     )
     assert normalized["symbol"] == "ETH/USD"

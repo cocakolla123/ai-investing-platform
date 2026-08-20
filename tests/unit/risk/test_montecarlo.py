@@ -87,8 +87,5 @@ def test_fails_closed_on_bad_inputs() -> None:
     assert run_monte_carlo(panel, {"A": float("nan")}, **kwargs) is None
     assert run_monte_carlo(panel, {}, **kwargs) is None
     assert (
-        run_monte_carlo(
-            panel, {"A": 0.1}, equity=float("nan"), high_water_mark=1.0, seed=0
-        )
-        is None
+        run_monte_carlo(panel, {"A": 0.1}, equity=float("nan"), high_water_mark=1.0, seed=0) is None
     )

@@ -54,9 +54,7 @@ class TestNormalNight:
             symbols=symbols,
         )
         verdict = make_verdict(per_position_cap=caps(symbols))
-        target = CONSTRUCTOR.construct(
-            inputs, verdict, make_state({}), CFG, risk_config=RCFG
-        )
+        target = CONSTRUCTOR.construct(inputs, verdict, make_state({}), CFG, risk_config=RCFG)
         by = _by_symbol(target)
         assert "AAA" in by and "BBB" in by  # long-term entries admitted
         assert "TTT" in by  # tactical signal admitted in neutral regime
@@ -89,9 +87,7 @@ class TestBothSleeves:
             signals=[make_signal("AAA")],
         )
         verdict = make_verdict(per_position_cap={"AAA": 0.09})
-        target = CONSTRUCTOR.construct(
-            inputs, verdict, make_state({}), CFG, risk_config=RCFG
-        )
+        target = CONSTRUCTOR.construct(inputs, verdict, make_state({}), CFG, risk_config=RCFG)
         lots = [w for w in target.weights if w.symbol == "AAA"]
         assert {w.sleeve for w in lots} == {Sleeve.LONG_TERM, Sleeve.TACTICAL}
         assert math.fsum(w.weight for w in lots) <= 0.09 + 1e-9
@@ -109,15 +105,11 @@ class TestRiskOffRegime:
         verdict = make_verdict(
             regime=Regime.RISK_OFF, gross_cap=0.76, per_position_cap=caps(symbols)
         )
-        out = CONSTRUCTOR.construct_detailed(
-            inputs, verdict, make_state({}), CFG, risk_config=RCFG
-        )
+        out = CONSTRUCTOR.construct_detailed(inputs, verdict, make_state({}), CFG, risk_config=RCFG)
         by = _by_symbol(out.target)
         # New tactical entries blocked in risk_off (default entry regimes).
         assert "TTT" not in by
-        assert any(
-            e.symbol == "TTT" and "regime" in e.reason for e in out.exclusions
-        )
+        assert any(e.symbol == "TTT" and "regime" in e.reason for e in out.exclusions)
         assert math.fsum(by.values()) <= 0.76 + 1e-9
         # Regime-driven cash carries attribution.
         assert out.target.cash_attribution["regime"] > 0.0
@@ -132,12 +124,8 @@ class TestLadderDd8:
             signals=[make_signal("TTT")],
             symbols=symbols,
         )
-        verdict = make_verdict(
-            ladder=LadderRung.DD8, per_position_cap=caps(symbols)
-        )
-        target = CONSTRUCTOR.construct(
-            inputs, verdict, make_state({}), CFG, risk_config=RCFG
-        )
+        verdict = make_verdict(ladder=LadderRung.DD8, per_position_cap=caps(symbols))
+        target = CONSTRUCTOR.construct(inputs, verdict, make_state({}), CFG, risk_config=RCFG)
         sleeves = {w.symbol: w.sleeve for w in target.weights}
         assert all(s is not Sleeve.TACTICAL for s in sleeves.values())
         # dd8 halves the new-risk multiplier: still a valid, high-cash book.
@@ -152,15 +140,11 @@ class TestCandidateScarcity:
             verdicts=[make_cverdict("AAA", Action.BUY)],
         )
         verdict = make_verdict(per_position_cap={"AAA": 0.05})
-        target = CONSTRUCTOR.construct(
-            inputs, verdict, make_state({}), CFG, risk_config=RCFG
-        )
+        target = CONSTRUCTOR.construct(inputs, verdict, make_state({}), CFG, risk_config=RCFG)
         assert target.cash > 0.5  # never reaches down the list to "get invested"
         assert target.cash_attribution["scarcity"] > 0.0
         assert target.cash_attribution["floor"] == verdict.cash_floor
-        assert (
-            abs(math.fsum(target.cash_attribution.values()) - target.cash) < 1e-9
-        )
+        assert abs(math.fsum(target.cash_attribution.values()) - target.cash) < 1e-9
 
     def test_empty_candidate_list_yields_all_cash_no_exception(self):
         inputs = advisory(symbols=["AAA"])
@@ -217,13 +201,9 @@ class TestInfeasibleSet:
             symbols=symbols,
             sectors=dict.fromkeys(symbols, "tech"),
         )
-        verdict = make_verdict(
-            per_position_cap=caps(symbols), sector_caps={"tech": 0.10}
-        )
+        verdict = make_verdict(per_position_cap=caps(symbols), sector_caps={"tech": 0.10})
         cfg = ConstructionConfig(long_term_top_fraction=1.0)
-        target = CONSTRUCTOR.construct(
-            inputs, verdict, make_state({}), cfg, risk_config=RCFG
-        )
+        target = CONSTRUCTOR.construct(inputs, verdict, make_state({}), cfg, risk_config=RCFG)
         by = _by_symbol(target)
         assert math.fsum(by.values()) <= 0.10 + 1e-9  # sector cap held
         assert len(by) < 3  # lowest-ranked dropped, not shaved below floor
@@ -241,8 +221,6 @@ class TestInfeasibleSet:
             sigma=float("nan"),
         )
         verdict = make_verdict(vetoed=["BBB"], per_position_cap={"AAA": 0.08})
-        target = CONSTRUCTOR.construct(
-            inputs, verdict, make_state({"BBB": 0.05}), CFG
-        )
+        target = CONSTRUCTOR.construct(inputs, verdict, make_state({"BBB": 0.05}), CFG)
         assert target.cash >= verdict.cash_floor
         assert "BBB" not in _by_symbol(target)  # vetoed holding exited

@@ -230,15 +230,32 @@ class RuleBasedConstructor:
 
         # -------------------------------- step 3: sizing (delegated cascade)
         lt_lots = self._size_sleeve(
-            lt_lots, Sleeve.LONG_TERM, long_term_budget, {}, candidates, verdict, rcfg,
-            effects.risk_multiplier, effects.tactical_multiplier, vetoed, current.equity,
+            lt_lots,
+            Sleeve.LONG_TERM,
+            long_term_budget,
+            {},
+            candidates,
+            verdict,
+            rcfg,
+            effects.risk_multiplier,
+            effects.tactical_multiplier,
+            vetoed,
+            current.equity,
         )
         lt_weights = {}
         for lot in lt_lots:
             lt_weights[lot.symbol] = lt_weights.get(lot.symbol, 0.0) + lot.desired
         tac_lots = self._size_sleeve(
-            tac_lots, Sleeve.TACTICAL, tactical_budget, lt_weights, candidates, verdict,
-            rcfg, effects.risk_multiplier, effects.tactical_multiplier, vetoed,
+            tac_lots,
+            Sleeve.TACTICAL,
+            tactical_budget,
+            lt_weights,
+            candidates,
+            verdict,
+            rcfg,
+            effects.risk_multiplier,
+            effects.tactical_multiplier,
+            vetoed,
             current.equity,
         )
 
@@ -254,9 +271,7 @@ class RuleBasedConstructor:
         )
 
         # ------------------- step 4 + hard guarantee: verdict compliance pass
-        final_lots = self._clamp_to_verdict(
-            ordered, verdict, rcfg, candidates.sector_by_symbol
-        )
+        final_lots = self._clamp_to_verdict(ordered, verdict, rcfg, candidates.sector_by_symbol)
 
         # ------------------------------ step 5: idle-cash ballast overlay
         if config.ballast_symbol:
@@ -396,9 +411,7 @@ class RuleBasedConstructor:
                 )
                 continue
             if not new_risk:
-                exclusions.append(
-                    Exclusion(symbol, Sleeve.LONG_TERM, "new_risk_allowed is false")
-                )
+                exclusions.append(Exclusion(symbol, Sleeve.LONG_TERM, "new_risk_allowed is false"))
                 continue
             quality = self._quality_of(symbol, row, inputs)
             if quality is None or quality < config.quality_floor:
@@ -474,9 +487,7 @@ class RuleBasedConstructor:
                 continue
             if v is not None and v.action in _VETO_ACTIONS:
                 exclusions.append(
-                    Exclusion(
-                        symbol, Sleeve.TACTICAL, f"committee {v.action.value} vetoes signal"
-                    )
+                    Exclusion(symbol, Sleeve.TACTICAL, f"committee {v.action.value} vetoes signal")
                 )
                 continue
             if regime not in config.tactical_entry_regimes:
@@ -487,9 +498,7 @@ class RuleBasedConstructor:
                 )
                 continue
             if not new_risk:
-                exclusions.append(
-                    Exclusion(symbol, Sleeve.TACTICAL, "new_risk_allowed is false")
-                )
+                exclusions.append(Exclusion(symbol, Sleeve.TACTICAL, "new_risk_allowed is false"))
                 continue
             tac_lots.append(
                 _Lot(
@@ -521,9 +530,7 @@ class RuleBasedConstructor:
         return lt_lots, tac_lots
 
     @staticmethod
-    def _quality_of(
-        symbol: str, row: WatchlistRow, inputs: AdvisoryInputs
-    ) -> float | None:
+    def _quality_of(symbol: str, row: WatchlistRow, inputs: AdvisoryInputs) -> float | None:
         score = inputs.quality_scores.get(symbol)
         if score is not None and score.composite is not None:
             return score.composite
@@ -643,8 +650,7 @@ class RuleBasedConstructor:
         # the exact pre-ballast semantics bit-for-bit.
         tol = config.min_trade_weight if config.ballast_symbol else 1e-12
         portfolio_breach = (
-            gross > verdict.gross_exposure_cap + tol
-            or 1.0 - gross < verdict.cash_floor - tol
+            gross > verdict.gross_exposure_cap + tol or 1.0 - gross < verdict.cash_floor - tol
         )
         sector_tot: dict[str, float] = {}
         cluster_tot: dict[str, float] = {}
@@ -732,9 +738,7 @@ class RuleBasedConstructor:
             )
             if abs(delta) < config.min_trade_weight:
                 pinned[symbol] = cur_w.get(symbol, 0.0)
-                skipped.append(
-                    change.model_copy(update={"rationale": "below min trade size"})
-                )
+                skipped.append(change.model_copy(update={"rationale": "below min trade size"}))
                 continue
             cost = abs(delta) / 2.0  # one-way turnover
             if cost > remaining:
@@ -933,23 +937,17 @@ class RuleBasedConstructor:
           by the residual so compliance trims still happen).
         """
         symbol = config.ballast_symbol
-        active_total = math.fsum(
-            lot.desired for lot in final_lots if lot.desired > 0.0
-        )
+        active_total = math.fsum(lot.desired for lot in final_lots if lot.desired > 0.0)
         floor = max(verdict.cash_floor, config.ballast_cash_floor)
         investable = max(0.0, min(verdict.gross_exposure_cap, 1.0 - floor))
         residual = max(0.0, investable - active_total)
         active_sym = math.fsum(
-            lot.desired
-            for lot in final_lots
-            if lot.symbol == symbol and lot.desired > 0.0
+            lot.desired for lot in final_lots if lot.symbol == symbol and lot.desired > 0.0
         )
         held_ballast = max(0.0, cur_w.get(symbol, 0.0) - active_sym)
         vetoed = any(v.symbol == symbol for v in verdict.vetoes)
         increase_ok = (
-            verdict.new_risk_allowed
-            and effects.new_positions_allowed
-            and not verdict.degraded
+            verdict.new_risk_allowed and effects.new_positions_allowed and not verdict.degraded
         )
         # Ballast's own ladder schedule, not the active risk multiplier: a
         # CEILING on the ballast weight, so it binds whether ballast is being
@@ -1025,9 +1023,7 @@ class RuleBasedConstructor:
             delta = target - current
             # A reduction forced by a binding verdict cap is a compliance
             # clamp: mandatory and exempt from the turnover budget.
-            is_mandatory = symbol in mandatory or (
-                delta < 0.0 and symbol in verdict_clamped
-            )
+            is_mandatory = symbol in mandatory or (delta < 0.0 and symbol in verdict_clamped)
             if abs(delta) < config.min_trade_weight and not is_mandatory:
                 continue
             if delta == 0.0:
@@ -1070,11 +1066,7 @@ class RuleBasedConstructor:
         """Decompose cash into floor / vol_target / regime / scarcity (doc 07 s4)."""
         floor = verdict.cash_floor
         gap = max(0.0, (1.0 - floor) - investable)
-        regime_part = (
-            gap
-            if verdict.regime.regime in (Regime.RISK_OFF, Regime.CRISIS)
-            else 0.0
-        )
+        regime_part = gap if verdict.regime.regime in (Regime.RISK_OFF, Regime.CRISIS) else 0.0
         vol_part = gap - regime_part
         scarcity = max(cash - floor - gap, 0.0)
         return {

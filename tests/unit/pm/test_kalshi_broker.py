@@ -120,9 +120,7 @@ class TestErrorDiscipline:
 
     def test_duplicate_client_order_id(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                409, json={"error": {"message": "duplicate client_order_id"}}
-            )
+            return httpx.Response(409, json={"error": {"message": "duplicate client_order_id"}})
 
         broker = make_broker(handler)
         with pytest.raises(DuplicateClientOrderId):

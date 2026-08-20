@@ -71,18 +71,13 @@ QUARTERS = (
 
 
 def wmt_rows(tag: str = "Revenues", scale: float = 1.0) -> list[dict[str, object]]:
-    return [
-        fact("WMT", tag, period, value * scale, filed)
-        for period, value, filed in QUARTERS
-    ]
+    return [fact("WMT", tag, period, value * scale, filed) for period, value, filed in QUARTERS]
 
 
 @pytest.fixture()
 def wmt() -> pd.DataFrame:
     rows = wmt_rows()
-    rows += [
-        fact("WMT", "NetIncomeLoss", p, v * 0.03, f) for p, v, f in QUARTERS
-    ]
+    rows += [fact("WMT", "NetIncomeLoss", p, v * 0.03, f) for p, v, f in QUARTERS]
     rows += [
         fact("WMT", "Assets", "2026-04-30", 2000.0, "2026-05-29"),
         fact("WMT", "StockholdersEquity", "2026-04-30", 800.0, "2026-05-29"),
@@ -100,9 +95,7 @@ def keyed(snapshot) -> dict[str, object]:  # type: ignore[no-untyped-def]
 
 
 def refs(snapshot) -> dict[str, str]:  # type: ignore[no-untyped-def]
-    return {
-        line.key: line.source_ref for group in snapshot.groups for line in group.lines
-    }
+    return {line.key: line.source_ref for group in snapshot.groups for line in group.lines}
 
 
 # --------------------------------------------------------------------------
@@ -177,9 +170,7 @@ def test_restatement_latest_filed_at_or_before_as_of_wins() -> None:
     rows = wmt_rows()
     rows.append(fact("WMT", "Revenues", "2026-04-30", 999.0, "2026-06-01"))  # restated
     snapshot = build_fundamentals(frame(rows), symbol="WMT", as_of=AS_OF)
-    assert keyed(snapshot)["revenue_ttm"] == pytest.approx(
-        (TTM_REVENUE - 121.0 + 999.0) / 1e6
-    )
+    assert keyed(snapshot)["revenue_ttm"] == pytest.approx((TTM_REVENUE - 121.0 + 999.0) / 1e6)
     assert "filed-2026-06-01" in refs(snapshot)["revenue_ttm"]
 
 
@@ -213,14 +204,13 @@ def test_cat_equity_falls_back_to_the_noncontrolling_interest_tag() -> None:
         ),
     ]
     facts = frame(rows)
-    assert latest_value(pit_facts(facts, STAMP), "CAT", "StockholdersEquity", STAMP) != (
-        500.0
-    )
+    assert latest_value(pit_facts(facts, STAMP), "CAT", "StockholdersEquity", STAMP) != (500.0)
     snapshot = build_fundamentals(facts, symbol="CAT", as_of=AS_OF)
     values, sources = keyed(snapshot), refs(snapshot)
     assert values["shareholders_equity"] == pytest.approx(500.0 / 1e6)
-    assert "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest" in (
-        sources["shareholders_equity"]
+    assert (
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+        in (sources["shareholders_equity"])
     )
     # Liabilities are not filed either: assets - equity, with both refs cited.
     assert values["total_liabilities"] == pytest.approx(1500.0 / 1e6)
@@ -228,15 +218,10 @@ def test_cat_equity_falls_back_to_the_noncontrolling_interest_tag() -> None:
 
 
 def test_revenue_falls_back_to_the_contract_revenue_tag() -> None:
-    rows = [
-        {**r, "tag": "RevenueFromContractWithCustomerExcludingAssessedTax"}
-        for r in wmt_rows()
-    ]
+    rows = [{**r, "tag": "RevenueFromContractWithCustomerExcludingAssessedTax"} for r in wmt_rows()]
     snapshot = build_fundamentals(frame(rows), symbol="WMT", as_of=AS_OF)
     assert keyed(snapshot)["revenue_ttm"] == pytest.approx(TTM_REVENUE / 1e6)
-    assert "RevenueFromContractWithCustomerExcludingAssessedTax" in (
-        refs(snapshot)["revenue_ttm"]
-    )
+    assert "RevenueFromContractWithCustomerExcludingAssessedTax" in (refs(snapshot)["revenue_ttm"])
 
 
 # --------------------------------------------------------------------------
@@ -249,9 +234,7 @@ def test_missing_metrics_render_absent_and_never_fabricated(wmt: pd.DataFrame) -
     values = keyed(snapshot)
     assert values["cfo_ttm"] is None  # no cash-flow rows in the fixture
     assert values["fcf_ttm"] is None
-    lines = {
-        line.key: render_line(line) for group in snapshot.groups for line in group.lines
-    }
+    lines = {line.key: render_line(line) for group in snapshot.groups for line in group.lines}
     assert lines["cfo_ttm"] == "cfo_ttm: n/a"
     assert "[" not in lines["fcf_ttm"]  # no citation for a number that is not there
 
@@ -282,9 +265,7 @@ def test_deterministic_byte_identical_sections(wmt: pd.DataFrame) -> None:
             close=100.0,
             sector="Consumer Staples",
         )
-        return "\n".join(
-            render_line(line) for group in snapshot.groups for line in group.lines
-        )
+        return "\n".join(render_line(line) for group in snapshot.groups for line in group.lines)
 
     first = render()
     assert first == render()
@@ -316,9 +297,7 @@ def test_sector_percentile_needs_enough_peers(wmt: pd.DataFrame) -> None:
     peers = {}
     for i, peer in enumerate(("PEER1", "PEER2", "PEER3")):
         rows += [{**r, "symbol": peer} for r in wmt_rows()]
-        rows += [
-            fact(peer, "NetIncomeLoss", p, v * 0.03, f) for p, v, f in QUARTERS
-        ]
+        rows += [fact(peer, "NetIncomeLoss", p, v * 0.03, f) for p, v, f in QUARTERS]
         rows += [
             fact(peer, "CommonStockSharesOutstanding", "2026-04-30", 8_000_000.0, "2026-05-29")
         ]

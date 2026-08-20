@@ -111,13 +111,9 @@ def wired(monkeypatch: pytest.MonkeyPatch) -> Any:
         if "name" in cols and "sector" in cols:
             return instruments
         if cols == ["symbol", "sector"]:
-            return pd.DataFrame(
-                [{"symbol": s, "sector": sec} for s, sec in SECTORS.items()]
-            )
+            return pd.DataFrame([{"symbol": s, "sector": sec} for s, sec in SECTORS.items()])
         if "content" in cols:
-            return pd.DataFrame(
-                columns=pd.Index(["symbol", "event_date", "source", "content"])
-            )
+            return pd.DataFrame(columns=pd.Index(["symbol", "event_date", "source", "content"]))
         return pd.DataFrame({c: pd.Series(dtype="object") for c in cols})
 
     class _Repo:

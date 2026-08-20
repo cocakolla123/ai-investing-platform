@@ -47,11 +47,7 @@ def _ladder_implication(
 ) -> LadderRung | None:
     if not (np.isfinite(equity) and equity > 0.0):
         return None
-    hwm = (
-        high_water_mark
-        if np.isfinite(high_water_mark) and high_water_mark > 0.0
-        else equity
-    )
+    hwm = high_water_mark if np.isfinite(high_water_mark) and high_water_mark > 0.0 else equity
     hwm = max(hwm, equity)
     stressed = equity * (1.0 + impact_pct)
     return rung_for_drawdown(stressed / hwm - 1.0)
@@ -144,9 +140,7 @@ def synthetic_scenarios(
 ) -> list[StressResult]:
     """Synthetic shocks: -10% gap with corr -> 1, +200bps rates, single name -40%."""
     results: list[StressResult] = []
-    finite_weights = {
-        s: float(w) for s, w in weights.items() if np.isfinite(w) and w != 0.0
-    }
+    finite_weights = {s: float(w) for s, w in weights.items() if np.isfinite(w) and w != 0.0}
     gross = float(sum(abs(w) for w in finite_weights.values()))
 
     gap_impact = MARKET_GAP_SHOCK * gross
@@ -186,9 +180,7 @@ def synthetic_scenarios(
             StressResult(
                 scenario="synthetic_rates_up_200bps",
                 equity_impact_pct=rate_impact,
-                ladder_implication=_ladder_implication(
-                    rate_impact, equity, high_water_mark
-                ),
+                ladder_implication=_ladder_implication(rate_impact, equity, high_water_mark),
                 details=rate_details,
             )
         )
@@ -199,9 +191,7 @@ def synthetic_scenarios(
         StressResult(
             scenario="synthetic_single_name_down_40pct",
             equity_impact_pct=single_impact,
-            ladder_implication=_ladder_implication(
-                single_impact, equity, high_water_mark
-            ),
+            ladder_implication=_ladder_implication(single_impact, equity, high_water_mark),
             details={"largest_weight": max(largest, 0.0)},
         )
     )
@@ -221,7 +211,5 @@ def run_stress_suite(
         replay_window(w, panel, weights, equity, high_water_mark, market_proxy)
         for w in HISTORICAL_WINDOWS
     ]
-    results.extend(
-        synthetic_scenarios(panel, weights, equity, high_water_mark, tlt_symbol)
-    )
+    results.extend(synthetic_scenarios(panel, weights, equity, high_water_mark, tlt_symbol))
     return results

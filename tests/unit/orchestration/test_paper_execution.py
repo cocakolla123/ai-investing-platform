@@ -197,9 +197,7 @@ class MemoryLadderEvents:
         return event_id
 
     def unacked_blocking(self) -> list[dict[str, Any]]:
-        return [
-            e for e in self.events if e.get("requires_ack") and e.get("acked_at") is None
-        ]
+        return [e for e in self.events if e.get("requires_ack") and e.get("acked_at") is None]
 
     def is_halted(self) -> bool:
         return bool(self.unacked_blocking())
@@ -216,8 +214,12 @@ class MemoryLadderEvents:
 
     def halt(self, rung: str = "dd8") -> int:
         return self.record(
-            as_of=TODAY, from_rung="normal", to_rung=rung, drawdown=-0.09,
-            requires_ack=True, kill_switch_engaged=False,
+            as_of=TODAY,
+            from_rung="normal",
+            to_rung=rung,
+            drawdown=-0.09,
+            requires_ack=True,
+            kill_switch_engaged=False,
         )
 
 
@@ -311,9 +313,7 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     monkeypatch.setattr(exec_repos, "TradeRepository", lambda _e: w.trades)
     monkeypatch.setattr(exec_repos, "PositionRepository", lambda _e: w.positions)
     monkeypatch.setattr(exec_repos, "ReconciliationRepository", lambda _e: w.reconciliation)
-    monkeypatch.setattr(
-        learn_repos, "DecisionContextRepository", lambda _e: w.decision_contexts
-    )
+    monkeypatch.setattr(learn_repos, "DecisionContextRepository", lambda _e: w.decision_contexts)
     monkeypatch.setattr(risk_repos, "LadderEventRepository", lambda _e: w.ladder_events)
     monkeypatch.setattr(pexec, "_broker", lambda _d: w.broker)
 
@@ -429,9 +429,7 @@ def test_live_mode_without_an_approval_submits_nothing(
 
     assert wiring.broker.submit_calls == 0
     # Refused, not silently dropped: both orders wait for a human.
-    assert all(
-        o.state == OrderState.PENDING_APPROVAL for o in wiring.orders.orders.values()
-    )
+    assert all(o.state == OrderState.PENDING_APPROVAL for o in wiring.orders.orders.values())
     # And had one been approved, the wired gate would still refuse it: no
     # approval artifact exists on disk for today.
     gate = pexec._equity_gate(live)
@@ -659,7 +657,11 @@ def test_acknowledging_the_rung_lets_trading_resume(
 def test_a_rung_that_needs_no_ack_does_not_halt(wiring: Any) -> None:
     """DD5 warns; it does not require a human before the next order."""
     wiring.ladder_events.record(
-        as_of=TODAY, from_rung="normal", to_rung="dd5", drawdown=-0.06,
-        requires_ack=False, kill_switch_engaged=False,
+        as_of=TODAY,
+        from_rung="normal",
+        to_rung="dd5",
+        drawdown=-0.06,
+        requires_ack=False,
+        kill_switch_engaged=False,
     )
     assert _ladder_halt_active(wiring.dynamo) is False

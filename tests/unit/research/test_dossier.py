@@ -104,9 +104,7 @@ def test_fundamentals_section_renders_every_line_with_its_citation() -> None:
     context = build(fundamentals=snapshot)
     section = context.split("## Fundamentals", 1)[1].split("## Quant score", 1)[0]
     assert "basis: point-in-time XBRL facts filed <= 2026-08-03" in section
-    assert (
-        "total_assets: 5.0M USD [xbrl:ACME:Assets:2026-03-31:filed-2026-04-30]" in section
-    )
+    assert "total_assets: 5.0M USD [xbrl:ACME:Assets:2026-03-31:filed-2026-04-30]" in section
     assert "revenue_ttm: n/a" in section  # absent, not invented
 
 

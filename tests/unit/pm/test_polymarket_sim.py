@@ -288,9 +288,7 @@ class TestSettlement:
     def test_unresolved_markets_are_held(self) -> None:
         position = make_position(MARKET).model_copy(update={"venue": "polymarket"})
         trades, closer, ledger = FakePMTradeStore(), FakePositionStore(), FakeLedger()
-        settlements, realized = settle_sim_positions(
-            [position], {}, trades, closer, ledger, NOW
-        )
+        settlements, realized = settle_sim_positions([position], {}, trades, closer, ledger, NOW)
         assert (settlements, realized) == (0, 0.0)
         assert trades.trades == [] and closer.closed == []
 

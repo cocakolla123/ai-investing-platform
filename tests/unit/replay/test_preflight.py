@@ -63,9 +63,7 @@ class FakeReads:
             return list(self.surveillance)
         return list(self.universe)
 
-    def symbols_with_bars(
-        self, symbols: Sequence[str], start: date, end: date
-    ) -> set[str]:
+    def symbols_with_bars(self, symbols: Sequence[str], start: date, end: date) -> set[str]:
         self.bar_queries.append((start, end))
         missing: set[str] = set()
         for anchor, syms in self.bars_missing_at.items():
@@ -99,12 +97,15 @@ class FakeReads:
 SPLIT_DAY = date(2026, 3, 4)
 
 
-def audit_frame(symbol: str, closes: list[float], *, source: str = "alpaca",
-                adj: bool = False) -> pd.DataFrame:
+def audit_frame(
+    symbol: str, closes: list[float], *, source: str = "alpaca", adj: bool = False
+) -> pd.DataFrame:
     """A stored-bar frame shaped like `bars_for_adjustment_audit`, whose
     third session is SPLIT_DAY."""
-    stamps = [datetime.combine(SPLIT_DAY, datetime.min.time(), tzinfo=UTC)
-              + timedelta(days=i - 2) for i in range(len(closes))]
+    stamps = [
+        datetime.combine(SPLIT_DAY, datetime.min.time(), tzinfo=UTC) + timedelta(days=i - 2)
+        for i in range(len(closes))
+    ]
     return pd.DataFrame(
         {
             "symbol": symbol,
@@ -248,9 +249,7 @@ def test_quant_model_loader_failure_is_an_error(monkeypatch: pytest.MonkeyPatch)
     def bundle_from_version(version: str) -> Any:
         raise LookupError(f"unknown model version {version!r}")
 
-    monkeypatch.setattr(
-        training, "bundle_from_version", bundle_from_version, raising=False
-    )
+    monkeypatch.setattr(training, "bundle_from_version", bundle_from_version, raising=False)
     cfg = config()
     object.__setattr__(cfg, "quant_model_version", "campaign-v1")
     with pytest.raises(pf.PreflightError) as exc:
@@ -284,9 +283,7 @@ def _loadable(monkeypatch: pytest.MonkeyPatch, metrics: dict[str, Any] | Excepti
     """The bundle loads; its manifest metrics are whatever the test says."""
     import dynamo.research.quant.training as training
 
-    monkeypatch.setattr(
-        training, "bundle_from_version", lambda version: object(), raising=False
-    )
+    monkeypatch.setattr(training, "bundle_from_version", lambda version: object(), raising=False)
 
     def read(version: str) -> Any:
         if isinstance(metrics, Exception):
@@ -409,9 +406,7 @@ def test_source_run_must_be_committee_mode_and_covering() -> None:
 
 
 def test_source_run_window_not_covering_is_an_error() -> None:
-    reads = FakeReads(
-        runs={"replay-src": _committee_run(end=END - timedelta(days=1))}
-    )
+    reads = FakeReads(runs={"replay-src": _committee_run(end=END - timedelta(days=1))})
     with pytest.raises(pf.PreflightError) as exc:
         pf.run_preflight(reads, config(source_run_id="replay-src", mode="portfolio"))
     assert "does not cover" in errors_of(exc.value)["source_run"]
@@ -524,9 +519,7 @@ def test_a_source_declared_unadjusted_fails_without_needing_a_split(
 ) -> None:
     """The declared half of the check: no corporate action required."""
     monkeypatch.setattr(pf, "UNADJUSTED_BAR_SOURCES", frozenset({"rawvendor"}))
-    reads = FakeReads(
-        audit_bars=audit_frame(SYMBOLS[0], [50.0] * 4, source="rawvendor", adj=False)
-    )
+    reads = FakeReads(audit_bars=audit_frame(SYMBOLS[0], [50.0] * 4, source="rawvendor", adj=False))
     with pytest.raises(pf.PreflightError) as exc:
         pf.run_preflight(reads, config())
     assert "declared unadjusted" in errors_of(exc.value)["bar_adjustment"]
@@ -536,9 +529,7 @@ def test_a_declared_raw_source_carrying_adj_close_is_accepted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(pf, "UNADJUSTED_BAR_SOURCES", frozenset({"rawvendor"}))
-    reads = FakeReads(
-        audit_bars=audit_frame(SYMBOLS[0], [50.0] * 4, source="rawvendor", adj=True)
-    )
+    reads = FakeReads(audit_bars=audit_frame(SYMBOLS[0], [50.0] * 4, source="rawvendor", adj=True))
     report = pf.run_preflight(reads, config())
     assert next(c for c in report.checks if c.name == "bar_adjustment").status == pf.OK
 
@@ -546,7 +537,7 @@ def test_a_declared_raw_source_carrying_adj_close_is_accepted(
 def test_a_symbol_with_a_second_adjusted_feed_is_not_flagged_as_raw(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """"Only" matters: a symbol that also has an adjusted row has an adjusted
+    """ "Only" matters: a symbol that also has an adjusted row has an adjusted
     close available through the canonical view."""
     monkeypatch.setattr(pf, "UNADJUSTED_BAR_SOURCES", frozenset({"rawvendor"}))
     frame = pd.concat(

@@ -10,9 +10,7 @@ from dynamo.domain.models.market import NewsItem
 AS_OF = datetime(2026, 8, 4, 22, 30, tzinfo=UTC)
 
 
-def make_items(
-    symbol: str, *, days_ago: int, count: int, source: str = "reddit"
-) -> list[NewsItem]:
+def make_items(symbol: str, *, days_ago: int, count: int, source: str = "reddit") -> list[NewsItem]:
     # +30min keeps day-14 items inside the strict lookback window while
     # staying on the intended calendar day; day-0 items must precede as_of.
     offset = timedelta(minutes=-30) if days_ago == 0 else timedelta(minutes=30)

@@ -635,9 +635,7 @@ def _cmd_bars(args: argparse.Namespace) -> int:
     return 0
 
 
-def _bars_alpaca(
-    args: argparse.Namespace, settings: Any, repo: Any, symbols: list[str]
-) -> int:
+def _bars_alpaca(args: argparse.Namespace, settings: Any, repo: Any, symbols: list[str]) -> int:
     """Wide, batched, resumable Alpaca daily-bar backfill.
 
     Many symbols per request (``--chunk-size``, the adapter passes the list
@@ -727,9 +725,7 @@ def _fetch_bar_chunk(
 def _cmd_fundamentals(args: argparse.Namespace) -> int:
     settings = _settings()
     repo = _repo(args.database_url)
-    symbols = (
-        list(args.symbols) if args.symbols else _universe_symbols(repo, date.today())
-    )
+    symbols = list(args.symbols) if args.symbols else _universe_symbols(repo, date.today())
     symbols, crypto = _split_crypto(symbols)
     if crypto:
         print(f"fundamentals: crypto pairs have no EDGAR filings — skipped: {crypto}")
@@ -768,13 +764,9 @@ def _cmd_fundamentals(args: argparse.Namespace) -> int:
         total += rows
         print(f"fundamentals: {sym} (CIK {ciks[sym]}): {rows} facts")
     if no_facts:
-        print(
-            f"fundamentals: no us-gaap companyfacts for {no_facts} "
-            "(ETF/trust filers) — skipped"
-        )
+        print(f"fundamentals: no us-gaap companyfacts for {no_facts} (ETF/trust filers) — skipped")
     print(
-        f"fundamentals backfill complete: {total} facts across "
-        f"{len(ciks) - len(no_facts)} symbols"
+        f"fundamentals backfill complete: {total} facts across {len(ciks) - len(no_facts)} symbols"
     )
     return 0
 
@@ -910,9 +902,7 @@ def _cmd_universe_wide(args: argparse.Namespace) -> int:
     # `upsert_rows` builds an ON CONFLICT DO UPDATE touching those columns
     # ONLY — existing cik/sector/industry/status survive untouched (the same
     # pattern seed_instrument_ciks / seed_instrument_sectors rely on).
-    inst_rows = [
-        {"symbol": i.symbol, "name": i.name, "exchange": i.exchange} for i in candidates
-    ]
+    inst_rows = [{"symbol": i.symbol, "name": i.name, "exchange": i.exchange} for i in candidates]
     n_inst = repo.upsert_rows(schema.instruments, inst_rows)
     print(f"instruments: {n_inst} rows upserted (name/exchange only; cik/sector preserved)")
 
@@ -1118,9 +1108,7 @@ def _cmd_transcripts(args: argparse.Namespace) -> int:
         )
         return 1
     repo = _repo(args.database_url)
-    symbols = (
-        list(args.symbols) if args.symbols else _universe_symbols(repo, date.today())
-    )
+    symbols = list(args.symbols) if args.symbols else _universe_symbols(repo, date.today())
     symbols, crypto = _split_crypto(symbols)
     if crypto:
         print(f"transcripts: crypto pairs have no earnings calls — skipped: {crypto}")
@@ -1131,9 +1119,7 @@ def _cmd_transcripts(args: argparse.Namespace) -> int:
     rows = repo.upsert_transcripts(fetched)
     linked = 0
     for transcript in fetched:
-        linked += repo.link_transcript_ref(
-            transcript.symbol, transcript.event_date, transcript.ref
-        )
+        linked += repo.link_transcript_ref(transcript.symbol, transcript.event_date, transcript.ref)
     print(
         f"transcripts backfill complete: {rows} transcripts across "
         f"{len(symbols)} symbols since {args.since} "

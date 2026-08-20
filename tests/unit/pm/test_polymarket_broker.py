@@ -151,8 +151,9 @@ class TestSubmit:
     def test_maps_order_to_clob_token_price_size(self) -> None:
         client = FakeClobClient(post_order={"success": True, "orderID": "clob-1"})
         broker = make_broker(client)
-        order = make_pm_order(market_id="500001", side=PMSide.YES, contracts=10,
-                              limit_price_cents=43)
+        order = make_pm_order(
+            market_id="500001", side=PMSide.YES, contracts=10, limit_price_cents=43
+        )
         assert broker.submit(order) == "clob-1"
         name, args = client.calls[0]
         assert name == "create_order"
@@ -164,8 +165,7 @@ class TestSubmit:
     def test_no_side_uses_no_token(self) -> None:
         client = FakeClobClient(post_order={"success": True, "orderID": "clob-2"})
         broker = make_broker(client)
-        order = make_pm_order(market_id="500001", side=PMSide.NO, contracts=5,
-                              limit_price_cents=57)
+        order = make_pm_order(market_id="500001", side=PMSide.NO, contracts=5, limit_price_cents=57)
         broker.submit(order)
         _name, args = client.calls[0]
         payload = args if isinstance(args, dict) else vars(args)
@@ -283,16 +283,22 @@ class TestCancelAndOrders:
 
     def test_get_order_matched_maps_to_filled(self) -> None:
         client = FakeClobClient(
-            get_order={"id": "c", "status": "MATCHED", "original_size": 3,
-                       "size_matched": 3, "price": 0.5}
+            get_order={
+                "id": "c",
+                "status": "MATCHED",
+                "original_size": 3,
+                "size_matched": 3,
+                "price": 0.5,
+            }
         )
         broker = make_broker(client, lookup=lambda coid: "c")
         assert broker.get_order("pm-1")["status"] == "filled"
 
     def test_open_orders_normalized(self) -> None:
         client = FakeClobClient(
-            get_orders=[{"id": "a", "status": "LIVE", "original_size": 1,
-                         "size_matched": 0, "price": 0.2}]
+            get_orders=[
+                {"id": "a", "status": "LIVE", "original_size": 1, "size_matched": 0, "price": 0.2}
+            ]
         )
         broker = make_broker(client)
         orders = broker.open_orders()

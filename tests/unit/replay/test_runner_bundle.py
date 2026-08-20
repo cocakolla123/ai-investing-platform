@@ -38,9 +38,7 @@ class StaticModel:
         return self
 
     def predict(self, x: Any) -> np.ndarray:
-        return np.asarray(
-            [self._by_symbol.get(str(s), float("nan")) for s in x.index], dtype=float
-        )
+        return np.asarray([self._by_symbol.get(str(s), float("nan")) for s in x.index], dtype=float)
 
     def feature_importances(self) -> dict[str, float]:
         return {}
@@ -104,9 +102,7 @@ def test_version_set_scores_through_injected_bundle(fixture_frames: Any) -> None
     assert factory_calls == ["campaign-v1"]  # loaded ONCE at run start
     # The bundle produced real expected excess returns -> BUY verdicts,
     # fills, and experiences stamped with the bundle's model version.
-    verdict_rows = [
-        d for d in res.decisions if d["payload"]["verdict"] is not None
-    ]
+    verdict_rows = [d for d in res.decisions if d["payload"]["verdict"] is not None]
     assert verdict_rows, "bundle scores must synthesize verdicts"
     assert any(f.side == "buy" for f in res.fills)
     assert res.experiences
@@ -140,7 +136,9 @@ def test_config_hash_and_run_id_differ_with_model_version() -> None:
 
 
 def test_default_factory_is_the_artifact_loader_and_fails_loud(
-    fixture_frames: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    fixture_frames: Any,  # noqa: F811
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No injected factory -> ``bundle_from_version`` resolves the version;
     an unknown version dies BEFORE create_run writes anything."""
@@ -149,9 +147,7 @@ def test_default_factory_is_the_artifact_loader_and_fails_loud(
     monkeypatch.setattr(
         bundle_mod,
         "bundle_from_version",
-        lambda version, artifact_dir=None, **kw: bundle_mod.read_bundle_manifest(
-            tmp_path, version
-        ),
+        lambda version, artifact_dir=None, **kw: bundle_mod.read_bundle_manifest(tmp_path, version),
     )
     sessions, bars, scores = fixture_frames
     window = sessions[-RUN_SESSIONS:]
@@ -181,8 +177,6 @@ def test_quant_scores_for_prefers_persisted_then_bundle(fixture_frames: Any) -> 
     got = quant_scores_for(gw, UNIVERSE, day, 5, bundle=_stub_bundle("campaign-v1"))
     assert {s.model_version for s in got.values()} == {"test-v1"}
     gw_empty = NoPersistedScoresGateway(day, bars, scores)
-    got_bundle = quant_scores_for(
-        gw_empty, UNIVERSE, day, 5, bundle=_stub_bundle("campaign-v1")
-    )
+    got_bundle = quant_scores_for(gw_empty, UNIVERSE, day, 5, bundle=_stub_bundle("campaign-v1"))
     assert {s.model_version for s in got_bundle.values()} == {"campaign-v1"}
     assert all(s.expected_excess_return is not None for s in got_bundle.values())
