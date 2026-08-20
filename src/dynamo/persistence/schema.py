@@ -198,6 +198,34 @@ earnings_estimate_vintages = Table(
     Column("revenue_est", Float),
 )
 
+# FINRA consolidated short interest (migration 0020). Bi-monthly cycles from
+# api.finra.org — free, no key.
+#
+# TWO DATE COLUMNS, AND THE READ BOUND IS THE SECOND ONE. ``settlement_date``
+# is what the figures describe; ``publication_date`` is when FINRA actually
+# disseminated them, ~8 days later. A point-in-time read filters
+# ``publication_date <= as_of``: filtering on the settlement date would let a
+# backtest see a cycle a week and a half before it existed. The primary key is
+# (symbol, settlement_date) so a re-run of the same cycle upserts in place, and
+# ``publication_date`` is indexed because it is what every read bounds on.
+short_interest = Table(
+    "short_interest",
+    metadata,
+    Column("symbol", Text, primary_key=True),
+    Column("settlement_date", Date, primary_key=True),
+    Column("publication_date", Date, nullable=False, index=True),
+    Column("shares_short", Float, nullable=False),
+    Column("previous_shares_short", Float),
+    Column("avg_daily_volume", Float),
+    Column("days_to_cover", Float),
+    Column("change_pct", Float),
+    Column("market_class", Text),
+    Column("issue_name", Text),
+    Column("split_flag", Text),
+    Column("revision_flag", Text),
+    Column("fetched_at", DateTime(timezone=True)),
+)
+
 # Earnings-call transcripts (migration 0006). ``earnings_events`` rows point
 # here via call_transcript_ref = 'transcripts:{symbol}:{event_date}:{source}'.
 transcripts = Table(

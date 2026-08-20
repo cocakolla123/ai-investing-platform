@@ -82,6 +82,7 @@ GROUP_TARGETS: dict[str, int] = {
     "accumulation": 4,
     "momentum_quality": 3,
     "attention": 1,
+    "shortinterest": 3,
 }
 
 # Accumulation / distribution (group 12).
@@ -118,6 +119,9 @@ class FeatureInputs:
     news: [symbol | symbols, published_at] (either one symbol per row or the
         stored ARRAY column, which is exploded) — attention proxy and the
         "was this volume explained?" input
+    short_interest: [symbol, settlement_date, publication_date, shares_short,
+        previous_shares_short, avg_daily_volume, days_to_cover] — FINRA
+        cycles; read on publication_date, NEVER on settlement_date
     sector_map: symbol -> sector ETF ticker (also the peer-group key)
     """
 
@@ -129,6 +133,7 @@ class FeatureInputs:
     regime: pd.Series | None = None
     earnings_calendar: pd.DataFrame | None = None
     news: pd.DataFrame | None = None
+    short_interest: pd.DataFrame | None = None
     sector_map: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -1539,6 +1544,119 @@ def _news_count_60d(ctx: FeatureContext) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
+# Group 15 — short interest (FINRA, bi-monthly)
+# ---------------------------------------------------------------------------
+#
+# New data, not a new transform: no short-interest series existed anywhere in
+# the platform before ``dynamo.data.finra``. Crowding and the mechanics of
+# covering are a genuinely different axis from price and volume — and rising
+# short interest INTO a rising price is a specific, well-known setup that no
+# existing feature can express.
+#
+# THE POINT-IN-TIME RULE, RESTATED WHERE IT IS ENFORCED. A cycle describes
+# ``settlement_date`` but is not disseminated until ``publication_date``, some
+# eight days later. Everything below filters on the PUBLICATION date. Filtering
+# on the settlement date would hand a backtest a week and a half of the future
+# on every cycle, twice a month, for free — the single easiest way to
+# manufacture a beautiful and completely fake short-interest signal.
+
+
+def _short_interest_latest(ctx: FeatureContext) -> pd.DataFrame:
+    """The most recent PUBLISHED cycle per symbol, indexed by symbol."""
+    si = ctx.inputs.short_interest
+    required = {"symbol", "settlement_date", "publication_date", "shares_short"}
+    empty = pd.DataFrame(columns=pd.Index(sorted(required)))
+    if si is None or si.empty or not required <= set(si.columns):
+        return empty
+    df = si.copy()
+    df["settlement_date"] = dt_naive_utc(df["settlement_date"])
+    df["publication_date"] = dt_naive_utc(df["publication_date"])
+    visible = _rows(df, df["publication_date"] <= ctx.as_of)
+    if visible.empty:
+        return empty
+    ordered = visible.sort_values(["symbol", "settlement_date", "publication_date"])
+    return cast(pd.DataFrame, ordered.groupby("symbol").last())
+
+
+def _short_interest_column(latest: pd.DataFrame, name: str) -> pd.Series:
+    if name not in latest.columns:
+        return pd.Series(dtype=float)
+    return cast(pd.Series, latest[name]).astype(float)
+
+
+def _short_interest_pct_float(ctx: FeatureContext) -> pd.Series:
+    """Shares short as a fraction of shares outstanding.
+
+    Shares outstanding come from the same point-in-time XBRL path every other
+    fundamental feature uses (``filed_at <= as_of``), so both legs of the
+    ratio are honest. True free float would be better than shares outstanding
+    — insider and strategic holdings are not really shortable — but no free
+    float source is wired up, and the difference is a roughly constant
+    per-name scale factor that cross-sectional normalization largely absorbs.
+    """
+    latest = _short_interest_latest(ctx)
+    if latest.empty:
+        return _nan_series(ctx)
+    shorts = _short_interest_column(latest, "shares_short")
+    facts = pit_facts(ctx.inputs.fundamentals, ctx.as_of)
+    out: dict[str, float] = {}
+    for sym in ctx.universe:
+        if sym not in shorts.index:
+            out[sym] = float("nan")
+            continue
+        shares = shares_outstanding(facts, sym, ctx.as_of)
+        short = float(shorts[sym])
+        out[sym] = short / shares if shares > 0 and math.isfinite(short) else float("nan")
+    return pd.Series(out, dtype=float).reindex(ctx.universe)
+
+
+def _days_to_cover(ctx: FeatureContext) -> pd.Series:
+    """Sessions of average volume needed to buy the short position back.
+
+    FINRA computes and publishes this; it is recomputed from the raw
+    quantities only when the published field is missing or the file reports a
+    zero average daily volume (FINRA then emits a 999.99 sentinel, which is
+    not a number of days and is dropped rather than trusted).
+    """
+    latest = _short_interest_latest(ctx)
+    if latest.empty:
+        return _nan_series(ctx)
+    published = _short_interest_column(latest, "days_to_cover")
+    shorts = _short_interest_column(latest, "shares_short")
+    adv = _short_interest_column(latest, "avg_daily_volume")
+    out: dict[str, float] = {}
+    for sym in ctx.universe:
+        if sym not in shorts.index:
+            out[sym] = float("nan")
+            continue
+        volume = float(adv[sym]) if sym in adv.index else float("nan")
+        if not (math.isfinite(volume) and volume > 0):
+            out[sym] = float("nan")  # 999.99 sentinel territory
+            continue
+        value = float(published[sym]) if sym in published.index else float("nan")
+        out[sym] = value if math.isfinite(value) else float(shorts[sym]) / volume
+    return pd.Series(out, dtype=float).reindex(ctx.universe)
+
+
+def _short_interest_change(ctx: FeatureContext) -> pd.Series:
+    """Change in the short position versus the previous cycle.
+
+    Read off the row itself (FINRA publishes the prior cycle's unadjusted
+    position alongside the current one), so both numbers were disseminated at
+    the same instant and the feature needs no second point-in-time join.
+    """
+    latest = _short_interest_latest(ctx)
+    if latest.empty:
+        return _nan_series(ctx)
+    current = _short_interest_column(latest, "shares_short")
+    previous = _short_interest_column(latest, "previous_shares_short")
+    if previous.empty:
+        return _nan_series(ctx)
+    prior = previous.where(previous > 0)
+    return _finite(current / prior - 1.0).reindex(ctx.universe)
+
+
+# ---------------------------------------------------------------------------
 # The catalog
 # ---------------------------------------------------------------------------
 
@@ -1661,6 +1779,10 @@ def _specs() -> list[FeatureSpec]:
         ),
         # 14 — attention (1)
         s("news_count_60d", "attention", NEWS_WINDOW_DAYS, _news_count_60d),
+        # 15 — short interest (3) — bi-monthly cycles, read on publication date
+        s("short_interest_pct_float", "shortinterest", 60, _short_interest_pct_float),
+        s("days_to_cover", "shortinterest", 60, _days_to_cover),
+        s("short_interest_change", "shortinterest", 60, _short_interest_change),
     ]
 
 
@@ -1711,15 +1833,21 @@ _NON_ISSUER_FEATURES = frozenset(
 # it, so the two attention-dependent columns are structurally NaN for crypto
 # rather than a data gap it should be charged for.
 _NO_NEWS_FEED_FEATURES = frozenset({"news_count_60d", "unusual_volume_no_news"})
+# An index fund files no XBRL, so it has no share count to express short
+# interest as a percentage of — but it IS in FINRA's file, so days-to-cover
+# and the change in short interest apply to it normally.
+_NO_SHARE_COUNT_FEATURES = frozenset({"short_interest_pct_float"})
 
 INAPPLICABLE_GROUPS: Mapping[str, frozenset[str]] = {
     ASSET_CLASS_EQUITY: frozenset(),
     ASSET_CLASS_ETF: _NON_ISSUER_GROUPS,
-    ASSET_CLASS_CRYPTO: _NON_ISSUER_GROUPS,
+    # A crypto pair is not an exchange-listed security: it appears in no FINRA
+    # short-interest file at all, so the whole group is structurally absent.
+    ASSET_CLASS_CRYPTO: _NON_ISSUER_GROUPS | frozenset({"shortinterest"}),
 }
 INAPPLICABLE_FEATURES: Mapping[str, frozenset[str]] = {
     ASSET_CLASS_EQUITY: frozenset(),
-    ASSET_CLASS_ETF: _NON_ISSUER_FEATURES,
+    ASSET_CLASS_ETF: _NON_ISSUER_FEATURES | _NO_SHARE_COUNT_FEATURES,
     ASSET_CLASS_CRYPTO: _NON_ISSUER_FEATURES | _NO_NEWS_FEED_FEATURES,
 }
 

@@ -103,13 +103,14 @@ def _revisions() -> dict[str, str | None]:
     return out
 
 
-def test_migration_0019_chains_onto_0018_with_a_single_head() -> None:
+def test_the_alpha_rails_migration_still_sits_in_a_single_linear_chain() -> None:
     revs = _revisions()
     assert revs["0018"] == "0017"
     assert revs["0019"] == "0018"
+    assert revs["0020"] == "0019"
     downs = {d for d in revs.values() if d is not None}
     heads = set(revs) - downs
-    assert heads == {"0019"}
+    assert len(heads) == 1, f"migration chain forked: {heads}"
 
 
 def test_schema_has_hypotheses_table_with_required_columns() -> None:

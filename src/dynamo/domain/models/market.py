@@ -115,6 +115,30 @@ class MacroPoint(Frozen):
     vintage_ts: datetime
 
 
+class ShortInterest(Frozen):
+    """One FINRA consolidated short-interest cycle for one symbol.
+
+    TWO DATES, DELIBERATELY. ``settlement_date`` is what the figures describe;
+    ``publication_date`` is when FINRA disseminated them, roughly eight days
+    later. Reads MUST bound on ``publication_date`` — bounding on the
+    settlement date hands a backtest a week and a half of the future. See
+    :mod:`dynamo.data.finra` for how the publication date is derived.
+    """
+
+    symbol: str
+    settlement_date: date
+    publication_date: date
+    shares_short: float
+    previous_shares_short: float | None = None
+    avg_daily_volume: float | None = None
+    days_to_cover: float | None = None
+    change_pct: float | None = None
+    market_class: str | None = None
+    issue_name: str | None = None
+    split_flag: str | None = None  # "S" when the cycle spans a stock split
+    revision_flag: str | None = None  # "R" when the prior cycle was revised
+
+
 class EarningsEvent(Frozen):
     symbol: str
     event_date: date
