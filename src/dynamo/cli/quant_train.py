@@ -915,18 +915,31 @@ def main(argv: list[str] | None = None) -> int:
         f"(last {HORIZON_SESSIONS} are label-horizon only)",
         flush=True,
     )
+    # Benchmarks are INPUTS, never rows. Labels already loaded them; features
+    # did not, and `_rs_20d_sector` computes `ret20[sym] - ret20[etf]` against
+    # `ctx.price` -- so with no XLK/XLF/... column it returned NaN for every
+    # symbol on every session. Measured: rs_20d_sector 0.0% coverage across
+    # 1,315 names. `build_features(inputs, as_of, universe)` takes the emitted
+    # universe separately, so widening the INPUT symbols adds the benchmark
+    # price columns without adding benchmark rows or perturbing the
+    # cross-sectional normalization, which happens after reindex(universe).
+    benchmarks = sorted({*sector_map.values(), BENCHMARK_FALLBACK})
+    feature_symbols = sorted({*universe, *benchmarks})
     label_bars = gw_end.bars(
-        sorted({*universe, *sector_map.values(), BENCHMARK_FALLBACK}),
+        feature_symbols,
         (args.train_end - args.train_start).days + 60,
     )
     cache = None
     if not args.no_cache:
         from dynamo.research.quant.panel_cache import PanelFeatureCache
 
-        cache = PanelFeatureCache(Path(Settings().artifact_dir) / "panel_cache", universe)
+        # Keyed on the INPUT symbols, not the emitted universe: the frames
+        # depend on every price column that fed them, so a run that adds
+        # benchmark inputs must not reuse frames built without them.
+        cache = PanelFeatureCache(Path(Settings().artifact_dir) / "panel_cache", feature_symbols)
         print(f"panel cache: {cache.directory} (bypass with --no-cache)", flush=True)
     panel = build_panel(
-        lambda d: HistoricalDataGateway(engine, d).feature_inputs(universe),
+        lambda d: HistoricalDataGateway(engine, d).feature_inputs(feature_symbols),
         label_bars,
         sector_map,
         universe,
