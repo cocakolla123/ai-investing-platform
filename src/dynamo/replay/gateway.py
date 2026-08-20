@@ -46,6 +46,11 @@ MACRO_LOOKBACK_DAYS = 400
 # only reads the last 60 days, but ``unusual_volume_no_news`` needs a year to
 # decide whether the feed covers a symbol at all (catalog group 12).
 FEATURE_NEWS_LOOKBACK_DAYS = 365
+# Short-interest cycles settle twice a month, and the features only ever read
+# the most recently PUBLISHED one, so a 120-day floor always contains it with
+# room to spare. Without a floor this frame is the whole table (~2.4M rows on
+# this database) re-read for every session of a training run.
+FEATURE_SHORT_INTEREST_LOOKBACK_DAYS = 120
 EARNINGS_LOOKAHEAD_DAYS = 30
 TRANSCRIPT_LOOKBACK_DAYS = 30  # live dossier window parity (assets/research.py)
 
@@ -126,7 +131,7 @@ class HistoricalDataGateway:
           ``fetched_at <= as_of`` (knowledge-time bound);
         - news: ``as_of - 365d <= published_at <= as_of``, exploded to one
           row per (symbol, story), feeding the attention features;
-        - short interest: ``publication_date <= as_of`` — NOT
+        - short interest: ``as_of - 120d <= publication_date <= as_of`` — NOT
           ``settlement_date``, which runs ~8 days ahead of when FINRA
           actually disseminated the cycle (dynamo.data.finra). The settlement
           date is exempt from the tripwire for the same reason a future
@@ -215,7 +220,11 @@ class HistoricalDataGateway:
                 si.c.previous_shares_short,
                 si.c.avg_daily_volume,
                 si.c.days_to_cover,
-            ).where(si.c.publication_date <= self.as_of),
+            ).where(
+                si.c.publication_date
+                >= self.as_of - timedelta(days=FEATURE_SHORT_INTEREST_LOOKBACK_DAYS),
+                si.c.publication_date <= self.as_of,
+            ),
             exempt=("settlement_date",),
         )
         return FeatureInputs(

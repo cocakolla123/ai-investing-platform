@@ -15,8 +15,8 @@ measured against a forward return. The weights below are priors written down
 before looking at any outcome, which is the only honest way to write them, and
 which is also exactly why they should not be trusted yet. It is pre-registered
 through the alpha-research rails (``dynamo.cli.alpha``) as hypothesis
-``sleeper_screen_v1``; until that audition runs and passes, this module
-produces an opinion, not evidence.
+``sleeper-screen-v1`` (trial family ``sleeper-composite``); until that audition
+runs and passes, this module produces an opinion, not evidence.
 
 Composition
 -----------
@@ -125,7 +125,9 @@ def _pct_rank(values: pd.Series, *, higher_is_better: bool) -> pd.Series:
     ``method="average"`` makes ties deterministic (order of the index cannot
     move a score), which is what the determinism test pins.
     """
-    numeric = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    numeric = cast(pd.Series, pd.to_numeric(values, errors="coerce")).replace(
+        [np.inf, -np.inf], np.nan
+    )
     ranked = cast(pd.Series, numeric.rank(method="average", pct=True))
     return ranked if higher_is_better else 1.0 - ranked
 
@@ -137,7 +139,12 @@ def _band_score(values: pd.Series, floor: float, ceiling: float) -> pd.Series:
     is not a quiet riser). Above the ceiling it runs down to 0 at
     ``2 x ceiling`` — by then the market has plainly noticed.
     """
-    r = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    r = cast(
+        pd.Series,
+        cast(pd.Series, pd.to_numeric(values, errors="coerce")).replace(
+            [np.inf, -np.inf], np.nan
+        ),
+    )
     below = (r / floor).clip(lower=0.0, upper=1.0) if floor > 0 else r * 0.0 + 1.0
     above = (1.0 - (r - ceiling) / ceiling).clip(lower=0.0, upper=1.0)
     inside = (r >= floor) & (r <= ceiling)
