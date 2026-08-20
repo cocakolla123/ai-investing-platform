@@ -18,6 +18,7 @@ All membership transitions write ``universe_membership`` rows with reasons
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -369,3 +370,133 @@ def crypto_instruments(symbols: Sequence[str]) -> list[Instrument]:
         )
         for symbol in symbols
     ]
+
+
+# --- Listing-date backdating (D3) ------------------------------------------
+#
+# The Tier-2 surveillance universe is built from Alpaca's tradable-asset list,
+# which is a TODAY snapshot with no listing dates on it, so every row was
+# written with `valid_from` = the day the build ran (2026-08-17). That makes
+# the whole 11,455-name universe INVISIBLE to any point-in-time read before
+# that date: `universe_at(2026-03-03, tier=2)` returns zero names, and a
+# replay over the campaign window discovers nothing.
+#
+# The tempting fix — backdate everything to a fixed early date — injects
+# look-ahead: a company that IPO'd in 2025-06 would appear in a 2024
+# surveillance universe, and the run would "discover" a name that did not
+# exist. The honest proxy available in this database is the symbol's FIRST
+# BAR: the vendor has no history before a symbol starts trading, so
+# `min(bars_1d.ts)` bounds the listing date from above without any outside
+# knowledge. It is imperfect in one direction only (a symbol listed before
+# the backfill's start date looks younger than it is), which is the
+# conservative direction: it under-states, never over-states, membership.
+
+
+@dataclass(frozen=True)
+class BackdateRebase:
+    """One membership row moving from ``old_valid_from`` to ``new_valid_from``."""
+
+    symbol: str
+    tier: int
+    old_valid_from: date
+    new_valid_from: date
+
+
+@dataclass(frozen=True)
+class BackdatePlan:
+    """What :func:`plan_listing_date_backdate` would change, and what it won't.
+
+    Nothing here touches the database; the plan is the reviewable artifact and
+    the applier is dumb on purpose.
+    """
+
+    rebases: tuple[BackdateRebase, ...]
+    already_backdated: tuple[str, ...]
+    """Rows whose ``valid_from`` already equals the first-bar date — this is
+    what makes a re-run a no-op."""
+    no_bars: tuple[str, ...]
+    """Symbols with no bars at all: their listing date is unknowable here, so
+    they keep the conservative late ``valid_from`` and stay invisible."""
+    first_bar_after_valid_from: tuple[str, ...]
+    """Symbols whose first bar is LATER than their current ``valid_from``.
+    Moving them forward would remove them from a universe they were already
+    in, so they are left alone — backdating only ever moves dates earlier."""
+
+    def summary(self) -> str:
+        return (
+            f"{len(self.rebases)} rows to backdate, "
+            f"{len(self.already_backdated)} already at their first bar, "
+            f"{len(self.no_bars)} with no bars (left late), "
+            f"{len(self.first_bar_after_valid_from)} already earlier than their first bar"
+        )
+
+
+def plan_listing_date_backdate(
+    memberships: Sequence[UniverseMembership],
+    first_bar: Mapping[str, date],
+    *,
+    tier: Tier = Tier.SURVEILLANCE,
+) -> BackdatePlan:
+    """Rebase each ``tier`` membership's ``valid_from`` onto its first bar.
+
+    ``memberships`` may contain every tier; rows of any other tier are
+    ignored entirely — that is the guarantee that the 55 hand-approved Tier-1
+    CORE rows survive this untouched.
+
+    Idempotent by construction: a row whose ``valid_from`` already equals its
+    first-bar date produces no rebase, so applying the plan twice changes
+    nothing the second time.
+    """
+    rebases: list[BackdateRebase] = []
+    already: list[str] = []
+    missing: list[str] = []
+    later: list[str] = []
+    for member in memberships:
+        if int(member.tier) != int(tier):
+            continue
+        listed = first_bar.get(member.symbol)
+        if listed is None:
+            missing.append(member.symbol)
+            continue
+        if listed == member.valid_from:
+            already.append(member.symbol)
+        elif listed > member.valid_from:
+            later.append(member.symbol)
+        else:
+            rebases.append(
+                BackdateRebase(
+                    symbol=member.symbol,
+                    tier=int(member.tier),
+                    old_valid_from=member.valid_from,
+                    new_valid_from=listed,
+                )
+            )
+    return BackdatePlan(
+        rebases=tuple(rebases),
+        already_backdated=tuple(sorted(already)),
+        no_bars=tuple(sorted(missing)),
+        first_bar_after_valid_from=tuple(sorted(later)),
+    )
+
+
+def backdated_memberships(
+    memberships: Sequence[UniverseMembership], plan: BackdatePlan
+) -> list[UniverseMembership]:
+    """The rebased rows to write, carrying every other field unchanged."""
+    moved = {(r.symbol, r.old_valid_from): r.new_valid_from for r in plan.rebases}
+    out: list[UniverseMembership] = []
+    for member in memberships:
+        new_from = moved.get((member.symbol, member.valid_from))
+        if new_from is None:
+            continue
+        out.append(
+            UniverseMembership(
+                symbol=member.symbol,
+                tier=member.tier,
+                valid_from=new_from,
+                valid_to=member.valid_to,
+                reason=member.reason,
+                approved_by=member.approved_by,
+            )
+        )
+    return out

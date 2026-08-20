@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from dynamo.data.universe import UniverseManager, default_sector_etf_map
+from dynamo.data.universe import (
+    UniverseManager,
+    backdated_memberships,
+    default_sector_etf_map,
+    plan_listing_date_backdate,
+)
 from dynamo.domain.models.market import Tier, UniverseMembership
 
 AS_OF = date(2026, 8, 3)
@@ -186,3 +191,130 @@ def test_starter_sectors_cover_every_equity_starter() -> None:
     assert set(STARTER_SECTORS) == set(STARTER_STOCKS)
     etf_map = default_sector_etf_map(STARTER_SECTORS)
     assert set(etf_map) == set(STARTER_STOCKS)  # every sector name recognized
+
+
+# --- Listing-date backdating (D3) ------------------------------------------
+
+BUILD_DAY = date(2026, 8, 17)  # the day universe-wide actually ran
+
+
+def member(
+    symbol: str, tier: Tier, valid_from: date, *, valid_to: date | None = None
+) -> UniverseMembership:
+    return UniverseMembership(
+        symbol=symbol,
+        tier=tier,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        reason="alpaca tradable universe (NASDAQ)",
+        approved_by="universe-wide",
+    )
+
+
+def visible_at(members: list[UniverseMembership], as_of: date) -> set[str]:
+    """The point-in-time read `universe_at` performs, in memory."""
+    return {
+        m.symbol
+        for m in members
+        if m.valid_from <= as_of and (m.valid_to is None or m.valid_to >= as_of)
+    }
+
+
+def test_backdate_moves_valid_from_to_the_first_bar() -> None:
+    members = [member("OLD", Tier.SURVEILLANCE, BUILD_DAY)]
+    plan = plan_listing_date_backdate(members, {"OLD": date(2024, 1, 2)})
+    assert len(plan.rebases) == 1
+    rebase = plan.rebases[0]
+    assert (rebase.symbol, rebase.old_valid_from, rebase.new_valid_from) == (
+        "OLD",
+        BUILD_DAY,
+        date(2024, 1, 2),
+    )
+    rebased = backdated_memberships(members, plan)
+    assert rebased[0].valid_from == date(2024, 1, 2)
+    # Everything else rides along unchanged.
+    assert rebased[0].reason == members[0].reason
+    assert rebased[0].approved_by == members[0].approved_by
+    assert rebased[0].tier == Tier.SURVEILLANCE
+
+
+def test_backdate_is_idempotent() -> None:
+    """Re-running against the already-rebased rows plans nothing."""
+    members = [member("OLD", Tier.SURVEILLANCE, BUILD_DAY)]
+    first_bar = {"OLD": date(2024, 1, 2)}
+    once = backdated_memberships(members, plan_listing_date_backdate(members, first_bar))
+    twice = plan_listing_date_backdate(once, first_bar)
+    assert twice.rebases == ()
+    assert twice.already_backdated == ("OLD",)
+    assert backdated_memberships(once, twice) == []
+
+
+def test_backdate_never_touches_tier_1_core() -> None:
+    """The 55 hand-approved CORE rows are the thing that must not move."""
+    core = UniverseMembership(
+        symbol="AAPL",
+        tier=Tier.CORE,
+        valid_from=date(2024, 12, 1),
+        valid_to=None,
+        reason="starter",
+        approved_by="seed",
+    )
+    members = [core, member("WIDE", Tier.SURVEILLANCE, BUILD_DAY)]
+    first_bar = {"AAPL": date(2024, 1, 2), "WIDE": date(2025, 6, 3)}
+    plan = plan_listing_date_backdate(members, first_bar)
+    assert [r.symbol for r in plan.rebases] == ["WIDE"]
+    assert "AAPL" not in plan.already_backdated + plan.no_bars
+    assert [m.symbol for m in backdated_memberships(members, plan)] == ["WIDE"]
+
+
+def test_a_symbol_whose_first_bar_is_after_as_of_stays_invisible() -> None:
+    """The look-ahead guard: a 2025-06 IPO must not appear in a 2024 universe.
+
+    A blanket backdate would put IPO in the 2024-01 surveillance universe and
+    the replay would "discover" a company that did not yet exist."""
+    members = [
+        member("OLD", Tier.SURVEILLANCE, BUILD_DAY),
+        member("IPO", Tier.SURVEILLANCE, BUILD_DAY),
+    ]
+    first_bar = {"OLD": date(2024, 1, 2), "IPO": date(2025, 6, 16)}
+    rebased = backdated_memberships(members, plan_listing_date_backdate(members, first_bar))
+    assert visible_at(rebased, date(2024, 3, 1)) == {"OLD"}
+    assert visible_at(rebased, date(2025, 6, 15)) == {"OLD"}
+    assert visible_at(rebased, date(2025, 6, 16)) == {"OLD", "IPO"}
+
+
+def test_a_symbol_with_no_bars_keeps_its_late_valid_from() -> None:
+    """No bars means no listing-date evidence; guessing would be look-ahead."""
+    members = [member("GHOST", Tier.SURVEILLANCE, BUILD_DAY)]
+    plan = plan_listing_date_backdate(members, {})
+    assert plan.rebases == ()
+    assert plan.no_bars == ("GHOST",)
+    assert visible_at(members, date(2026, 3, 3)) == set()
+
+
+def test_backdate_never_moves_a_date_forward() -> None:
+    """A row already earlier than its first bar is left alone: moving it
+    forward would silently REMOVE the symbol from a universe it was in."""
+    members = [member("EARLY", Tier.SURVEILLANCE, date(2024, 1, 1))]
+    plan = plan_listing_date_backdate(members, {"EARLY": date(2025, 5, 5)})
+    assert plan.rebases == ()
+    assert plan.first_bar_after_valid_from == ("EARLY",)
+
+
+def test_backdate_plan_summary_counts_every_bucket() -> None:
+    members = [
+        member("MOVE", Tier.SURVEILLANCE, BUILD_DAY),
+        member("SAME", Tier.SURVEILLANCE, date(2024, 1, 2)),
+        member("GHOST", Tier.SURVEILLANCE, BUILD_DAY),
+        member("EARLY", Tier.SURVEILLANCE, date(2023, 1, 1)),
+    ]
+    first_bar = {
+        "MOVE": date(2024, 1, 2),
+        "SAME": date(2024, 1, 2),
+        "EARLY": date(2025, 5, 5),
+    }
+    plan = plan_listing_date_backdate(members, first_bar)
+    assert plan.summary() == (
+        "1 rows to backdate, 1 already at their first bar, "
+        "1 with no bars (left late), 1 already earlier than their first bar"
+    )

@@ -18,11 +18,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import structlog
-from sqlalchemy import Engine, Table, delete, select, update
+from sqlalchemy import Engine, Table, delete, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from dynamo.domain.models.market import (
@@ -474,6 +474,76 @@ class MarketDataRepository:
         ]
         return self.insert_rows(schema.surveillance_flags, rows)
 
+    def untriaged_flags(
+        self,
+        since: datetime,
+        *,
+        exclude_detectors: Sequence[str] = (),
+        limit: int | None = None,
+    ) -> pd.DataFrame:
+        """Un-triaged ``surveillance_flags`` rows written on or after ``since``.
+
+        This is the read that turns the flag table into a queue. Triage used
+        to look only at the flags computed in its own process, so a row
+        written by any other path — the ``surveillance-sweep`` CLI, an earlier
+        run that died before triage, the nightly asset on a night the model
+        was unavailable — was never looked at again by anything.
+
+        ``since`` bounds the queue: a flag old enough to have gone stale
+        should expire unread rather than be triaged against today's prices.
+
+        Returns columns ``id, symbol, detector, severity, details, ts``,
+        oldest first so a backlog drains in the order it accumulated. The
+        ``id`` is what a caller must use to write a verdict back — see
+        :meth:`set_triage_verdicts`.
+        """
+        t = schema.surveillance_flags
+        conditions = [t.c.triage_verdict.is_(None), t.c.ts >= since]
+        if exclude_detectors:
+            conditions.append(t.c.detector.notin_(list(exclude_detectors)))
+        stmt = (
+            select(t.c.id, t.c.symbol, t.c.detector, t.c.severity, t.c.details, t.c.ts)
+            .where(*conditions)
+            .order_by(t.c.ts, t.c.id)
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        with self._engine.connect() as conn:
+            frame = pd.read_sql(stmt, conn)
+        if frame.empty:
+            return pd.DataFrame(
+                {c: [] for c in ("id", "symbol", "detector", "severity", "details", "ts")}
+            )
+        return frame
+
+    def set_triage_verdicts(
+        self,
+        flag_ids: Sequence[int],
+        verdict: str,
+        *,
+        triaged_at: datetime | None = None,
+    ) -> int:
+        """Stamp a verdict on EXACTLY the given flag rows.
+
+        Bounded by primary key on purpose. The previous write matched on
+        ``symbol AND triage_verdict IS NULL`` with no time bound, so triaging
+        one night's flag for a symbol also stamped every historical un-triaged
+        row that symbol had ever produced with tonight's verdict — silently
+        rewriting the record of what was decided, and when, about flags nobody
+        had ever looked at. Matching on id makes the write say what it means.
+        """
+        ids = [int(i) for i in flag_ids]
+        if not ids:
+            return 0
+        t = schema.surveillance_flags
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                update(t)
+                .where(t.c.id.in_(ids))
+                .values(triage_verdict=verdict, triaged_at=triaged_at or _now())
+            )
+        return int(result.rowcount or 0)
+
     def upsert_universe_membership(self, memberships: Iterable[UniverseMembership]) -> int:
         rows = [
             {
@@ -540,6 +610,67 @@ class MarketDataRepository:
                     t.c.approved_by.in_(list(delete_approved_by)),
                 )
             ).rowcount
+            inserted = len(conn.execute(stmt).all())
+        return (int(deleted or 0), int(inserted))
+
+    def first_bar_dates(self, *, source: str | None = None) -> dict[str, date]:
+        """symbol -> date of its earliest ``bars_1d`` row.
+
+        The listing-date proxy behind the Tier-2 backdate (D3): a vendor has
+        no history before a symbol starts trading, so the first bar bounds the
+        listing date from above using nothing but data already in the table.
+        """
+        t = schema.bars_1d
+        stmt = select(t.c.symbol, func.min(t.c.ts).label("first_ts")).group_by(t.c.symbol)
+        if source is not None:
+            stmt = stmt.where(t.c.source == source)
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+        return {str(r[0]): cast(datetime, r[1]).date() for r in rows}
+
+    def rebase_universe_valid_from(
+        self, rebases: Sequence[tuple[str, date, date]]
+    ) -> tuple[int, int]:
+        """Move membership rows from one ``valid_from`` to another, atomically.
+
+        ``rebases``: ``(symbol, old_valid_from, new_valid_from)``. ``valid_from``
+        is half the primary key, so this is a delete + insert rather than an
+        update; both happen in ONE transaction so a kill cannot leave a symbol
+        with no membership row at all.
+
+        Only the exact ``(symbol, old_valid_from)`` rows named are deleted —
+        rows at any other ``valid_from``, and every row of every symbol not
+        named, are untouched. That is what keeps the hand-approved Tier-1 CORE
+        intervals out of the blast radius. Returns ``(deleted, inserted)``.
+        """
+        if not rebases:
+            return (0, 0)
+        t = schema.universe_membership
+        keys = [(symbol, old) for symbol, old, _ in rebases]
+        with self._engine.begin() as conn:
+            existing = {
+                (str(r.symbol), cast(date, r.valid_from)): dict(r._mapping)
+                for r in conn.execute(
+                    select(t).where(tuple_(t.c.symbol, t.c.valid_from).in_(keys))
+                )
+            }
+            rows: list[dict[str, Any]] = []
+            for symbol, old, new in rebases:
+                row = existing.get((symbol, old))
+                if row is None:  # already rebased by a previous run
+                    continue
+                rows.append({**row, "valid_from": new})
+            if not rows:
+                return (0, 0)
+            deleted = conn.execute(
+                delete(t).where(tuple_(t.c.symbol, t.c.valid_from).in_(keys))
+            ).rowcount
+            stmt = pg_insert(t).values(rows)
+            pk = [c.name for c in t.primary_key.columns]
+            stmt = stmt.on_conflict_do_update(
+                index_elements=pk,
+                set_={c.name: stmt.excluded[c.name] for c in t.columns if c.name not in pk},
+            ).returning(t.c.symbol)
             inserted = len(conn.execute(stmt).all())
         return (int(deleted or 0), int(inserted))
 
