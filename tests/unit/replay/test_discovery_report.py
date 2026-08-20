@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 from datetime import date
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -244,7 +245,7 @@ def test_per_symbol_forward_windows_survive_a_missing_session() -> None:
 
     frame = _closes(paths, sessions)
     hole = pd.Timestamp(sessions[10])
-    frame = frame[~((frame["symbol"] == gappy) & (frame["ts"] == hole))]
+    frame = cast(pd.DataFrame, frame[~((frame["symbol"] == gappy) & (frame["ts"] == hole))])
 
     report = build_discovery_report(
         "replay-gap",

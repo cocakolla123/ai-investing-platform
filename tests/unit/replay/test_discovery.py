@@ -292,7 +292,8 @@ def test_tradability_is_judged_on_pre_as_of_bars_only() -> None:
             "volume_source": "consolidated",
         }
     )
-    panel = SurveillancePanel({"LATE": late_bloomer}, days[-1].date())
+    last_day = cast(date, days[-1].date())  # type: ignore[union-attr]
+    panel = SurveillancePanel({"LATE": late_bloomer}, last_day)
 
     at_cutoff = panel.slice(cutoff, min_dollar_volume=1_000_000.0, min_price=1.0)
     assert "LATE" not in at_cutoff.symbols, (

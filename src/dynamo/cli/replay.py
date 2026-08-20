@@ -1284,16 +1284,19 @@ def _cmd_discovery_report(args: argparse.Namespace) -> int:
         f"bars loaded for {bars['symbol'].nunique()}"
     )
 
-    spy = bars[bars["symbol"] == "SPY"].sort_values("ts")
-    benchmark = {
-        pd.Timestamp(t).date(): float(c)
-        for t, c in zip(spy["ts"], spy["close"], strict=True)
-    }
+    from typing import cast as _cast
+
+    spy = _cast("pd.DataFrame", bars[bars["symbol"] == "SPY"]).sort_values("ts")
+    benchmark: dict[date, float] = {}
+    for t, c in zip(spy["ts"], spy["close"], strict=True):
+        ts = pd.Timestamp(t)
+        if ts is not pd.NaT:
+            benchmark[_cast(date, ts.date())] = float(c)
     try:
         report = build_discovery_report(
             args.run_id,
             flags,
-            bars[bars["symbol"] != "SPY"],
+            _cast("pd.DataFrame", bars[bars["symbol"] != "SPY"]),
             benchmark,
             decisions=repo.decisions_for(args.run_id),
             horizon_sessions=horizon,
