@@ -21,14 +21,14 @@ feeding the replay foundation:
   names included; the adapter's 5 req/s throttle applies). Missing
   TIINGO_API_KEY is a LOUD failure (exit 1, no network attempted);
   ``--allow-missing-tiingo`` restores the old graceful skip.
-  ``--provider alpaca`` is the WIDE path: raw (unadjusted) bars from the free
+  ``--provider alpaca`` is the WIDE path: bars from the free
   IEX feed, ``--chunk-size`` symbols per request (default 200), resumable
   (``--skip-covered``, on by default), per-chunk failures degrade to
   per-symbol retries instead of killing the run. Alpaca's free feed is
-  single-venue (IEX ~2-3% of consolidated tape), so its ``volume`` — and
-  every dollar-volume liquidity floor keyed off it — UNDERSTATES true ADV by
-  a large, symbol-dependent factor. Treat Alpaca dollar volume as a relative
-  signal (a symbol vs its own history), never as an absolute liquidity gate.
+  single-venue, so its ``volume`` UNDERSTATES the consolidated tape — measured
+  at ~6.6% of it on this repo's data. Dollar-volume gates therefore convert to
+  consolidated-equivalent terms first; see ``dynamo.domain.volume_source`` for
+  the measurement, its caveats, and how to re-measure it.
 - ``fundamentals``: EDGAR companyfacts XBRL, ``filed_at``-vintaged (point-in-
   time honest by construction). ``instruments.cik`` has NO automatic
   population path today (only crypto instrument rows are auto-upserted, and
@@ -183,7 +183,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "tiingo (default): adjusted EOD, one request per symbol. "
             "alpaca: raw IEX bars, --chunk-size symbols per request — the "
-            "wide-universe path (single-venue volume understates true ADV)"
+            "wide-universe path (single-venue volume understates the "
+            "consolidated tape ~15x; see dynamo.domain.volume_source)"
         ),
     )
     bars.add_argument(
@@ -300,9 +301,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help=(
-            "drop symbols whose median dollar volume over the window is below "
-            "this (default 0 = no floor). NOTE: on Alpaca's IEX feed this is "
-            "single-venue and understates true ADV several-fold."
+            "drop symbols whose median daily dollar volume over the window is "
+            "below this (default 0 = no floor). Expressed in CONSOLIDATED-"
+            "EQUIVALENT dollars: IEX-sourced volume is scaled up to whole-tape "
+            "terms before the comparison (dynamo.domain.volume_source), so the "
+            "number means the same thing on either feed."
         ),
     )
     sweep.add_argument("--limit", type=int, default=None, help="cap the symbol count (smoke runs)")
@@ -685,10 +688,11 @@ def _bars_alpaca(
         f"{elapsed:.0f}s ({total_rows / max(elapsed, 1e-9):.0f} rows/s)"
     )
     print(
-        "NOTE: the free Alpaca feed is IEX-only (single venue, a few percent of "
-        "the consolidated tape) — bar VOLUME understates true ADV by a large, "
-        "symbol-dependent factor. Dollar-volume liquidity floors calibrated on "
-        "Tiingo/consolidated data will over-reject on these rows."
+        "NOTE: the free Alpaca feed is IEX-only — bar VOLUME understates the "
+        "consolidated tape (measured ~6.6% of it, i.e. ~15x). Compare these "
+        "rows against a threshold only after converting with "
+        "dynamo.domain.volume_source.consolidated_equivalent_dollar_volume; a "
+        "floor calibrated on Tiingo data will otherwise over-reject ~15x."
     )
     if empty:
         print(f"symbols with no IEX bars in range (first 25): {empty[:25]}")
@@ -956,6 +960,11 @@ def _cmd_surveillance_sweep(args: argparse.Namespace) -> int:
         range_break,
         volume_spike,
     )
+    from dynamo.domain.volume_source import (
+        IEX_CONSOLIDATED_VOLUME_SHARE,
+        dominant_source,
+        volume_source_share,
+    )
 
     repo = _repo(args.database_url)
     as_of: date = args.as_of
@@ -986,13 +995,27 @@ def _cmd_surveillance_sweep(args: argparse.Namespace) -> int:
     )
 
     if args.min_dollar_volume > 0:
-        dollar = (bars["close"] * bars["volume"]).groupby(bars["symbol"]).median()
-        liquid = {str(s) for s in dollar[dollar >= args.min_dollar_volume].index}
+        # --min-dollar-volume is CONSOLIDATED-EQUIVALENT dollars (the whole
+        # tape). Observed volume is scaled up per row's source before the
+        # comparison, so the flag means the same thing whether the bars came
+        # from Tiingo (consolidated) or Alpaca (IEX-only, ~1/15th of it).
+        # See dynamo.domain.volume_source for the measurement and its caveats.
+        observed = (bars["close"] * bars["volume"]).groupby(bars["symbol"]).median()
+        share = (
+            bars.groupby("symbol")["source"]
+            .agg(dominant_source)
+            .map(volume_source_share)
+            .reindex(observed.index)
+            .fillna(1.0)
+        )
+        consolidated = observed / share
+        liquid = {str(s) for s in consolidated[consolidated >= args.min_dollar_volume].index}
         bars = bars[bars["symbol"].isin(liquid)]
         print(
             f"liquidity floor: {len(liquid)}/{len(scanned)} symbols clear a "
-            f"${args.min_dollar_volume:,.0f} median dollar volume "
-            "(IEX single-venue — understates true ADV)"
+            f"${args.min_dollar_volume:,.0f} median daily dollar volume "
+            f"(consolidated-equivalent; IEX rows scaled up by "
+            f"{1.0 / IEX_CONSOLIDATED_VOLUME_SHARE:.1f}x)"
         )
         scanned = sorted(liquid)
         if bars.empty:

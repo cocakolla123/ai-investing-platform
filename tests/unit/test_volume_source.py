@@ -49,9 +49,9 @@ class TestProvenance:
         assert "bars_1d" in text
 
     def test_constant_matches_the_measured_median(self) -> None:
-        assert IEX_CONSOLIDATED_VOLUME_SHARE == pytest.approx(0.066)
+        assert pytest.approx(0.066) == IEX_CONSOLIDATED_VOLUME_SHARE
         # ~15x, the factor the defect report measured.
-        assert 1.0 / IEX_CONSOLIDATED_VOLUME_SHARE == pytest.approx(15.15, abs=0.05)
+        assert pytest.approx(15.15, abs=0.05) == 1.0 / IEX_CONSOLIDATED_VOLUME_SHARE
 
 
 class TestSourceShare:
@@ -160,7 +160,9 @@ class TestRiskLayerContract:
         iex_observed = 66_000.0
 
         naive = max_entry_weight(iex_observed, equity, cfg)
-        corrected = max_entry_weight(consolidated_equivalent_adv(iex_observed, "alpaca"), equity, cfg)
+        corrected = max_entry_weight(
+            consolidated_equivalent_adv(iex_observed, "alpaca"), equity, cfg
+        )
 
         assert corrected > naive
         assert corrected / naive == pytest.approx(1.0 / IEX_CONSOLIDATED_VOLUME_SHARE, rel=1e-9)

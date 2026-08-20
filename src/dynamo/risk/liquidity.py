@@ -1,6 +1,16 @@
 """Liquidity constraints: entry caps, days-to-liquidate, concentration flag.
 
 Design: docs/design/06-risk-engine.md section 10.
+
+UNITS CONTRACT: every ``adv_dollar_20d`` argument in this module is
+**consolidated-equivalent** dollars — the whole-market tape, which is what
+"average daily volume" conventionally means and what these caps were sized
+against. A caller holding volume from a single-venue feed (Alpaca's free data
+is IEX-only, on the order of 1/15th of the tape) must convert first, with
+:func:`consolidated_equivalent_adv` below. Passing raw IEX dollars here does
+not fail loudly — it silently shrinks every entry cap by that same factor and
+reports days-to-liquidate correspondingly too pessimistic. See
+:mod:`dynamo.domain.volume_source` for the measurement and its caveats.
 """
 
 from __future__ import annotations
@@ -10,6 +20,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from dynamo.domain.models.risk import RiskConfig
+from dynamo.domain.volume_source import consolidated_equivalent_dollar_volume
+
+# Re-exported so risk-side callers converting a single-venue ADV do not have to
+# reach past this module for the units contract it documents.
+consolidated_equivalent_adv = consolidated_equivalent_dollar_volume
 
 EXIT_PARTICIPATION = 0.20  # portfolio exit test at 20% of ADV
 CONCENTRATION_DAYS = 5.0
