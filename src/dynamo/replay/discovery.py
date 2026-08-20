@@ -30,6 +30,12 @@ it re-reading the same rows. :class:`SurveillancePanel` reads that window
 ONCE for the whole run, holds per-symbol arrays sorted by date, and serves
 each day by index.
 
+Measured cost of what remains, on a synthetic 8,000-symbol x 300-session
+panel: **5.3s per replay day** end to end (slice 1.3s + five detectors +
+gate), plus a 1.8s one-off panel build. Over a 115-session window that is
+about ten minutes of CPU for the entire discovery layer, against seventeen
+minutes of database round trips for the naive shape alone.
+
 Loading once means the loaded frame contains rows dated after the early
 sessions' ``as_of``. That is deliberate and it is where point-in-time
 correctness lives: the load happens through a gateway pinned at the run's

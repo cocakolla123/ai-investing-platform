@@ -76,12 +76,22 @@ def _per_symbol(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
     HOIST THE RESULT, do not let each detector recompute it. All five bar
     detectors used to call this themselves, so ``run_detectors`` paid a full
     groupby + per-group sort **five times** over the same frame, every
-    session. On the wide universe that is the dominant cost of a discovery
-    day (measured 3-4x). Every bar detector now takes an optional
-    ``per_symbol`` mapping and ``run_detectors`` computes it ONCE; passing
-    it must not change a single flag, which is what
-    ``tests/unit/data/test_detectors_per_symbol.py`` asserts against a
-    golden run.
+    session.
+
+    MEASURED, on a synthetic 4,000-symbol x 300-session panel (identical
+    flags both ways): 3.93s for the five self-grouping detectors, 2.27s once
+    the grouping is hoisted and paid once — **1.7x**. The design note
+    predicted 3-4x; the real number is lower because the groupby itself is
+    only ~0.37s of the 3.93s and the detectors' own arithmetic dominates.
+    Replay does better than 1.7x because
+    ``dynamo.replay.discovery.SurveillancePanel`` holds the per-symbol frames
+    for the whole run, so the grouping is amortized away entirely and the
+    detector stage alone goes 3.93s -> 1.90s (2.1x).
+
+    Every bar detector now takes an optional ``per_symbol`` mapping and
+    ``run_detectors`` computes it ONCE; passing it must not change a single
+    flag, which is what ``tests/unit/data/test_detectors_per_symbol.py``
+    asserts against a golden run.
     """
     return {
         str(symbol): grp.sort_values("ts").reset_index(drop=True)
