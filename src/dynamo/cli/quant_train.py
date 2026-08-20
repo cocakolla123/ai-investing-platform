@@ -155,9 +155,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "window, so adjacent rows are ~95%% redundant: striding trades "
             "almost no information for an N-fold cut in panel-build time AND "
             "gives more nearly-independent samples, which makes the fold "
-            "statistics honest rather than optimistic. Purge is measured in "
-            "STRIDED rows, so a stride>1 over-purges in calendar terms — "
-            "conservative, never leaky."
+            "statistics honest rather than optimistic. Fold geometry is "
+            "scaled to the stride (see walkforward_for): purge covers the "
+            "20-session label horizon in CALENDAR terms, not in strided rows."
         ),
     )
     parser.add_argument("--database-url", default=None)
@@ -428,27 +428,55 @@ def check_panel(panel: TrainingPanel) -> tuple[int, int]:
     return n_sessions, n_symbols
 
 
-def walkforward_for(n_sessions: int) -> Any:
+def walkforward_for(n_sessions: int, *, session_stride: int = 1) -> Any:
     """Fold geometry for the window. Doc-08 defaults when the window is long
-    enough (>= 902 sessions); otherwise an honestly scaled-down geometry —
-    purge stays 20 sessions (== the label horizon, so a fold can never train
-    on rows whose forward windows overlap its test set), embargo stays 10,
-    test ~15% of the window, train fills the rest leaving room for >= 2 folds
-    when possible."""
+    enough (>= 902 sessions); otherwise an honestly scaled-down geometry.
+
+    ``session_stride`` is the panel's stride, and it matters twice.
+
+    **Purge.** Every count here is in PANEL ROWS, not calendar sessions, and
+    a strided panel's rows are ``stride`` sessions apart. Purge must cover
+    the 20-session label horizon, so it is ``ceil(20 / stride)`` rows -- 5 at
+    stride 4, not 20. Using 20 rows purged 80 calendar sessions: safe against
+    leakage, but it spent 20 of an 89-row panel to buy 4x more separation
+    than the labels need.
+
+    **Fold count.** The rank t-statistic is computed over per-fold ICs, so a
+    geometry that yields 2 folds yields a t-statistic from two numbers. Train
+    is sized to fit :data:`SHIP_MIN_FOLDS` folds where the window allows,
+    shrinking the training window rather than pretending 2 folds is enough.
+    That trades per-fold model strength for a variance estimate that means
+    something, which is the right trade for a GATE -- the shipped model
+    trains on everything regardless.
+
+    Raises :class:`PanelTooSmallError` when not even one fold fits.
+    """
     from dynamo.backtest.walkforward import WalkForwardConfig
+    from dynamo.research.quant.training import SHIP_MIN_FOLDS
 
     default = WalkForwardConfig()
     needed = default.train_sessions + default.purge_sessions + default.test_sessions
-    if n_sessions >= needed:
+    if n_sessions >= needed and session_stride <= 1:
         return default
-    purge, embargo = default.purge_sessions, default.embargo_sessions
+
+    stride = max(1, int(session_stride))
+    purge = max(1, -(-default.purge_sessions // stride))  # ceil, in panel rows
+    embargo = max(1, -(-default.embargo_sessions // stride))
     test = max(10, int(n_sessions * 0.15))
-    train = n_sessions - purge - 2 * test
-    if train < test:  # tiny window — settle for a single fold
-        train = n_sessions - purge - test
+
+    # folds = floor((n - train - purge - test) / roll) + 1 with roll == test,
+    # so the train window that admits `target` folds is:
+    #     train = n - purge - test * target
+    train = 0
+    for target in range(SHIP_MIN_FOLDS, 0, -1):
+        candidate = n_sessions - purge - test * target
+        if candidate >= test:  # never train on less than one test window
+            train = candidate
+            break
     if train <= 0:
         raise PanelTooSmallError(
-            f"{n_sessions} sessions cannot form a single purged walk-forward fold"
+            f"{n_sessions} panel rows cannot form a single purged walk-forward "
+            f"fold at stride {stride} (test {test}, purge {purge})"
         )
     return WalkForwardConfig(
         train_sessions=train,
@@ -477,6 +505,7 @@ def train_quant_bundle(
     label_kind: str = DEFAULT_LABEL_KIND,
     horizons: Sequence[int] | None = None,
     ensemble_seeds: int = 1,
+    session_stride: int = 1,
 ) -> TrainReport:
     """Walk-forward evaluation for the three tasks, final-model fits on the
     full window, artifact + bundle-manifest save. Pure of the database —
@@ -537,7 +566,11 @@ def train_quant_bundle(
     n_sessions, n_symbols = check_panel(panel)
     features, labels = panel.features, panel.labels
     feature_names = tuple(str(c) for c in features.columns)
-    wf = wf_config if wf_config is not None else walkforward_for(n_sessions)
+    wf = (
+        wf_config
+        if wf_config is not None
+        else walkforward_for(n_sessions, session_stride=session_stride)
+    )
     config_payload: dict[str, Any] = {
         "version": version,
         "train_start": train_start,
@@ -737,9 +770,10 @@ def registry_model_version(report: TrainReport, train_start: date, train_end: da
 def print_go_no_go(report: TrainReport, out: Callable[[str], None] = print) -> None:
     """The GO/NO-GO #1 table: per-fold rank IC, pooled t-stat vs the ship
     gate, dispersion, and the secondary-task pooled metrics."""
-    from dynamo.research.quant.training import SHIP_T_STAT
+    from dynamo.research.quant.training import SHIP_MIN_FOLDS, SHIP_T_STAT
 
     m = report.registry_metrics
+    n_folds = len(report.task_reports["rank"]["folds"])
 
     def _fmt(value: Any, spec: str = "+.4f") -> str:
         return "n/a" if value is None else format(float(value), spec)
@@ -753,12 +787,22 @@ def print_go_no_go(report: TrainReport, out: Callable[[str], None] = print) -> N
     for fold in report.task_reports["rank"]["folds"]:
         ic = fold["models"][MODEL_NAME]["rank_ic"]
         out(f"  {fold['fold_id']:>4}  {fold['test_start']} .. {fold['test_end']}  {_fmt(ic)}")
+    t_note = "" if n_folds >= SHIP_MIN_FOLDS else f" — NOT EVIDENCE at {n_folds} folds"
     out(
         f"  pooled rank IC {_fmt(m['rank_ic_pooled'])}  "
         f"t-stat {_fmt(m['rank_ic_t_stat'], '.2f')} "
         f"(ship gate >= {SHIP_T_STAT:.2f})  "
         f"win share {_fmt(m['rank_win_share'], '.2f')}"
     )
+    if t_note:
+        # The t-stat is computed over per-fold ICs. Two folds that agree
+        # produce an arbitrarily large t; say so beside the number, not in a
+        # docstring nobody reads at 2am.
+        out(
+            f"  folds: {n_folds} (gate needs >= {SHIP_MIN_FOLDS}){t_note} — "
+            "the t-stat above is the spread between "
+            f"{n_folds} numbers, not a significance test"
+        )
     out(f"  fold IC dispersion {m['fold_ic_dispersion']:.4f}")
     out(
         f"  downside: Brier {_fmt(m['downside_brier_pooled'], '.4f')} "
@@ -769,8 +813,23 @@ def print_go_no_go(report: TrainReport, out: Callable[[str], None] = print) -> N
         f"  vol: RMSE(log) {_fmt(m['vol_rmse_log_pooled'], '.4f')}, "
         f"QLIKE {_fmt(m['vol_qlike_pooled'], '.4f')}"
     )
+    # Ship status for EVERY task, not just the one the verdict keys on. The
+    # downside model failing its own gate while the banner reads GO is how a
+    # miscalibrated probability reaches position sizing unnoticed.
+    ships = {
+        task: bool(rep["ships_ok"].get(MODEL_NAME)) for task, rep in report.task_reports.items()
+    }
+    out("  ships:  " + "  ".join(f"{t}={'yes' if ok else 'NO'}" for t, ok in sorted(ships.items())))
     verdict = "GO" if m["rank_ships_ok"] else "NO-GO (rank ship gates not met)"
+    failed = sorted(t for t, ok in ships.items() if not ok and t != "rank")
+    if failed and m["rank_ships_ok"]:
+        verdict = f"GO for ranking — but {', '.join(failed)} did NOT ship"
     out(f"  VERDICT: {verdict} — never proceed to the paid run on a NO-GO.")
+    if "downside" in failed:
+        out(
+            "  NOTE: the downside model is worse than its own base rate, so its "
+            "probabilities must not be trusted for sizing. Ranking is unaffected."
+        )
 
 
 # --------------------------------------------------------------------------
@@ -907,6 +966,7 @@ def main(argv: list[str] | None = None) -> int:
             label_kind=args.label_kind,
             horizons=args.horizons,
             ensemble_seeds=args.ensemble_seeds,
+            session_stride=stride,
         )
     except PanelTooSmallError as exc:
         print(f"REFUSED: {exc}")

@@ -12,9 +12,10 @@ Keying (staleness safety): a cache directory is keyed by BOTH
   cross-sectionally normalized, so the same symbol's row differs under a
   different universe; frames are only reusable for the identical symbol set.
 * ``catalog_fingerprint`` — sha256 over the ordered ``FEATURE_CATALOG``
-  names AND the source text of the catalog + feature-builder modules. Any
+  names AND the parsed AST of the catalog + feature-builder modules. Any
   feature added, removed, reordered, or re-implemented changes the
-  fingerprint, so stale frames are never silently reused.
+  fingerprint, so stale frames are never silently reused; REFORMATTING
+  does not, which hashing raw source text got wrong.
 
 Within a directory there is one parquet file per session date. Writes are
 crash-safe (tmp file + atomic rename) and happen after each session build, so
@@ -39,6 +40,7 @@ and ``*.parquet`` rules both cover it).
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import hashlib
 import inspect
@@ -48,6 +50,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -60,22 +63,49 @@ def universe_hash(universe: Sequence[str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _semantic_hash(module: Any) -> str:
+    """SHA-256 of a module's parsed AST, not its source text.
+
+    Formatting must not invalidate the cache. It used to: the fingerprint
+    hashed raw source, so ``ruff format`` reflowing ``catalog.py`` — a
+    whitespace-only change — threw away 100 cached sessions, which at 1,315
+    symbols is 4.3 hours of recompute for zero semantic difference. The old
+    docstring's "cost of a false rebuild is minutes" was written when the
+    panel was 55 names and stopped being true.
+
+    ``ast.dump`` still changes on any rename, reorder, constant edit or
+    implementation change, so the property that matters — never reuse a
+    cache across a real feature change — is unchanged. Comments and
+    whitespace drop out; docstrings do not (they are AST constants), which
+    errs in the safe direction.
+    """
+    try:
+        source = inspect.getsource(module)
+    except (OSError, TypeError):  # pragma: no cover - no readable source
+        return hashlib.sha256(repr(module).encode("utf-8")).hexdigest()
+    try:
+        digest_input = ast.dump(ast.parse(source))
+    except SyntaxError:  # pragma: no cover - unparseable source
+        digest_input = source
+    return hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+
+
 def catalog_fingerprint() -> str:
     """Version fingerprint of the feature-building code.
 
-    Hashes the ordered ``FEATURE_CATALOG`` names plus the full source text of
-    the catalog and feature-builder modules: any rename, reorder, or
-    implementation change yields a new fingerprint (and thus a cold cache) —
-    the cost of a false rebuild is minutes; the cost of a stale reuse would
-    be a silently wrong model.
+    Hashes the ordered ``FEATURE_CATALOG`` names plus the parsed AST of the
+    catalog and feature-builder modules: any rename, reorder, or
+    implementation change yields a new fingerprint (and thus a cold cache),
+    while reformatting does not. The cost of a stale reuse would be a
+    silently wrong model; the cost of a false rebuild is now hours.
     """
     from dynamo.research.quant import catalog, features
 
     payload = json.dumps(
         {
             "feature_names": list(catalog.FEATURE_CATALOG),
-            "catalog_src": hashlib.sha256(inspect.getsource(catalog).encode("utf-8")).hexdigest(),
-            "features_src": hashlib.sha256(inspect.getsource(features).encode("utf-8")).hexdigest(),
+            "catalog_src": _semantic_hash(catalog),
+            "features_src": _semantic_hash(features),
         }
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

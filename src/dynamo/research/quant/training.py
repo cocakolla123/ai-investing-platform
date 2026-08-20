@@ -43,6 +43,19 @@ MIN_CROSS_SECTION = 3
 SHIP_T_STAT = 2.0
 SHIP_WIN_SHARE = 0.60
 
+#: Folds the rank t-statistic needs before it is allowed to mean anything.
+#:
+#: ``_t_stat`` runs over the per-FOLD ICs, so with two folds the sample
+#: standard deviation is just the gap between two numbers and any two folds
+#: that happen to agree produce an arbitrarily large t. campaign-v5 measured
+#: t = 54.05 from ``[0.0397, 0.0412]`` -- which is not evidence of anything
+#: except that the folds agreed. Below this count the t-stat is reported but
+#: MUST NOT be the thing a run ships on.
+#:
+#: Four is the smallest count where the statistic is worth reading at all,
+#: and it is still weak. It is a floor on honesty, not a claim of rigour.
+SHIP_MIN_FOLDS = 4
+
 __all__ = [
     "QuantBundleError",
     "bundle_from_version",
@@ -334,6 +347,7 @@ def train_and_evaluate(
             ships = (
                 beats_baseline
                 and m > 0
+                and n_folds >= SHIP_MIN_FOLDS
                 and float(e["rank_ic_t_stat"]) >= SHIP_T_STAT
                 and wins_enough
             )
