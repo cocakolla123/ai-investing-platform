@@ -138,18 +138,32 @@ for EQ in 1000 10000; do
 done
 ```
 
-**GO/NO-GO #3** — acceptance criteria for the discovery layer:
+**GO/NO-GO #3** — acceptance criteria for the discovery layer. Computed by:
 
-| Check | Pass |
-|---|---|
-| Flags/day on the filtered universe | 30–120 (below 30 = gate too tight; above 200 = floor too loose) |
-| Distinct promoted names over 115 days | 250–800 |
-| Promoted share of deep-dive slots | 30–70% (0% = promotion never reaches the shortlist; ~100% = core is starved) |
-| Split artifacts among flagged names | 0 — hand-audit the top 20 flagged moves |
-| Any single detector | not significantly negative — else drop it and re-run |
+```bash
+uv run python -m dynamo.cli.replay discovery-report --run-id <wide-quant-100k>
+```
+
+| Check | Pass | Where |
+|---|---|---|
+| Flags/day on the filtered universe | 30–120 (below 30 = gate too tight; above 200 = floor too loose) | `flags:` line |
+| Distinct promoted names over 115 days | 250–800 | `distinct promoted:` |
+| Promoted share of deep-dive slots | 30–70% (0% = promotion never reaches the shortlist; ~100% = core is starved) | `promoted share:` |
+| Any single detector | not `CONTRA-INDICATIVE` — else drop it and re-run | per-detector table |
+| Split artifacts among flagged names | 0 — hand-audit the top 20 flagged moves | manual |
+
+Read the per-detector table the way it is built, not as a league table. The `spread` column
+is flagged-minus-unflagged **on the same session**, so it is already free of "the market went
+up"; `eff n` is days ÷ horizon because overlapping 20-session windows make 115 days about 6
+independent observations; and `inconclusive` means the spread is inside the ±1% survivorship
+band or fails |t| > 2 on that effective sample. Most detectors will read inconclusive on 115
+days, and that is the correct answer, not a tooling failure.
 
 **Known from the pilot:** `volume_spike` measured **−3.03%** forward 20-day excess and is the
-loudest detector. Consider `--discovery` weights that drop it, and re-test after this run.
+loudest detector. The a-priori weights in `research/flag_ranking.py` already rank it last;
+it is deliberately not inverted or zeroed on pilot evidence alone (effective n ≈ 4–5). This
+run is what settles it — if `discovery-report` returns `CONTRA-INDICATIVE` for it here, drop
+it from the weights and re-run Stage C.
 
 ---
 
