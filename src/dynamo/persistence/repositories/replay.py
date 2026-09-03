@@ -33,6 +33,22 @@ from dynamo.persistence.schema import (
     replay_verdicts,
 )
 
+#: Postgres's wire protocol caps a statement at 65,535 bind parameters. A
+#: multi-VALUES upsert burns rows x columns of them, which the 55-name
+#: universe never approached and the wide one crossed on its FIRST session:
+#: ~10,400 replay_decisions rows x 9 columns = ~94k parameters, and the
+#: campaign died mid-write with "number of parameters must be between 0 and
+#: 65535". Budget kept under the cap with a margin for dialect-added binds.
+_BIND_PARAM_BUDGET = 60_000
+
+
+def _row_chunks(rows: Sequence[Mapping[str, Any]]) -> list[list[dict[str, Any]]]:
+    materialized = [dict(r) for r in rows]
+    if not materialized:
+        return []
+    per = max(1, _BIND_PARAM_BUDGET // max(1, len(materialized[0])))
+    return [materialized[i : i + per] for i in range(0, len(materialized), per)]
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -122,20 +138,20 @@ class ReplayRepository:
         """Idempotent upsert on the deterministic decision id."""
         if not rows:
             return 0
-        stmt = pg_insert(replay_decisions).values([dict(r) for r in rows])
-        updatable = {
-            c.name: stmt.excluded[c.name]
-            for c in replay_decisions.columns
-            if c.name != "id" and c.name in rows[0]
-        }
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[replay_decisions.c.id], set_=updatable
-        ).returning(replay_decisions.c.id)
-        # RETURNING gives a reliable row count (driver rowcount can be -1 for
-        # multi-VALUES upserts).
+        written = 0
         with self._engine.begin() as cx:
-            written = cx.execute(stmt).all()
-        return len(written)
+            for chunk in _row_chunks(rows):
+                stmt = pg_insert(replay_decisions).values(chunk)
+                updatable = {
+                    c.name: stmt.excluded[c.name]
+                    for c in replay_decisions.columns
+                    if c.name != "id" and c.name in rows[0]
+                }
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[replay_decisions.c.id], set_=updatable
+                ).returning(replay_decisions.c.id)
+                written += len(cx.execute(stmt).all())
+        return written
 
     def decisions_for(self, run_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -153,19 +169,21 @@ class ReplayRepository:
         deterministic config updates in place, never duplicates."""
         if not rows:
             return 0
-        stmt = pg_insert(replay_equity).values([dict(r) for r in rows])
-        updatable = {
-            c.name: stmt.excluded[c.name]
-            for c in replay_equity.columns
-            if c.name not in ("run_id", "as_of") and c.name in rows[0]
-        }
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[replay_equity.c.run_id, replay_equity.c.as_of],
-            set_=updatable,
-        ).returning(replay_equity.c.as_of)
+        written = 0
         with self._engine.begin() as cx:
-            written = cx.execute(stmt).all()
-        return len(written)
+            for chunk in _row_chunks(rows):
+                stmt = pg_insert(replay_equity).values(chunk)
+                updatable = {
+                    c.name: stmt.excluded[c.name]
+                    for c in replay_equity.columns
+                    if c.name not in ("run_id", "as_of") and c.name in rows[0]
+                }
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[replay_equity.c.run_id, replay_equity.c.as_of],
+                    set_=updatable,
+                ).returning(replay_equity.c.as_of)
+                written += len(cx.execute(stmt).all())
+        return written
 
     def equity_for(self, run_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -180,23 +198,25 @@ class ReplayRepository:
         """Idempotent upsert on the (run_id, session, symbol) PK."""
         if not rows:
             return 0
-        stmt = pg_insert(replay_fills).values([dict(r) for r in rows])
-        updatable = {
-            c.name: stmt.excluded[c.name]
-            for c in replay_fills.columns
-            if c.name not in ("run_id", "session", "symbol") and c.name in rows[0]
-        }
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[
-                replay_fills.c.run_id,
-                replay_fills.c.session,
-                replay_fills.c.symbol,
-            ],
-            set_=updatable,
-        ).returning(replay_fills.c.symbol)
+        written = 0
         with self._engine.begin() as cx:
-            written = cx.execute(stmt).all()
-        return len(written)
+            for chunk in _row_chunks(rows):
+                stmt = pg_insert(replay_fills).values(chunk)
+                updatable = {
+                    c.name: stmt.excluded[c.name]
+                    for c in replay_fills.columns
+                    if c.name not in ("run_id", "session", "symbol") and c.name in rows[0]
+                }
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[
+                        replay_fills.c.run_id,
+                        replay_fills.c.session,
+                        replay_fills.c.symbol,
+                    ],
+                    set_=updatable,
+                ).returning(replay_fills.c.symbol)
+                written += len(cx.execute(stmt).all())
+        return written
 
     def fills_for(self, run_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -222,18 +242,20 @@ class ReplayRepository:
         """
         if not rows:
             return 0
-        stmt = pg_insert(replay_flags).values([dict(r) for r in rows])
-        updatable = {
-            c.name: stmt.excluded[c.name]
-            for c in replay_flags.columns
-            if c.name != "id" and c.name in rows[0]
-        }
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[replay_flags.c.id], set_=updatable
-        ).returning(replay_flags.c.id)
+        written = 0
         with self._engine.begin() as cx:
-            written = cx.execute(stmt).all()
-        return len(written)
+            for chunk in _row_chunks(rows):
+                stmt = pg_insert(replay_flags).values(chunk)
+                updatable = {
+                    c.name: stmt.excluded[c.name]
+                    for c in replay_flags.columns
+                    if c.name != "id" and c.name in rows[0]
+                }
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[replay_flags.c.id], set_=updatable
+                ).returning(replay_flags.c.id)
+                written += len(cx.execute(stmt).all())
+        return written
 
     def flags_for(
         self, run_id: str, as_of: date | None = None, *, promoted_only: bool = False
@@ -254,18 +276,20 @@ class ReplayRepository:
         ``committee_verdicts`` (the firewall extension)."""
         if not rows:
             return 0
-        stmt = pg_insert(replay_verdicts).values([dict(r) for r in rows])
-        updatable = {
-            c.name: stmt.excluded[c.name]
-            for c in replay_verdicts.columns
-            if c.name != "id" and c.name in rows[0]
-        }
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[replay_verdicts.c.id], set_=updatable
-        ).returning(replay_verdicts.c.id)
+        written = 0
         with self._engine.begin() as cx:
-            written = cx.execute(stmt).all()
-        return len(written)
+            for chunk in _row_chunks(rows):
+                stmt = pg_insert(replay_verdicts).values(chunk)
+                updatable = {
+                    c.name: stmt.excluded[c.name]
+                    for c in replay_verdicts.columns
+                    if c.name != "id" and c.name in rows[0]
+                }
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[replay_verdicts.c.id], set_=updatable
+                ).returning(replay_verdicts.c.id)
+                written += len(cx.execute(stmt).all())
+        return written
 
     def verdicts_for(self, run_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -283,18 +307,20 @@ class ReplayRepository:
         run-namespaced request id, so a resumed run re-derives the same rows."""
         if not rows:
             return 0
-        stmt = pg_insert(replay_contexts).values([dict(r) for r in rows])
-        updatable = {
-            c.name: stmt.excluded[c.name]
-            for c in replay_contexts.columns
-            if c.name != "id" and c.name in rows[0]
-        }
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[replay_contexts.c.id], set_=updatable
-        ).returning(replay_contexts.c.id)
+        written = 0
         with self._engine.begin() as cx:
-            written = cx.execute(stmt).all()
-        return len(written)
+            for chunk in _row_chunks(rows):
+                stmt = pg_insert(replay_contexts).values(chunk)
+                updatable = {
+                    c.name: stmt.excluded[c.name]
+                    for c in replay_contexts.columns
+                    if c.name != "id" and c.name in rows[0]
+                }
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[replay_contexts.c.id], set_=updatable
+                ).returning(replay_contexts.c.id)
+                written += len(cx.execute(stmt).all())
+        return written
 
     def contexts_for(self, run_id: str, as_of: date | None = None) -> list[dict[str, Any]]:
         stmt = select(replay_contexts).where(replay_contexts.c.run_id == run_id)
