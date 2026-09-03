@@ -843,14 +843,32 @@ def run_preflight(
             audited = sorted(set(audited) | set(tier2))
     if symbols:
         checks.append(_check_bar_coverage(reads, symbols, config.start, "start"))
-        checks.append(
-            _check_bar_coverage(
-                reads,
-                symbols,
-                config.start - timedelta(days=RETURNS_LOOKBACK_DAYS),
-                "lookback",
+        # The lookback check must be measured against the universe AS OF THE
+        # LOOKBACK DATE, not as of the start. A wide universe carries listings:
+        # measured on the real tier-2 universe, 2,592 of 10,429 members at
+        # 2026-03-03 joined after the 750d-lookback date — IPOs cannot have
+        # pre-IPO bars, and dividing by today's membership reported 75.8%
+        # "coverage" against a 95% floor when coverage among symbols that
+        # EXISTED was ~100%. Names without full history simply abstain via the
+        # feature-coverage gate; their absence two years ago is not a data
+        # failure.
+        lookback_date = config.start - timedelta(days=RETURNS_LOOKBACK_DAYS)
+        lookback_universe = [
+            s
+            for s in reads.universe_symbols(lookback_date, config.universe_tiers)
+            if s in set(symbols)
+        ]
+        if lookback_universe:
+            checks.append(_check_bar_coverage(reads, lookback_universe, lookback_date, "lookback"))
+        else:
+            checks.append(
+                PreflightCheck(
+                    "bar_coverage_lookback",
+                    WARNING,
+                    f"no current universe member was a member at {lookback_date} — "
+                    "lookback coverage unmeasurable (very young universe)",
+                )
             )
-        )
         checks.append(_check_bar_adjustment(reads, audited, config))
     checks.append(_check_macro(reads, config))
     checks.append(_check_quant_model(config, require_shipping_bundle))
