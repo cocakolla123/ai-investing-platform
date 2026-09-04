@@ -74,13 +74,23 @@ def test_volume_spike_flags_dollar_volume() -> None:
 
 
 def test_rel_strength_vs_sector_etf() -> None:
-    strong = [100.0 * (1.015**i) for i in range(30)]  # ~+35% over 20d window
+    strong = [100.0 * (1.02**i) for i in range(30)]  # ~+49% over 20d window
     flat = noisy_flat(30)
     bars = pd.concat([make_bars("ACME", strong), make_bars("XLK", flat)])
     flags = rel_strength(bars, as_of=AS_OF, sector_etf_map={"ACME": "XLK"})
     assert len(flags) == 1
     assert flags[0].details["sector_etf"] == "XLK"
-    assert float(flags[0].details["excess_return_20d"]) > 0.10
+    assert float(flags[0].details["excess_return_20d"]) > 0.40
+
+
+def test_rel_strength_ignores_ordinary_sector_divergence() -> None:
+    """The wide-universe recalibration. A ~35% 20d divergence cleared the old
+    0.10 threshold; on 10.5k names that fired 937/day and drowned every other
+    detector (measured, run replay-699b62040d45). It must NOT fire now."""
+    ordinary = [100.0 * (1.015**i) for i in range(30)]  # ~+35% over 20d
+    flat = noisy_flat(30)
+    bars = pd.concat([make_bars("ACME", ordinary), make_bars("XLK", flat)])
+    assert rel_strength(bars, as_of=AS_OF, sector_etf_map={"ACME": "XLK"}) == []
 
 
 def test_range_break_needs_volume_confirmation() -> None:

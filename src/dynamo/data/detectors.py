@@ -314,7 +314,7 @@ def rel_strength(
     *,
     as_of: datetime,
     sector_etf_map: Mapping[str, str],
-    threshold: float = 0.10,
+    threshold: float = 0.40,
     window: int = 20,
     per_symbol: Mapping[str, pd.DataFrame] | None = None,
 ) -> list[SurveillanceFlag]:
@@ -322,6 +322,19 @@ def rel_strength(
 
     ``sector_etf_map`` maps each symbol to its sector ETF; ETF bars must be
     present in ``bars`` too.
+
+    The default was 0.10 — written for a 55-mega-cap universe, where a 10%
+    monthly divergence from your sector is an event. On the 10.5k-name wide
+    universe it is Tuesday: MEASURED over the 115-session wide campaign
+    (run replay-699b62040d45), 0.10 fired 107,730 flags — 937/day, 83% of
+    ALL flags, drowning every other detector in the composite ranking and
+    blowing the 30-120/day funnel band by 10x. The severity formula
+    saturates at 1.0 for a third of those, so a downstream severity floor
+    cannot discriminate; the firing threshold is the only real knob.
+
+    0.40 keeps 6,860 of those flags (60/day) — the divergences that are
+    events at ANY capitalization. Same-run counterfactuals:
+    0.15 -> 558/day, 0.20 -> 340/day, 0.30 -> 132/day, 0.40 -> 60/day.
     """
     frames = _frames(bars, per_symbol)
 

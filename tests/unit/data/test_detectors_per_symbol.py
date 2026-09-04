@@ -57,7 +57,9 @@ def _panel() -> pd.DataFrame:
     acme = make_bars("ACME", closes, [100_000] * 70 + [1_000_000])
 
     flat = noisy_flat(60)
-    lag = make_bars("LAG", [*flat, *[flat[-1] * (1.0 + 0.01 * i) for i in range(1, 22)]])
+    # 2.5%/session over the 20d window (~+65% total) — clears the 0.40
+    # wide-universe rel_strength threshold with margin.
+    lag = make_bars("LAG", [*flat, *[flat[-1] * (1.0 + 0.025 * i) for i in range(1, 22)]])
     etf = make_bars("XLK", noisy_flat(81))
 
     split_closes = noisy_flat(70)
