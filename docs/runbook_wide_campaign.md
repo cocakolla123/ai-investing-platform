@@ -108,34 +108,34 @@ The A/B is the point. Both arms share the survivorship bias, the IEX volume bias
 missing sleeves, so **the difference between them is the only near-unbiased number this
 campaign can produce.** The absolute return vs SPY is not.
 
+> **CORRECTED 2026-09-05 — the original treatment arm was vacuous.** It passed
+> `--universe-tier 2`, which makes the entire tier-2 universe DIRECTLY tradable, so
+> discovery's promotions promoted names into a pool they were already in. Measured on runs
+> `replay-699b62040d45` and `replay-54f0e13875fd`: 99.6% of promoted names were already
+> being decided before their promotion, and both runs produced byte-identical equity,
+> fills and decisions to each other despite a 4.5x difference in promotions. Those two
+> runs measure *universe widening* (wide-traded −6.8% vs core, with the NO-GO model),
+> NOT discovery. The treatment arm below trades the CORE universe and lets discovery
+> promote from tier 2 — the only difference from the control is promotion itself.
+
 ```bash
-# discovery ON
+# discovery ON: trade tier 1+3; discovery SCANS tier 2 and promotes into the pool
 uv run python -m dynamo.cli.replay run --mode quant \
   --start 2026-03-03 --end 2026-08-14 \
-  --universe-tier 1 --universe-tier 2 --universe-tier 3 \
+  --universe-tier 1 --universe-tier 3 \
   --discovery code --discovery-min-dollar-volume 2000000 --discovery-min-price 5 \
-  --discovery-promotions-per-day 60 --discovery-promotion-days 30 \
-  --quant-model-version campaign-v5 --min-feature-coverage 0.35 \
+  --discovery-promotions-per-day 15 --discovery-promotion-days 30 \
+  --quant-model-version campaign-v8 --min-feature-coverage 0.35 \
   --initial-equity 100000 --ballast SPY \
-  --code-version wide-2026-09 --run-label wide-quant-100k
+  --code-version wide-2026-08b --run-label disc-quant-100k-true
 
-# CONTROL: identical, discovery OFF, core universe only
+# CONTROL: identical traded universe, discovery OFF
 uv run python -m dynamo.cli.replay run --mode quant \
   --start 2026-03-03 --end 2026-08-14 \
   --universe-tier 1 --universe-tier 3 --discovery off \
-  --quant-model-version campaign-v5 \
+  --quant-model-version campaign-v8 \
   --initial-equity 100000 --ballast SPY \
-  --code-version wide-2026-09 --run-label core-quant-100k-control
-
-# other bankrolls
-for EQ in 1000 10000; do
-  uv run python -m dynamo.cli.replay run --mode quant \
-    --start 2026-03-03 --end 2026-08-14 \
-    --universe-tier 1 --universe-tier 2 --universe-tier 3 \
-    --discovery code --discovery-min-dollar-volume 2000000 --discovery-min-price 5 \
-    --quant-model-version campaign-v5 --initial-equity $EQ --ballast SPY \
-    --code-version wide-2026-09 --run-label wide-quant-$EQ
-done
+  --code-version wide-2026-08b --run-label core-quant-100k-control
 ```
 
 **GO/NO-GO #3** — acceptance criteria for the discovery layer. Computed by:
