@@ -75,3 +75,60 @@ def test_price_mapping_and_trust_flag() -> None:
 
     wide = make_client()._to_price({**MARKET, "yes_bid": 30, "yes_ask": 56}, ts)
     assert wide is not None and not wide.trusted  # spread cap
+
+
+SETTLED_DOLLARS = {
+    # The newer settled-listing schema serves decimal-string *_dollars fields
+    # and no integer-cent twins (observed live 2026-09).
+    "ticker": "KXEV-26SEP-A",
+    "result": "yes",
+    "last_price_dollars": "0.9905",
+    "previous_price_dollars": "0.9400",
+    "volume_fp": "504.43",
+    "settlement_ts": "2026-09-10T06:53:55.572734Z",
+}
+
+SETTLED_CENTS = {
+    # The classic schema: integer cents.
+    "ticker": "KXEV-26SEP-B",
+    "result": "no",
+    "last_price": 3,
+    "previous_price": 6,
+    "volume": 1200,
+    "settlement_ts": "2026-09-09T00:00:00Z",
+}
+
+
+def test_settlement_mapping_parses_both_price_schemas() -> None:
+    to_settlement = KalshiClient._to_settlement
+
+    dollars = to_settlement(SETTLED_DOLLARS)
+    assert dollars is not None
+    assert dollars.market_id == "KXEV-26SEP-A"
+    assert dollars.result_yes is True
+    assert dollars.last_price == 0.9905
+    assert dollars.previous_price == 0.94
+    assert dollars.volume == 504.43
+    assert dollars.settled_ts is not None and dollars.settled_ts.tzinfo is not None
+
+    cents = to_settlement(SETTLED_CENTS)
+    assert cents is not None
+    assert cents.result_yes is False
+    assert cents.last_price == 0.03
+    assert cents.previous_price == 0.06
+    assert cents.volume == 1200.0
+
+
+def test_settlement_mapping_drops_unusable_rows() -> None:
+    to_settlement = KalshiClient._to_settlement
+    assert to_settlement({**SETTLED_DOLLARS, "ticker": ""}) is None
+    # Void/scalar results are not YES/NO outcomes -> dropped, not guessed.
+    assert to_settlement({**SETTLED_DOLLARS, "result": ""}) is None
+    assert to_settlement({**SETTLED_DOLLARS, "result": "void"}) is None
+    # Malformed prices become None fields, not exceptions.
+    mangled = to_settlement({**SETTLED_DOLLARS, "previous_price_dollars": "n/a"})
+    assert mangled is not None and mangled.previous_price is None
+
+
+def test_settled_markets_skips_when_unconfigured() -> None:
+    assert list(make_client(configured=False).settled_markets()) == []

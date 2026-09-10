@@ -17,8 +17,10 @@ upper bound.
 from __future__ import annotations
 
 import base64
+import math
 import time
 from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +42,55 @@ def _parse_ts(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def _dollar_price(m: dict[str, Any], cents_key: str, dollars_key: str) -> float | None:
+    """A price in dollars from either payload schema; None when absent/malformed.
+
+    Kalshi serves two market schemas: the classic one with integer-cent fields
+    (``last_price``) and a newer one with decimal-string ``*_dollars`` fields
+    (``last_price_dollars``) — settled listings have been observed serving
+    ONLY the ``*_dollars`` form. Prefer the cent field when present, fall back
+    to the dollars field, and return None (never a guess) for anything
+    missing, malformed, or non-finite.
+    """
+    raw = m.get(cents_key)
+    if raw is not None:
+        try:
+            value = float(raw) / 100.0
+        except (TypeError, ValueError):
+            value = None
+        if value is not None and math.isfinite(value):
+            return value
+    raw = m.get(dollars_key)
+    if raw is not None:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if math.isfinite(value):
+            return value
+    return None
+
+
+@dataclass(frozen=True)
+class KalshiSettlement:
+    """One SETTLED Kalshi market: the resolved outcome plus its final prices.
+
+    Feedstock for the favorite-longshot calibration study
+    (``dynamo.cli.pm_calibration``). ``last_price`` is the last trade before
+    settlement (heavily converged toward the outcome); ``previous_price`` is
+    Kalshi's previous-period reference price — further from settlement, so
+    the study prefers it. Either can be None when the payload lacks a usable
+    value; the CALLER decides what a usable study price is.
+    """
+
+    market_id: str
+    result_yes: bool
+    last_price: float | None  # last trade before settlement, dollars in [0, 1]
+    previous_price: float | None  # previous-period reference price, dollars in [0, 1]
+    volume: float  # contracts traded (≈ $ upper bound, as elsewhere)
+    settled_ts: datetime | None
 
 
 class KalshiClient:
@@ -191,6 +242,59 @@ class KalshiClient:
                 market = self._to_market(m)
                 if market is not None:
                     yield market
+            cursor = payload.get("cursor")
+            if not cursor:
+                return
+
+    @staticmethod
+    def _to_settlement(m: dict[str, Any]) -> KalshiSettlement | None:
+        """Defensive mapping of one settled-market payload; None when unusable."""
+        ticker = m.get("ticker")
+        result = m.get("result")
+        if not ticker or result not in ("yes", "no"):
+            return None  # void/scalar/unsettled results are not YES/NO outcomes
+        volume = 0.0
+        for key in ("volume", "volume_fp"):  # integer-cent schema, then decimal-string
+            raw = m.get(key)
+            if raw is None:
+                continue
+            try:
+                volume = float(raw)
+                break
+            except (TypeError, ValueError):
+                continue
+        return KalshiSettlement(
+            market_id=str(ticker),
+            result_yes=result == "yes",
+            last_price=_dollar_price(m, "last_price", "last_price_dollars"),
+            previous_price=_dollar_price(m, "previous_price", "previous_price_dollars"),
+            volume=volume if math.isfinite(volume) else 0.0,
+            settled_ts=_parse_ts(m.get("settlement_ts")),
+        )
+
+    def settled_markets(self, *, max_pages: int | None = None) -> Iterator[KalshiSettlement]:
+        """SETTLED markets, newest first (``GET /markets?status=settled``).
+
+        Read-only calibration feedstock; empty when unconfigured, exactly like
+        :meth:`markets`. Cursor-paginated and capped at ``max_pages`` (default:
+        the client-wide cap) — 200 markets a page, so the default cap costs at
+        most ``max_pages`` requests through the shared token bucket. Rows the
+        payload cannot support (no ticker, result not yes/no) are dropped, not
+        guessed at.
+        """
+        if not self.configured:
+            return
+        pages = max_pages if max_pages is not None else self._max_pages
+        cursor: str | None = None
+        for _ in range(pages):
+            params: dict[str, Any] = {"limit": 200, "status": "settled"}
+            if cursor:
+                params["cursor"] = cursor
+            payload = self._get("/markets", params=params)
+            for m in payload.get("markets", []):
+                settlement = self._to_settlement(m)
+                if settlement is not None:
+                    yield settlement
             cursor = payload.get("cursor")
             if not cursor:
                 return

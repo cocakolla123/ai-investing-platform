@@ -138,3 +138,91 @@ def test_clob_token_ids_missing_or_malformed_return_none() -> None:
     for payload in payloads:
         handler = httpx.MockTransport(lambda _r, p=payload: httpx.Response(200, json=p))
         assert make_client(handler).clob_token_ids("500001") is None
+
+
+RESOLVED = {
+    # A resolved-YES market: final price 1, ~24h-earlier price derivable from
+    # oneDayPriceChange (Gamma stores no true pre-settlement snapshot).
+    "id": "600001",
+    "question": "Did the favorite win?",
+    "closed": True,
+    "umaResolutionStatus": "resolved",
+    "outcomePrices": '["1", "0"]',
+    "oneDayPriceChange": 0.06,
+    "volumeNum": 10_000.0,
+}
+
+
+def test_resolution_mapping_derives_the_prior_price() -> None:
+    to_resolution = PolymarketClient._to_resolution
+
+    won = to_resolution(RESOLVED)
+    assert won is not None
+    assert won.market_id == "600001"
+    assert won.resolved_yes is True
+    assert won.final_price == 1.0
+    assert won.prior_price is not None and abs(won.prior_price - 0.94) < 1e-12
+    assert won.volume == 10_000.0
+
+    lost = to_resolution({**RESOLVED, "outcomePrices": '["0", "1"]', "oneDayPriceChange": -0.06})
+    assert lost is not None
+    assert lost.resolved_yes is False
+    assert lost.prior_price is not None and abs(lost.prior_price - 0.06) < 1e-12
+
+
+def test_resolution_mapping_drops_unclear_rows() -> None:
+    to_resolution = PolymarketClient._to_resolution
+    assert to_resolution({**RESOLVED, "closed": False}) is None
+    assert to_resolution({**RESOLVED, "umaResolutionStatus": "disputed"}) is None
+    # Closed but the final price is away from 0/1: not clearly resolved.
+    assert to_resolution({**RESOLVED, "outcomePrices": '["0.55", "0.45"]'}) is None
+    # No change field -> no derivable prior price, but the outcome still maps.
+    no_change = dict(RESOLVED)
+    del no_change["oneDayPriceChange"]
+    row = to_resolution(no_change)
+    assert row is not None and row.prior_price is None
+
+
+def test_resolved_markets_paginates_closed_listings() -> None:
+    calls: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(dict(request.url.params))
+        assert request.url.params["closed"] == "true"
+        return httpx.Response(200, json=[RESOLVED])  # < page size -> single page
+
+    rows = list(make_client(httpx.MockTransport(handler)).resolved_markets(max_pages=3))
+    assert len(calls) == 1
+    assert len(rows) == 1 and rows[0].resolved_yes is True
+
+
+EVENT = {
+    "id": "16183",
+    "title": "Who wins the nomination?",
+    "negRisk": True,
+    "markets": [
+        MARKET,
+        {**MARKET, "id": "500002", "question": "Or this one?", "closed": True},
+        "not-a-dict",
+    ],
+}
+
+
+def test_open_events_parse_neg_risk_and_price_closed_legs_as_none() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url.path).endswith("/events")
+        assert request.url.params["closed"] == "false"
+        return httpx.Response(200, json=[EVENT, {"title": "no id"}, "not-a-dict"])
+
+    events = make_client(httpx.MockTransport(handler)).open_events(limit=50)
+    assert len(events) == 1  # malformed events dropped, never guessed at
+    event = events[0]
+    assert event.event_id == "16183" and event.neg_risk is True
+    assert len(event.markets) == 2  # the non-dict nested row is dropped
+    open_market, open_price = event.markets[0]
+    assert open_market.market_id == "500001"
+    assert open_price is not None and open_price.implied_prob == 0.65
+    assert open_price.trusted  # thin-market policy applied from the nested payload
+    closed_market, closed_price = event.markets[1]
+    assert closed_market.market_id == "500002"
+    assert closed_price is None  # closed legs carry no price -> fail closed downstream

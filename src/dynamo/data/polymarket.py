@@ -13,6 +13,7 @@ Thin-market policy (doc 02 §7): implied probabilities are stored but marked
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -53,6 +54,47 @@ def _yes_price(market: dict[str, Any]) -> float | None:
         except (TypeError, ValueError):
             return None
     return None
+
+
+@dataclass(frozen=True)
+class PolymarketResolution:
+    """One RESOLVED Gamma market: the outcome plus a derived pre-final price.
+
+    Feedstock for the favorite-longshot calibration study
+    (``dynamo.cli.pm_calibration``). Gamma's closed-market payload carries no
+    stored pre-settlement snapshot — ``outcomePrices`` is the final 0/1 — so
+    ``prior_price`` is DERIVED as ``final_price - oneDayPriceChange``, i.e.
+    the YES price roughly 24 hours before the final tick. Two caveats the
+    caller must surface: Gamma does not document whether that change field
+    freezes at close, and a price one day from resolution has already
+    converged toward the outcome. None when the field is absent or the
+    derived value falls outside (0, 1).
+    """
+
+    market_id: str
+    question: str
+    resolved_yes: bool
+    final_price: float  # outcomePrices[0] at resolution (0/1 by then)
+    prior_price: float | None  # final_price - oneDayPriceChange, in (0, 1)
+    volume: float
+
+
+@dataclass(frozen=True)
+class GammaEvent:
+    """One Gamma /events row: an event grouping its markets with YES prices.
+
+    Dutch-book feedstock (:func:`dynamo.risk.pm_arbitrage.find_dutch_books`
+    with a Polymarket event key). ``neg_risk`` marks events whose outcomes
+    are mutually exclusive BY CONSTRUCTION (Polymarket's negative-risk
+    conversion applies); only those are safe to dutch-book. A nested market's
+    price is None when the market is closed or unpriceable, so a stale leg
+    poisons its book fail-closed downstream instead of pricing it.
+    """
+
+    event_id: str
+    title: str
+    neg_risk: bool
+    markets: tuple[tuple[PredictionMarket, PredictionMarketPrice | None], ...]
 
 
 @dataclass(frozen=True)
@@ -183,6 +225,108 @@ class PolymarketClient:
             if market is not None:
                 out.append((market, _yes_price(m)))
         return out
+
+    def open_events(self, limit: int = 200) -> list[GammaEvent]:
+        """ONE page of open events with nested markets + YES prices (keyless read).
+
+        Dutch-book feedstock: a single ``/events`` request — deliberately not
+        paginated, mirroring :meth:`open_markets_with_yes`, so a scan costs the
+        Gamma API one call — returning each event with its nested markets and
+        their :class:`PredictionMarketPrice` (thin-market trust flag applied
+        from the nested payload's ``volumeNum``/``spread``). Closed nested
+        markets keep their :class:`PredictionMarket` row but carry price None,
+        so downstream book-building fails closed on the stale leg. Malformed
+        events and markets are skipped, never guessed at.
+        """
+        payload = self._get("/events", params={"closed": "false", "limit": limit, "offset": 0})
+        now = datetime.now(UTC)
+        events: list[GammaEvent] = []
+        for e in payload or []:
+            if not isinstance(e, dict):
+                continue
+            event_id = e.get("id")
+            title = e.get("title")
+            raw_markets = e.get("markets")
+            if event_id is None or not title or not isinstance(raw_markets, list):
+                continue
+            rows: list[tuple[PredictionMarket, PredictionMarketPrice | None]] = []
+            for m in raw_markets:
+                if not isinstance(m, dict):
+                    continue
+                market = self._to_market(m)
+                if market is None:
+                    continue
+                price = None if m.get("closed") else self._to_price(m, now)
+                rows.append((market, price))
+            events.append(
+                GammaEvent(
+                    event_id=str(event_id),
+                    title=str(title),
+                    neg_risk=bool(e.get("negRisk")),
+                    markets=tuple(rows),
+                )
+            )
+        return events
+
+    @staticmethod
+    def _to_resolution(m: dict[str, Any]) -> PolymarketResolution | None:
+        """Defensive mapping of one closed-market payload; None when unusable."""
+        market_id = m.get("id")
+        question = m.get("question")
+        if market_id is None or not question or not m.get("closed"):
+            return None
+        status = m.get("umaResolutionStatus")
+        if status is not None and status != "resolved":
+            return None  # disputed/unresolved closes are not outcomes
+        final = _yes_price(m)
+        if final is None:
+            return None
+        if final >= 0.99:
+            resolved_yes = True
+        elif final <= 0.01:
+            resolved_yes = False
+        else:
+            return None  # closed but not clearly resolved — not calibration data
+        prior: float | None = None
+        change = m.get("oneDayPriceChange")
+        if isinstance(change, int | float) and math.isfinite(float(change)):
+            derived = final - float(change)
+            if 0.0 < derived < 1.0:
+                prior = derived
+        return PolymarketResolution(
+            market_id=str(market_id),
+            question=str(question),
+            resolved_yes=resolved_yes,
+            final_price=final,
+            prior_price=prior,
+            volume=float(m.get("volumeNum") or 0.0),
+        )
+
+    def resolved_markets(self, *, max_pages: int | None = None) -> Iterator[PolymarketResolution]:
+        """RESOLVED markets via ``/markets?closed=true``, offset-paginated.
+
+        Read-only calibration feedstock; capped at ``max_pages`` (default: the
+        client-wide cap) of 100 rows each. Rows that are not clearly resolved
+        — disputed UMA status, a final price away from 0/1 — are dropped, not
+        guessed at. See :class:`PolymarketResolution` for the derived-price
+        caveats the caller must print.
+        """
+        pages = max_pages if max_pages is not None else self._max_pages
+        page_size = 100
+        for page in range(pages):
+            payload = self._get(
+                "/markets",
+                params={"closed": "true", "limit": page_size, "offset": page * page_size},
+            )
+            rows = payload or []
+            for m in rows:
+                if not isinstance(m, dict):
+                    continue
+                resolution = self._to_resolution(m)
+                if resolution is not None:
+                    yield resolution
+            if len(rows) < page_size:
+                return
 
     def prices(self, market_ids: Sequence[str]) -> Iterator[PredictionMarketPrice]:
         """Per-market snapshot with the thin-market trust flag applied."""
