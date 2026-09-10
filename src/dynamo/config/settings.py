@@ -252,6 +252,23 @@ class Settings(BaseSettings):
     # Candidates stay research rows until verified into pm_arb_verified_pairs.
     pm_match_min_score: float = 0.65
 
+    # --- Favorites harvester sleeve (SIM-ONLY, GATED OFF; risk/pm_favorites) ---
+    # pm_favorites_enabled stays False until the favorite-longshot calibration
+    # study (python -m dynamo.cli.pm_calibration) demonstrates a POSITIVE NET
+    # edge — realized YES rate above price + fees at the bottom of the 95% CI
+    # — in the traded band. The study's printed verdict IS the gate: flip
+    # this only on an "EDGE EXISTS" verdict, and set pm_fav_assumed_net_edge
+    # to the demonstrated per-contract net edge at the same time (it defaults
+    # to 0.0, which makes the selector emit nothing even when enabled — a
+    # deliberate second fail-closed gate). Like the arbitrage sleeve, the
+    # asset constructs no broker in any environment (tested).
+    pm_favorites_enabled: bool = False
+    pm_fav_min_price: float = 0.90  # buy-YES band floor (favorites only)
+    pm_fav_max_price: float = 0.99  # buy-YES band ceiling
+    pm_fav_assumed_net_edge: float = 0.0  # study-demonstrated $/contract; <= 0 selects nothing
+    pm_fav_sim_bankroll_usd: float = 1_000.0  # seed of the dedicated 'favsim' sub-ledger
+    pm_fav_max_stake_usd: float = 25.0  # per-candidate cost cap in the sim
+
     # --- Options sleeve (ADR-0010; defined-risk only, paper first) ---
     # Hard caps enforced in code (risk/options_sizing.py + domain validators):
     # the sleeve trades ONLY long calls, long puts, covered calls, and

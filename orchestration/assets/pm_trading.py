@@ -20,6 +20,7 @@ submission is still gate-checked individually exactly like Kalshi's flow.
 """
 
 import math
+import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -1170,5 +1171,180 @@ def pm_arbitrage_sim_asset(
     )
 
 
-PM_ASSETS = [pm_resolution_asset, pm_sim_resolution_asset, pm_arbitrage_sim_asset]
+# --------------------------------------------------------------------------
+# pm_favorites_sim — SIM-ONLY favorites harvester, GATED OFF until the study
+# --------------------------------------------------------------------------
+
+# Dedicated sub-ledger venue in pm_sim_ledger: favorites cash must never mix
+# with the shadow bankroll ('polymarket') or the arbitrage sleeve ('arbsim').
+PM_FAV_LEDGER_VENUE = "favsim"
+
+# Machine-readable contract count embedded in every fav_fill note, so the
+# settlement pass can credit winners without a positions table. An entry
+# whose note cannot be parsed is HELD, never guessed at.
+_FAV_CONTRACTS_RE = re.compile(r"contracts=(\d+)")
+
+
+def _settle_favorites(
+    context: AssetExecutionContext, ledger: Any, markets: dict[str, Any], now: datetime
+) -> tuple[int, float]:
+    """Idempotent fav_settle credits for resolved fav_fill entries.
+
+    Winners credit contracts * $1, losers credit $0 (the zero-amount row still
+    marks the fill settled under the (venue, kind, ref) key). Returns
+    (settlements, realized_cents) where realized is credit + the original
+    fill debit.
+    """
+    from dynamo.domain.models.pm import PMSimLedgerEntry
+
+    fills = {e["ref"]: e for e in ledger.entries() if e["kind"] == "fav_fill"}
+    settlements, realized_cents = 0, 0.0
+    for ref, fill in sorted(fills.items()):
+        market = markets.get(str(fill.get("market_id") or ""))
+        outcome = market.resolved_outcome if market is not None else None
+        if outcome is None:
+            continue  # held to resolution, same as every other PM sleeve
+        match = _FAV_CONTRACTS_RE.search(fill.get("note") or "")
+        if match is None:
+            context.log.warning("pm_favorites: %s has no contracts= note — holding", ref)
+            continue
+        contracts = int(match.group(1))
+        credit = round(contracts * 100.0, 2) if outcome else 0.0
+        wrote = ledger.append(
+            PMSimLedgerEntry(
+                venue=PM_FAV_LEDGER_VENUE,
+                kind="fav_settle",
+                ref=ref,
+                market_id=fill.get("market_id"),
+                amount_cents=credit,
+                note=(
+                    f"fav:settle {'won' if outcome else 'lost'} contracts={contracts} "
+                    f"— resolved {'YES' if outcome else 'NO'}"
+                ),
+                ts=now,
+            )
+        )
+        if wrote:
+            settlements += 1
+            realized_cents += credit + float(fill["amount_cents"])
+    return settlements, realized_cents
+
+
+@dagster_asset(name="pm_favorites_sim", group_name=PM_GROUP)
+def pm_favorites_sim_asset(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """SIM-ONLY favorites harvester: buy YES on 90-99c Kalshi favorites — GATED OFF.
+
+    THE GATE: ``pm_favorites_enabled`` defaults to False and STAYS False until
+    the favorite-longshot calibration study (``python -m
+    dynamo.cli.pm_calibration``) demonstrates a positive NET edge — realized
+    YES rate above price + fees at the bottom of the 95% CI — in the traded
+    band. The study's printed per-venue verdict is the gate: flip the flag
+    only on "EDGE EXISTS", and copy the demonstrated per-contract net edge
+    into ``pm_fav_assumed_net_edge`` at the same time. That second setting
+    fails closed too: at its 0.0 default the selector
+    (:func:`dynamo.risk.pm_favorites.select_favorites`) emits nothing even
+    with the flag on, because an assumed edge the study has not demonstrated
+    is not an edge.
+
+    When enabled: the latest stored Kalshi markets/prices run through the
+    selector (band, trust, fee via ``kalshi_fee_per_contract``), each
+    candidate is sized against the dedicated ``favsim`` sub-ledger of
+    pm_sim_ledger (cost capped by ``pm_fav_max_stake_usd`` and available
+    cash) and recorded as one idempotent ``fav_fill`` debit per market per
+    day. Unlike the arbitrage sleeve nothing is locked, so payout credits at
+    RESOLUTION, not entry: each run first settles resolved fills with
+    ``fav_settle`` credits (winners contracts * $1, losers $0 — the zero row
+    marks the loss settled). Re-running the same day is a no-op via the
+    ledger's (venue, kind, ref) key.
+
+    HARD-CODED SIM PATH (deliberate, pinned by a test, same as
+    pm_arbitrage_sim): this asset constructs NO broker — not KalshiBroker,
+    not PolymarketBroker, not even the sim broker — in ANY environment,
+    including LIVE with an open gate. The only writes are favsim ledger rows.
+    """
+    from dynamo.domain.models.pm import PMSimLedgerEntry
+    from dynamo.persistence.repositories.pm import PMSimLedgerRepository
+    from dynamo.risk.pm_arbitrage import kalshi_fee_per_contract
+    from dynamo.risk.pm_favorites import select_favorites
+
+    settings = dynamo.settings()
+    if not settings.pm_favorites_enabled:
+        return MaterializeResult(
+            metadata={
+                "skipped": (
+                    "pm favorites disabled — stays off until the pm_calibration "
+                    "study demonstrates positive net edge (its verdict is the gate)"
+                )
+            }
+        )
+
+    _views, prices, markets = _latest_pm_frames(dynamo, PM_VENUE)
+    result = select_favorites(
+        list(markets.values()),
+        prices,
+        min_price=settings.pm_fav_min_price,
+        max_price=settings.pm_fav_max_price,
+        fee_fn=kalshi_fee_per_contract,
+        min_net_edge_assumed=settings.pm_fav_assumed_net_edge,
+    )
+    for market_id, reason in result.skipped:
+        context.log.info("pm_favorites: skipped %s (%s)", market_id, reason)
+
+    now = utcnow()
+    ledger = PMSimLedgerRepository(dynamo.engine(), venue=PM_FAV_LEDGER_VENUE)
+    ledger.ensure_seeded(round(settings.pm_fav_sim_bankroll_usd * 100.0, 2), now)
+    settlements, realized_cents = _settle_favorites(context, ledger, markets, now)
+    cash_cents = ledger.cash_cents()
+    day = now.date().isoformat()
+    recorded = 0
+    for candidate in result.candidates:
+        stake = min(settings.pm_fav_max_stake_usd, cash_cents / 100.0)
+        contracts = math.floor(stake / candidate.cost)
+        if contracts < 1:
+            context.log.info(
+                "pm_favorites: %s skipped — stake below one contract", candidate.market_id
+            )
+            continue
+        debit = -round(contracts * candidate.cost * 100.0, 2)
+        wrote = ledger.append(
+            PMSimLedgerEntry(
+                venue=PM_FAV_LEDGER_VENUE,
+                kind="fav_fill",
+                ref=f"{day}:{candidate.market_id}",
+                market_id=candidate.market_id,
+                amount_cents=debit,
+                note=f"fav:harvest contracts={contracts} {candidate.rationale}",
+                ts=now,
+            )
+        )
+        if not wrote:  # same market already bought today — idempotent no-op
+            continue
+        cash_cents += debit
+        recorded += 1
+        context.log.info(
+            "pm_favorites: SIM %dx — %s (credit lands at resolution)",
+            contracts,
+            candidate.rationale,
+        )
+    return MaterializeResult(
+        metadata={
+            "simulated": True,
+            "candidates": len(result.candidates),
+            "selector_skipped": len(result.skipped),
+            "recorded": recorded,
+            "settlements": settlements,
+            "realized_pnl_usd": realized_cents / 100.0,
+            "sim_cash_usd": ledger.cash_cents() / 100.0,
+        }
+    )
+
+
+PM_ASSETS = [
+    pm_resolution_asset,
+    pm_sim_resolution_asset,
+    pm_arbitrage_sim_asset,
+    pm_favorites_sim_asset,
+]
 PM_JOBS = [pm_trading_job, pm_reconciliation_job]
