@@ -82,6 +82,22 @@ def kalshi_fee_per_contract(price: float) -> float:
     return math.ceil(7.0 * price * (1.0 - price)) / 100.0
 
 
+def polymarket_fee_per_contract(price: float) -> float:
+    """Polymarket trading fee for one contract: $0 at any price.
+
+    Polymarket's CLOB charges no trading fee on standard markets (the same
+    assumption :func:`find_cross_venue_arbs` already makes for its Polymarket
+    legs), so the injectable fee for a Polymarket dutch-book scan is a
+    documented zero rather than an anonymous lambda. Expect such scans to
+    come back EMPTY almost always: on negative-risk (mutually exclusive)
+    events, Polymarket's protocol-level neg-risk conversion lets anyone swap
+    a full set of NO shares across outcomes for cash, so resting dutch books
+    are vacuumed by automated converters almost immediately. Checking is one
+    cheap keyless read; finding one would be the anomaly worth investigating.
+    """
+    return 0.0
+
+
 def kalshi_event_key(market: PredictionMarket) -> str | None:
     """Event grouping key for one Kalshi market; None when ungroupable.
 

@@ -968,6 +968,50 @@ def pm_sim_resolution_asset(
 # the Polymarket shadow sleeve's bankroll (whose venue is 'polymarket').
 PM_ARB_LEDGER_VENUE = "arbsim"
 
+# One Gamma /events page per scan (cheap keyless read); events beyond this are
+# simply not scanned today — the scan is a lottery ticket, not a census.
+PM_DUTCH_EVENTS_LIMIT = 200
+
+
+def _polymarket_dutch_books(
+    context: AssetExecutionContext,
+    dynamo: DynamoResource,
+    settings: Settings,
+    fee_fn: Callable[[float], float],
+) -> Any:
+    """Dutch books over one fresh Gamma /events page (asset docstring).
+
+    Only NEGATIVE-RISK events are booked (mutually exclusive by construction);
+    the event id is the grouping key, injected into the same finder the Kalshi
+    scan uses. A missing provider returns an empty result — the sleeve is
+    Kalshi-first and this scan is enrichment.
+    """
+    from dynamo.risk.pm_arbitrage import DutchBookResult, find_dutch_books
+
+    provider = dynamo.polymarket()
+    if provider is None:
+        context.log.info("pm_arbitrage: polymarket provider unavailable — skipping pm dutch scan")
+        return DutchBookResult(candidates=(), skipped=())
+    pm_markets: list[Any] = []
+    pm_prices: dict[str, Any] = {}
+    event_by_market: dict[str, str] = {}
+    for event in provider.open_events(limit=PM_DUTCH_EVENTS_LIMIT):
+        if not event.neg_risk:
+            continue  # not mutually exclusive -> not a book, not even a candidate
+        for market, price in event.markets:
+            pm_markets.append(market)
+            event_by_market[market.market_id] = event.event_id
+            if price is not None:
+                pm_prices[market.market_id] = price
+    return find_dutch_books(
+        pm_markets,
+        pm_prices,
+        fee_per_contract_fn=fee_fn,
+        min_net_edge=settings.pm_arb_min_net_edge,
+        slippage=settings.pm_arb_slippage,
+        event_key_fn=lambda m: event_by_market.get(m.market_id),
+    )
+
 
 @dagster_asset(name="pm_arbitrage_sim", group_name=PM_GROUP)
 def pm_arbitrage_sim_asset(
@@ -982,7 +1026,21 @@ def pm_arbitrage_sim_asset(
     and records the executed sim trades as idempotent ``pm_sim_ledger`` rows
     under the dedicated ``arbsim`` venue — one ``arb_fill`` debit (cost +
     fees) and one ``arb_lock`` payout credit per candidate per day, with the
-    strategy tag (``arb:dutch`` / ``arb:xvenue``) leading every note. The
+    strategy tag (``arb:dutch`` / ``arb:dutch:pm`` / ``arb:xvenue``) leading
+    every note.
+
+    Polymarket dutch books: one fresh Gamma ``/events`` page groups markets
+    into events, and the same finder runs over the NEGATIVE-RISK events only
+    (mutually exclusive by construction — non-negRisk events like cumulative
+    date ladders resolve multiple YES and are not books) with the documented
+    zero fee. Expect this scan to find NOTHING almost always: Polymarket's
+    protocol-level neg-risk conversion lets automated converters vacuum any
+    resting dutch book nearly instantly (see
+    :func:`dynamo.risk.pm_arbitrage.polymarket_fee_per_contract`). The scan
+    stays because it costs one keyless read and a hit would be an anomaly
+    worth investigating; a missing provider just skips it.
+
+    The
     payout credits at entry because a true book pays out by construction;
     capital lockup until resolution is deliberately not modeled, so the
     bankroll tracks cumulative locked profit. Re-running the same day is a
@@ -1010,7 +1068,11 @@ def pm_arbitrage_sim_asset(
     """
     from dynamo.domain.models.pm import PMSimLedgerEntry
     from dynamo.persistence.repositories.pm import PMSimLedgerRepository
-    from dynamo.risk.pm_arbitrage import find_cross_venue_arbs, find_dutch_books
+    from dynamo.risk.pm_arbitrage import (
+        find_cross_venue_arbs,
+        find_dutch_books,
+        polymarket_fee_per_contract,
+    )
 
     settings = dynamo.settings()
     if not settings.pm_arbitrage_enabled:
@@ -1024,6 +1086,7 @@ def pm_arbitrage_sim_asset(
         min_net_edge=settings.pm_arb_min_net_edge,
         slippage=settings.pm_arb_slippage,
     )
+    pm_dutch = _polymarket_dutch_books(context, dynamo, settings, polymarket_fee_per_contract)
     xvenue = find_cross_venue_arbs(
         pairs,
         min_net_edge=settings.pm_arb_min_net_edge,
@@ -1046,6 +1109,7 @@ def pm_arbitrage_sim_asset(
     recorded = 0
     candidates = [
         *(("arb:dutch", f"{c.event_key}:{c.kind}", c) for c in dutch.candidates),
+        *(("arb:dutch:pm", f"pm:{c.event_key}:{c.kind}", c) for c in pm_dutch.candidates),
         *(("arb:xvenue", c.pair_id, c) for c in xvenue.candidates),
     ]
     for tag, key, candidate in candidates:
@@ -1095,6 +1159,8 @@ def pm_arbitrage_sim_asset(
             "simulated": True,
             "dutch_candidates": len(dutch.candidates),
             "dutch_skipped": len(dutch.skipped),
+            "pm_dutch_candidates": len(pm_dutch.candidates),
+            "pm_dutch_skipped": len(pm_dutch.skipped),
             "xvenue_candidates": len(xvenue.candidates),
             "xvenue_unverified": len(xvenue.unverified),
             "xvenue_skipped": len(xvenue.skipped),

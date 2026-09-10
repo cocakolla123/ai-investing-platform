@@ -74,6 +74,8 @@ class ArbDynamo(FakeDynamo):
     (only ever handed to the patched FakeLedger, never dereferenced)."""
 
     current_settings: ClassVar[Settings | None] = None
+    # Gamma /events feedstock for the Polymarket dutch scan; [] -> no events.
+    current_events: ClassVar[list[Any]] = []
 
     def settings(self) -> Settings:
         assert ArbDynamo.current_settings is not None
@@ -81,6 +83,15 @@ class ArbDynamo(FakeDynamo):
 
     def engine(self) -> Any:
         return object()
+
+    def polymarket(self) -> Any:
+        events = list(ArbDynamo.current_events)
+
+        class _StubPolymarket:
+            def open_events(self, limit: int = 200) -> list[Any]:
+                return events[:limit]
+
+        return _StubPolymarket()
 
 
 def stored_frames() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -115,11 +126,36 @@ def stored_pairs() -> list[CrossVenueSpread]:
     ]
 
 
+def gamma_event(event_id: str = "16183", *, neg_risk: bool = True, implied: float = 0.30) -> Any:
+    """A 2-outcome negRisk Gamma event whose YES asks sum to a dutch book."""
+    from dynamo.data.polymarket import GammaEvent
+
+    rows = tuple(
+        (
+            PredictionMarket(
+                venue="polymarket", market_id=f"poly-{event_id}-{s}", question=f"{s}?"
+            ),
+            PredictionMarketPrice(
+                venue="polymarket",
+                market_id=f"poly-{event_id}-{s}",
+                ts=NOW,
+                implied_prob=implied,
+                trusted=True,
+            ),
+        )
+        for s in ("a", "b")
+    )
+    return GammaEvent(
+        event_id=event_id, title=f"event {event_id}?", neg_risk=neg_risk, markets=rows
+    )
+
+
 @pytest.fixture
 def arb_env(monkeypatch: pytest.MonkeyPatch) -> ArbDynamo:
     """Fresh ledger store, stored data patched in, DB repo swapped for the fake."""
     FakeLedger.store = {}
     ArbDynamo.current_settings = make_settings()
+    ArbDynamo.current_events = []
 
     def fake_frames(dynamo: Any, venue: str = "kalshi") -> Any:
         return stored_frames()
@@ -212,7 +248,56 @@ def test_live_broker_is_never_constructed(
         KALSHI_PRIVATE_KEY_PATH="/tmp/kalshi.pem",
         pm_arb_verified_pairs=(PAIR_ID,),
     )
+    ArbDynamo.current_events = [gamma_event()]  # the pm dutch path runs too
     result = run_asset(arb_env)  # would raise if any broker were constructed
     assert result.metadata is not None
-    assert result.metadata["recorded"] == 2  # the asset really ran its full path
-    assert len(arb_entries()) == 4
+    assert result.metadata["recorded"] == 3  # the asset really ran its full path
+    assert len(arb_entries()) == 6
+
+
+def test_polymarket_dutch_book_trades_with_pm_tag_and_zero_fee(arb_env: ArbDynamo) -> None:
+    ArbDynamo.current_events = [gamma_event()]
+    result = run_asset(arb_env)
+    assert result.metadata is not None
+    assert result.metadata["pm_dutch_candidates"] == 1
+    fills = [e for e in arb_entries() if e.kind == "arb_fill"]
+    pm_fills = [e for e in fills if e.note.startswith("arb:dutch:pm ")]
+    assert len(pm_fills) == 1
+    # Zero-fee venue: asks 2 x (0.30 + 0.01 slippage) = $0.62/book, NO fees ->
+    # floor(100 / 0.62) = 161 books; the ref is namespaced under pm:.
+    assert math.isclose(pm_fills[0].amount_cents, -(161 * 62.0))
+    assert pm_fills[0].ref.split(":", 1)[1].startswith("pm:16183:")
+    # The Kalshi book still trades under the unchanged arb:dutch tag.
+    kalshi_fills = [e for e in fills if e.note.startswith("arb:dutch ")]
+    assert len(kalshi_fills) == 1
+
+
+def test_non_negrisk_events_are_never_booked(arb_env: ArbDynamo) -> None:
+    # Cumulative ladders ("IPO by 2025/2026/...") are not mutually exclusive:
+    # a sum of YES asks below $1 there is not a book, so the event must not
+    # even reach the finder.
+    ArbDynamo.current_events = [gamma_event(neg_risk=False)]
+    result = run_asset(arb_env)
+    assert result.metadata is not None
+    assert result.metadata["pm_dutch_candidates"] == 0
+    assert result.metadata["pm_dutch_skipped"] == 0  # filtered out, not skipped
+    assert not any(e.note.startswith("arb:dutch:pm") for e in arb_entries())
+
+
+def test_pm_dutch_closed_leg_poisons_its_event(arb_env: ArbDynamo) -> None:
+    from dynamo.data.polymarket import GammaEvent
+
+    event = gamma_event()
+    stale = GammaEvent(
+        event_id=event.event_id,
+        title=event.title,
+        neg_risk=True,
+        # One leg lost its price (closed nested market) -> whole event skips.
+        markets=(event.markets[0], (event.markets[1][0], None)),
+    )
+    ArbDynamo.current_events = [stale]
+    result = run_asset(arb_env)
+    assert result.metadata is not None
+    assert result.metadata["pm_dutch_candidates"] == 0
+    assert result.metadata["pm_dutch_skipped"] == 1
+    assert not any(e.note.startswith("arb:dutch:pm") for e in arb_entries())
