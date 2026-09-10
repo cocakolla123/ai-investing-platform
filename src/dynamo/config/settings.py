@@ -247,6 +247,10 @@ class Settings(BaseSettings):
     # result.unverified — never sim trades. Verification steps are in the
     # pm_arbitrage_sim asset docstring (orchestration/assets/pm_trading.py).
     pm_arb_verified_pairs: tuple[str, ...] = ()
+    # Title-matcher fallback (research/pm_matching): minimum similarity for a
+    # Kalshi/Polymarket pair CANDIDATE when OddsPipe returns no catalog.
+    # Candidates stay research rows until verified into pm_arb_verified_pairs.
+    pm_match_min_score: float = 0.65
 
     # --- Options sleeve (ADR-0010; defined-risk only, paper first) ---
     # Hard caps enforced in code (risk/options_sizing.py + domain validators):

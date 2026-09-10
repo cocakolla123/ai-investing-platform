@@ -165,6 +165,25 @@ class PolymarketClient:
             if len(rows) < page_size:
                 return
 
+    def open_markets_with_yes(
+        self, limit: int = 500
+    ) -> list[tuple[PredictionMarket, float | None]]:
+        """ONE page of open markets with their current YES price (keyless read).
+
+        Feedstock for the cross-venue title matcher
+        (:mod:`dynamo.research.pm_matching`): a single ``/markets`` request —
+        deliberately not paginated, so a matcher run costs the Gamma API one
+        call — returning each market alongside the YES price already present
+        in the listing payload (no per-market follow-up reads).
+        """
+        payload = self._get("/markets", params={"closed": "false", "limit": limit, "offset": 0})
+        out: list[tuple[PredictionMarket, float | None]] = []
+        for m in payload or []:
+            market = self._to_market(m)
+            if market is not None:
+                out.append((market, _yes_price(m)))
+        return out
+
     def prices(self, market_ids: Sequence[str]) -> Iterator[PredictionMarketPrice]:
         """Per-market snapshot with the thin-market trust flag applied."""
         now = datetime.now(UTC)

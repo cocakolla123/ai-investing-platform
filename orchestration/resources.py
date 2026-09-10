@@ -280,6 +280,62 @@ class DynamoResource(ConfigurableResource):
 
         return OddsPipeProvider(s.oddspipe_api_key, min_spread=s.oddspipe_min_spread)
 
+    # --- prediction-market read helpers (thin queries; fakes override) ---
+
+    def stored_prediction_markets(self, venue: str) -> list[Any]:
+        """Stored prediction_markets rows for one venue, as domain models.
+
+        Matcher feedstock (oddspipe_spreads fallback): the Kalshi side comes
+        from the snapshot prediction_market_snapshot already ingested, so the
+        fallback costs the Kalshi API nothing.
+        """
+        from sqlalchemy import select
+
+        from dynamo.domain.models.market import PredictionMarket
+        from dynamo.persistence import schema
+
+        t = schema.prediction_markets
+        with self.engine().connect() as conn:
+            rows = conn.execute(select(t).where(t.c.venue == venue).order_by(t.c.market_id))
+            return [
+                PredictionMarket(
+                    venue=str(r.venue),
+                    market_id=str(r.market_id),
+                    question=str(r.question),
+                    category=r.category,
+                    close_ts=r.close_ts,
+                    resolved_outcome=(
+                        bool(r.resolved_outcome) if r.resolved_outcome is not None else None
+                    ),
+                )
+                for r in rows
+            ]
+
+    def latest_prediction_market_yes(self, venue: str) -> dict[str, float]:
+        """Latest stored implied YES probability per market_id for one venue."""
+        import math
+
+        from sqlalchemy import select
+
+        from dynamo.persistence import schema
+
+        p = schema.prediction_market_prices
+        with self.engine().connect() as conn:
+            rows = conn.execute(
+                select(p.c.market_id, p.c.implied_prob)
+                .where(p.c.venue == venue)
+                .order_by(p.c.ts.desc())
+            ).all()
+        out: dict[str, float] = {}
+        for market_id, implied in rows:
+            key = str(market_id)
+            if key in out or implied is None:
+                continue
+            value = float(implied)
+            if math.isfinite(value):
+                out[key] = value
+        return out
+
     # --- sensor support (thin queries; fakes override these in tests) ---
 
     def pending_batches(self) -> list[dict[str, Any]]:
