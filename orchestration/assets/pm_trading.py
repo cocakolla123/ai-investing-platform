@@ -320,6 +320,39 @@ def _latest_kalshi_mirror(dynamo: DynamoResource) -> dict[str, float]:
     return mapping
 
 
+def _latest_spread_pairs(dynamo: DynamoResource) -> list[Any]:
+    """Latest stored OddsPipe pair per (kalshi, polymarket) id, as domain models.
+
+    Input for :func:`dynamo.risk.pm_arbitrage.find_cross_venue_arbs`; an
+    empty table (no OddsPipe key, API down) simply yields [] and malformed
+    rows are skipped — enrichment only, like the rest of the OddsPipe path.
+    """
+    from dynamo.domain.models.pm import CrossVenueSpread
+
+    s = schema.pm_cross_venue_spreads
+    frame = _read_df(dynamo, select(s).order_by(s.c.ts.desc()))
+    if frame.empty:
+        return []
+    frame = frame.drop_duplicates(subset=["kalshi_market_id", "polymarket_id"], keep="first")
+    pairs: list[Any] = []
+    for row in frame.to_dict(orient="records"):
+        try:
+            pairs.append(
+                CrossVenueSpread(
+                    question=str(row["question"]),
+                    kalshi_market_id=str(row["kalshi_market_id"]),
+                    kalshi_yes=float(row["kalshi_yes"]),
+                    polymarket_id=str(row["polymarket_id"]),
+                    polymarket_yes=float(row["polymarket_yes"]),
+                    yes_diff=float(row["yes_diff"]),
+                    as_of=_pydatetime(row["ts"]),
+                )
+            )
+        except (TypeError, ValueError):  # malformed row -> skip it, keep the rest
+            continue
+    return pairs
+
+
 def _apply_new_fills(dynamo: DynamoResource, manager: Any, markets: dict[str, Any]) -> int:
     """Record fills discovered by sync_orders into pm_positions."""
     from dynamo.persistence.repositories.pm import PMPositionRepository
@@ -927,5 +960,149 @@ def pm_sim_resolution_asset(
     )
 
 
-PM_ASSETS = [pm_resolution_asset, pm_sim_resolution_asset]
+# --------------------------------------------------------------------------
+# pm_arbitrage_sim — SIM-ONLY arbitrage sleeve (dutch books + verified pairs)
+# --------------------------------------------------------------------------
+
+# Dedicated sub-ledger venue in pm_sim_ledger: arb cash must never mix with
+# the Polymarket shadow sleeve's bankroll (whose venue is 'polymarket').
+PM_ARB_LEDGER_VENUE = "arbsim"
+
+
+@dagster_asset(name="pm_arbitrage_sim", group_name=PM_GROUP)
+def pm_arbitrage_sim_asset(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """SIM-ONLY arbitrage sleeve: Kalshi dutch books + verified cross-venue locks.
+
+    Scans the latest stored Kalshi markets/prices for intra-event dutch books
+    and the latest stored OddsPipe pairs for cross-venue YES/NO locks
+    (:mod:`dynamo.risk.pm_arbitrage`), sizes each candidate against the sim
+    bankroll (cost capped by ``pm_arb_max_stake_usd`` and available cash),
+    and records the executed sim trades as idempotent ``pm_sim_ledger`` rows
+    under the dedicated ``arbsim`` venue — one ``arb_fill`` debit (cost +
+    fees) and one ``arb_lock`` payout credit per candidate per day, with the
+    strategy tag (``arb:dutch`` / ``arb:xvenue``) leading every note. The
+    payout credits at entry because a true book pays out by construction;
+    capital lockup until resolution is deliberately not modeled, so the
+    bankroll tracks cumulative locked profit. Re-running the same day is a
+    no-op (the ledger's (venue, kind, ref) uniqueness dedupes).
+
+    HARD-CODED SIM PATH (deliberate, pinned by a test): unlike
+    pm_execute_orders / pm_sim_execute_orders, this asset constructs NO
+    broker — not KalshiBroker, not PolymarketBroker, not even the sim broker
+    — in ANY environment, including LIVE with an open gate. Arbitrage never
+    routes to a live broker; the only writes are the arbsim ledger rows.
+
+    Gates: ``pm_arbitrage_enabled`` (default True — sim is safe) turns the
+    whole asset off; the ADR-0012 sim-vs-live machinery is bypassed in the
+    safe direction by never selecting a broker at all.
+
+    Verifying a cross-venue pair: candidates whose pair id is not in
+    ``pm_arb_verified_pairs`` are logged and counted as UNVERIFIED and never
+    recorded as trades — mismatched resolution criteria make an apparent
+    price gap two uncorrelated bets, not an arb. To promote one: open BOTH
+    venues' full market rules for the matched ids, confirm the resolution
+    criteria, resolution source, and expiry are identical, then add the
+    logged pair id ("<KALSHI_TICKER>|<polymarket_id>") to
+    ``pm_arb_verified_pairs`` (env: PM_ARB_VERIFIED_PAIRS='["...", ...]').
+    When in doubt, leave it unverified.
+    """
+    from dynamo.domain.models.pm import PMSimLedgerEntry
+    from dynamo.persistence.repositories.pm import PMSimLedgerRepository
+    from dynamo.risk.pm_arbitrage import find_cross_venue_arbs, find_dutch_books
+
+    settings = dynamo.settings()
+    if not settings.pm_arbitrage_enabled:
+        return MaterializeResult(metadata={"skipped": "pm arbitrage disabled"})
+
+    _views, prices, markets = _latest_pm_frames(dynamo, PM_VENUE)
+    pairs = _latest_spread_pairs(dynamo)
+    dutch = find_dutch_books(
+        list(markets.values()),
+        prices,
+        min_net_edge=settings.pm_arb_min_net_edge,
+        slippage=settings.pm_arb_slippage,
+    )
+    xvenue = find_cross_venue_arbs(
+        pairs,
+        min_net_edge=settings.pm_arb_min_net_edge,
+        verified_pairs=frozenset(settings.pm_arb_verified_pairs),
+        slippage=settings.pm_arb_slippage,
+    )
+    for unverified in xvenue.unverified:
+        context.log.info(
+            "pm_arbitrage: UNVERIFIED pair %s locks $%.3f/pair — verify both venues' "
+            "resolution criteria, then add it to pm_arb_verified_pairs to trade it in sim",
+            unverified.pair_id,
+            unverified.net_profit,
+        )
+
+    now = utcnow()
+    ledger = PMSimLedgerRepository(dynamo.engine(), venue=PM_ARB_LEDGER_VENUE)
+    ledger.ensure_seeded(round(settings.pm_arb_sim_bankroll_usd * 100.0, 2), now)
+    cash_cents = ledger.cash_cents()
+    day = now.date().isoformat()
+    recorded = 0
+    candidates = [
+        *(("arb:dutch", f"{c.event_key}:{c.kind}", c) for c in dutch.candidates),
+        *(("arb:xvenue", c.pair_id, c) for c in xvenue.candidates),
+    ]
+    for tag, key, candidate in candidates:
+        cost_per_book = candidate.gross_cost + candidate.total_fees
+        if cost_per_book <= 0.0:
+            continue
+        stake = min(settings.pm_arb_max_stake_usd, cash_cents / 100.0)
+        books = math.floor(stake / cost_per_book)
+        if books < 1:
+            context.log.info("pm_arbitrage: %s %s skipped — stake below one book", tag, key)
+            continue
+        ref = f"{day}:{key}"
+        debit = -round(books * cost_per_book * 100.0, 2)
+        wrote = ledger.append(
+            PMSimLedgerEntry(
+                venue=PM_ARB_LEDGER_VENUE,
+                kind="arb_fill",
+                ref=ref,
+                market_id=candidate.legs[0].market_id,
+                amount_cents=debit,
+                note=f"{tag} {books}x book: {candidate.rationale}",
+                ts=now,
+            )
+        )
+        if not wrote:  # same candidate already recorded today — idempotent no-op
+            continue
+        credit = round(books * candidate.payout * 100.0, 2)
+        ledger.append(
+            PMSimLedgerEntry(
+                venue=PM_ARB_LEDGER_VENUE,
+                kind="arb_lock",
+                ref=ref,
+                market_id=candidate.legs[0].market_id,
+                amount_cents=credit,
+                note=(
+                    f"{tag} locked payout {books}x ${candidate.payout:.2f} — credited at "
+                    "entry because the book pays out by construction (lockup not modeled)"
+                ),
+                ts=now,
+            )
+        )
+        cash_cents += debit + credit
+        recorded += 1
+        context.log.info("pm_arbitrage: SIM %s %dx — %s", tag, books, candidate.rationale)
+    return MaterializeResult(
+        metadata={
+            "simulated": True,
+            "dutch_candidates": len(dutch.candidates),
+            "dutch_skipped": len(dutch.skipped),
+            "xvenue_candidates": len(xvenue.candidates),
+            "xvenue_unverified": len(xvenue.unverified),
+            "xvenue_skipped": len(xvenue.skipped),
+            "recorded": recorded,
+            "sim_cash_usd": cash_cents / 100.0,
+        }
+    )
+
+
+PM_ASSETS = [pm_resolution_asset, pm_sim_resolution_asset, pm_arbitrage_sim_asset]
 PM_JOBS = [pm_trading_job, pm_reconciliation_job]

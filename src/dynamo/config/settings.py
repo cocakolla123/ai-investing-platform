@@ -231,6 +231,23 @@ class Settings(BaseSettings):
     polymarket_live_enabled: bool = False  # master switch, independent of DYNAMO_ENV
     polymarket_live_max_order_usd: float = 25.0  # hard per-order cap, enforced in the broker
 
+    # --- Prediction-market arbitrage sleeve (SIM-ONLY; risk/pm_arbitrage) ---
+    # There is deliberately NO live wiring for this sleeve: the pm_arbitrage
+    # asset hard-codes the sim-ledger path and constructs no broker in any
+    # environment (tested), so the enable flag is safe to default ON.
+    pm_arbitrage_enabled: bool = True
+    pm_arb_min_net_edge: float = 0.02  # locked-profit floor per $1 payout, after fees+slippage
+    pm_arb_slippage: float = 0.01  # fill haircut vs the stored last/mid price, both finders
+    pm_arb_sim_bankroll_usd: float = 1_000.0  # seed of the dedicated 'arbsim' sub-ledger
+    pm_arb_max_stake_usd: float = 100.0  # per-candidate cost cap in the sim
+    # Cross-venue pairs whose RESOLUTION CRITERIA a human has verified to
+    # match, as "<KALSHI_TICKER>|<polymarket_id>" ids (the exact string the
+    # asset logs for unverified candidates). EMPTY by default on purpose:
+    # until a pair is verified, its candidates are research rows in
+    # result.unverified — never sim trades. Verification steps are in the
+    # pm_arbitrage_sim asset docstring (orchestration/assets/pm_trading.py).
+    pm_arb_verified_pairs: tuple[str, ...] = ()
+
     # --- Options sleeve (ADR-0010; defined-risk only, paper first) ---
     # Hard caps enforced in code (risk/options_sizing.py + domain validators):
     # the sleeve trades ONLY long calls, long puts, covered calls, and
