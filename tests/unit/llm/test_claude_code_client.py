@@ -214,11 +214,24 @@ class TestParsing:
             complete(client)
 
     def test_timeout_retries_then_raises(self) -> None:
+        """Four attempts before terminal: one inner retry per invocation
+        (hung CLI subprocess) x one outer retry per completion. A single
+        300s hang killed a 115-day committee replay 8 days in; a ~20-minute
+        persistent outage is a real environment problem and stays terminal.
+        """
         expired = subprocess.TimeoutExpired(cmd="claude", timeout=300)
-        runner = FakeRunner([expired, expired])
+        runner = FakeRunner([expired, expired, expired, expired])
         client, _ = make_client(runner)
         with pytest.raises(ClaudeCodeError, match="timed out"):
             complete(client)
+        assert len(runner.calls) == 4
+
+    def test_one_timeout_then_success_recovers(self) -> None:
+        """The campaign-killer case: a transient hang must not be terminal."""
+        expired = subprocess.TimeoutExpired(cmd="claude", timeout=300)
+        runner = FakeRunner([expired, ok(envelope(GOOD))])
+        client, _ = make_client(runner)
+        assert complete(client) is not None
         assert len(runner.calls) == 2
 
 

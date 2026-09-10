@@ -213,13 +213,30 @@ class ClaudeCodeResearchModel:
         return f"{flat_context}\n\n{suffixed}" if flat_context else suffixed
 
     def _invoke(self, cmd: list[str], prompt: str) -> dict[str, Any]:
-        """One CLI call -> parsed JSON envelope. Raises on error."""
+        """One CLI call -> parsed JSON envelope. Raises on error.
+
+        A hung CLI subprocess gets ONE retry. Measured: a single 300s timeout
+        on a 784-char triage prompt killed a 115-day committee replay 8 days
+        in — a transient local hang, not a plan limit (those raise
+        PlanLimitExhausted from the CLI's own output and must not be
+        retried). Two hangs in a row is a real environment problem and stays
+        terminal.
+        """
         try:
             result = self._runner(cmd, prompt, self._timeout)
-        except subprocess.TimeoutExpired as exc:
-            raise ClaudeCodeError(
-                f"claude CLI timed out after {self._timeout:.0f}s (prompt {len(prompt)} chars)"
-            ) from exc
+        except subprocess.TimeoutExpired:
+            log.warning(
+                "claude CLI timed out after %.0fs (prompt %d chars) — retrying once",
+                self._timeout,
+                len(prompt),
+            )
+            try:
+                result = self._runner(cmd, prompt, self._timeout)
+            except subprocess.TimeoutExpired as exc:
+                raise ClaudeCodeError(
+                    f"claude CLI timed out twice at {self._timeout:.0f}s "
+                    f"(prompt {len(prompt)} chars)"
+                ) from exc
         if result.returncode != 0:
             # Only inspect error text on FAILED invocations — a successful
             # model response may legitimately mention limits.
