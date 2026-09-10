@@ -54,10 +54,12 @@ def test_tier2_scan_skips_triage_without_api_key(
 
 
 def test_oddspipe_spreads_skips_without_key(fake_dynamo: FakeDynamo) -> None:
-    """No ODDSPIPE_API_KEY -> graceful skip metadata, nothing persisted."""
+    """No ODDSPIPE_API_KEY and no matcher feedstock -> graceful skip metadata."""
     ctx = build_asset_context(partition_key="2026-08-07")
     result = cast(MaterializeResult, oddspipe_spreads(ctx, fake_dynamo))
-    assert result.metadata is not None and result.metadata["skipped"] == "oddspipe not configured"
+    # The matcher fallback engages but has no stored Kalshi snapshot to match.
+    assert result.metadata is not None
+    assert result.metadata["skipped"] == "no stored kalshi markets"
 
 
 def test_oddspipe_spreads_persists_pairs(fake_dynamo: FakeDynamo, fake_repo: FakeRepo) -> None:

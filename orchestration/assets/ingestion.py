@@ -279,27 +279,146 @@ def prediction_market_snapshot(
     return MaterializeResult(metadata={"markets": markets_total, "prices": prices_total})
 
 
+# One Gamma /markets page per matcher run — be gentle with the keyless API.
+PM_MATCH_PAGE_LIMIT = 500
+
+
+def _pm_matcher_fallback(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """Title-match Kalshi (stored) vs Polymarket (one live Gamma page) pairs.
+
+    Runs only when OddsPipe produced ZERO pairs (see ``oddspipe_spreads``).
+    Every accepted match is written to ``pm_cross_venue_spreads`` with both
+    venues' YES prices — Kalshi's from the latest stored
+    ``prediction_market_prices`` row, Polymarket's from the Gamma listing —
+    and logged as a CANDIDATE PAIR NEEDING VERIFICATION: a title match is not
+    resolution equivalence, and the arb sleeve keeps hard-gating trades on
+    ``pm_arb_verified_pairs``.
+    """
+    from dynamo.domain.models.pm import CrossVenueSpread
+    from dynamo.research.pm_matching import match_markets
+
+    kalshi_markets = [
+        m
+        for m in dynamo.stored_prediction_markets("kalshi")
+        if m.resolved_outcome is None  # resolved markets cannot be paired
+    ]
+    if not kalshi_markets:
+        context.log.warning(
+            "oddspipe_spreads: matcher fallback found no stored kalshi markets — "
+            "run prediction_market_snapshot first"
+        )
+        return _skipped("no stored kalshi markets")
+    polymarket = dynamo.polymarket()
+    if polymarket is None:  # defensive: the real resource is always available
+        return _skipped("polymarket not configured")
+    listed = polymarket.open_markets_with_yes(limit=PM_MATCH_PAGE_LIMIT)
+    pm_yes = {market.market_id: yes for market, yes in listed}
+    result = match_markets(
+        kalshi_markets,
+        [market for market, _yes in listed],
+        min_score=dynamo.settings().pm_match_min_score,
+    )
+    kalshi_yes = dynamo.latest_prediction_market_yes("kalshi")
+
+    now = datetime.now(UTC)
+    spreads: list[CrossVenueSpread] = []
+    unpriced = 0
+    for pair in result.pairs:
+        k_yes = kalshi_yes.get(pair.kalshi_market_id)
+        p_yes = pm_yes.get(pair.polymarket_id)
+        if k_yes is None or p_yes is None or not 0.0 <= p_yes <= 1.0:
+            unpriced += 1
+            continue
+        spreads.append(
+            CrossVenueSpread(
+                question=pair.kalshi_question,
+                kalshi_market_id=pair.kalshi_market_id,
+                kalshi_yes=k_yes,
+                polymarket_id=pair.polymarket_id,
+                polymarket_yes=p_yes,
+                yes_diff=k_yes - p_yes,
+                as_of=now,
+            )
+        )
+    rows = dynamo.market_repo().upsert_cross_venue_spreads(spreads)
+
+    # Compact candidate table for the human verification pass.
+    for spread in spreads:
+        context.log.info(
+            "pm_matcher CANDIDATE %s|%s  kalshi_yes=%.2f polymarket_yes=%.2f gap=%+.2f  %r",
+            spread.kalshi_market_id,
+            spread.polymarket_id,
+            spread.kalshi_yes,
+            spread.polymarket_yes,
+            spread.yes_diff,
+            spread.question,
+        )
+    for ambiguous in result.ambiguous:
+        context.log.info(
+            "pm_matcher AMBIGUOUS %s matches %s — not paired, resolve by hand",
+            ambiguous.kalshi_market_id,
+            ",".join(ambiguous.polymarket_ids),
+        )
+    if spreads:
+        context.log.info(
+            "pm_matcher: %d candidate pair(s) written. To trade one in sim, open BOTH "
+            "venues' full market rules, confirm resolution criteria/source/expiry are "
+            "identical, then add the pair id to PM_ARB_VERIFIED_PAIRS='[\"KALSHI|pmid\", ...]'. "
+            "Until then candidates stay research rows (find_cross_venue_arbs -> unverified).",
+            len(spreads),
+        )
+    return MaterializeResult(
+        metadata={
+            "rows": rows,
+            "pairs": len(spreads),
+            "source": "matcher",
+            "ambiguous": len(result.ambiguous),
+            "unpriced": unpriced,
+            "unmatched_kalshi": result.unmatched_counts.kalshi,
+            "unmatched_polymarket": result.unmatched_counts.polymarket,
+        }
+    )
+
+
 @dagster_asset(
     group_name=INGESTION_GROUP,
     partitions_def=daily_partitions,
     deps=["prediction_market_snapshot"],
 )
 def oddspipe_spreads(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
-    """OddsPipe cross-venue matched pairs (enrichment; ADR-0009 addendum).
+    """Cross-venue matched pairs: OddsPipe primary, title matcher fallback.
 
     Runs in the 20:00 ET snapshot chain, after the primary Kalshi/Polymarket
-    snapshot. No key or API down -> skip with a log line; nothing breaks.
+    snapshot. OddsPipe stays the primary source whenever it returns pairs;
+    when it returns ZERO (key unset, API down, or — as observed — an empty
+    catalog with working auth) the in-house title matcher
+    (:mod:`dynamo.research.pm_matching`) pairs the stored Kalshi snapshot
+    against one live Gamma page instead.
+
+    Provenance note: ``pm_cross_venue_spreads`` has no source column and a
+    committee replay forbids migrations right now, so matcher rows are NOT
+    tagged in the table — they are written ONLY when the OddsPipe fetch
+    returned zero pairs, and each run's metadata carries ``source``
+    ('oddspipe' | 'matcher') so run history disambiguates any mixed rows.
     """
     provider = dynamo.oddspipe()
+    spreads = provider.spreads() if provider is not None else []
+    if spreads:
+        rows = dynamo.market_repo().upsert_cross_venue_spreads(spreads)
+        return MaterializeResult(
+            metadata={"rows": rows, "pairs": len(spreads), "source": "oddspipe"}
+        )
     if provider is None:
-        context.log.warning("oddspipe_spreads: ODDSPIPE_API_KEY unset — skipping")
-        return _skipped("oddspipe not configured")
-    spreads = provider.spreads()
-    if not spreads:
-        context.log.info("oddspipe_spreads: no matched pairs returned")
-        return MaterializeResult(metadata={"rows": 0, "pairs": 0})
-    rows = dynamo.market_repo().upsert_cross_venue_spreads(spreads)
-    return MaterializeResult(metadata={"rows": rows, "pairs": len(spreads)})
+        context.log.warning(
+            "oddspipe_spreads: ODDSPIPE_API_KEY unset — falling back to the title matcher"
+        )
+    else:
+        context.log.info(
+            "oddspipe_spreads: no matched pairs returned — falling back to the title matcher"
+        )
+    return _pm_matcher_fallback(context, dynamo)
 
 
 # --- EDGAR 10-minute poller: schedule-driven op job, not an asset (doc 02 §4) ---

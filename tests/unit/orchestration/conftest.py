@@ -203,6 +203,9 @@ class FakeState:
     meter: CostMeter | None = None
     quarantine_count: int = 0
     oddspipe_spreads: list[Any] | None = None  # None -> provider unconfigured
+    kalshi_markets: list[Any] = field(default_factory=list)  # stored PredictionMarkets
+    kalshi_yes: dict[str, float] = field(default_factory=dict)  # latest stored YES per id
+    polymarket_markets: list[Any] | None = None  # (PredictionMarket, yes) tuples
     reporters: list[dict[str, Any]] = field(default_factory=list)
     av_transcripts: dict[str, Any] | None = None  # None -> AV key unset
     defeatbeta_transcripts: list[Any] | None = None  # None -> extra not installed
@@ -258,6 +261,23 @@ class FakeDynamo(DynamoResource):
                 return list(spreads)
 
         return _StubOddsPipe()
+
+    def polymarket(self) -> Any:
+        markets = self.st.polymarket_markets
+        if markets is None:
+            return None
+
+        class _StubPolymarket:
+            def open_markets_with_yes(self, limit: int = 500) -> list[Any]:
+                return list(markets)[:limit]
+
+        return _StubPolymarket()
+
+    def stored_prediction_markets(self, venue: str) -> list[Any]:
+        return [m for m in self.st.kalshi_markets if m.venue == venue]
+
+    def latest_prediction_market_yes(self, venue: str) -> dict[str, float]:
+        return dict(self.st.kalshi_yes) if venue == "kalshi" else {}
 
     def alpaca_crypto(self) -> Any:
         return self.st.crypto_provider
