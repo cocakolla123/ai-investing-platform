@@ -175,3 +175,16 @@ def test_missing_provenance_stamps_flag_config() -> None:
     assert cat.status == "FLAGGED"
     details = " ".join(f.detail for f in cat.findings)
     assert "model_knowledge" in details and "embedder_backend" in details
+
+
+def test_decimal_tails_are_not_years() -> None:
+    """The wide-committee audit flagged 954 'post-as_of dates' and every
+    sampled one was the tail of a return metric: 5.2089% read as year 2089,
+    -3.2094% as 2094. A digit or decimal point before a 4-digit group makes
+    it arithmetic, not a calendar reference."""
+    from dynamo.replay.audit import BARE_YEAR_RE
+
+    for numeric in ("5.2089", "-3.2094", "benchmark_ret_120d_pct: 5.2089", "0.2050"):
+        assert not BARE_YEAR_RE.search(numeric), numeric
+    for year in ("in 2089 the", "by 2094.", "(2050)"):
+        assert BARE_YEAR_RE.search(year), year

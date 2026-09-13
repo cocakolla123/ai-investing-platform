@@ -70,7 +70,12 @@ MONTH_YEAR_RE = re.compile(
     r"\.?\s+(20\d{2})\b",
     re.IGNORECASE,
 )
-BARE_YEAR_RE = re.compile(r"\b(20\d{2})\b")
+# (?<![\d.]) — a "year" preceded by a digit or a decimal point is the tail
+# of a NUMBER, not a date: the wide-committee audit flagged 749 context and
+# 205 verdict "post-as_of years" and every sampled one was a return metric
+# like 5.2089% ("2089") or -3.2094% ("2094"). \b alone treats the dot as a
+# word boundary, so it cannot tell the two apart.
+BARE_YEAR_RE = re.compile(r"(?<![\d.])\b(20\d{2})\b")
 
 # Conservative allowlist for legitimately forward-looking dossier/verdict
 # language: trade horizons and exits, option/contract expiries, guidance and
