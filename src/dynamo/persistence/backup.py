@@ -122,6 +122,8 @@ class DockerExec:
             "-i",
             "-e",
             f"PGPASSWORD={target.password}",
+            "-e",
+            f"PGOPTIONS={RESTORE_PGOPTIONS}",
             self.container,
             *argv,
         ]
@@ -157,6 +159,18 @@ def dump_argv(target: DbTarget, executor: Executor) -> list[str]:
         target,
         ["pg_dump", "-Fc", "--no-owner", "--no-acl", *inner.psql_flags, "-d", inner.database],
     )
+
+
+#: Session-level memory cap for restores, passed via PGOPTIONS.
+#:
+#: The timescaledb-ha image auto-tunes maintenance_work_mem to ~1 GB for
+#: this container, whose Docker limit is 2.5 GiB with ~2 GiB already
+#: resident. Building the primary key on a 21.8M-row xbrl_facts during the
+#: 2026-09-14 restore drill asked for that 1 GB on top and the kernel
+#: KILLED THE SERVER mid-drill (crash recovery, no data loss). A restore
+#: session capped at 256 MB builds the same index slower and fits anywhere;
+#: the drill is a correctness check, not a race.
+RESTORE_PGOPTIONS = "-c maintenance_work_mem=256MB"
 
 
 def restore_argv(target: DbTarget, executor: Executor, *, jobs: int = 1) -> list[str]:

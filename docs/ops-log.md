@@ -90,3 +90,11 @@ Rules:
      Recovery point is currently the last nightly dump — up to 24h of loss.
   3. Install the 03:00 ET cron line from the runbook on the real host.
 - **Elapsed:** ~1 minute.
+
+## 2026-09-13 — backup + restore drill (post-campaign)
+
+- `make backup`: 539,224,037 bytes in 43.5s (dynamo-dynamo_dev-20260914T030234Z.dump) — first dump containing the wide campaign.
+- First drill attempt CRASHED the server: timescaledb-ha auto-tuned maintenance_work_mem ~1GB inside a 2.5GiB-capped container; the xbrl_facts PK build OOM-killed Postgres mid-restore (crash recovery clean, no data loss). Fixed: restores now run under PGOPTIONS maintenance_work_mem=256MB.
+- Re-drill PASSED: full restore in 126.2s, all five critical tables exact (bars 7,427,210 / instruments 11,505 / xbrl 21,787,755 / corp_actions 104,835 / short_interest 3,904,106).
+- Still open: 03:00 cron not installed; no off-host copy.
+
