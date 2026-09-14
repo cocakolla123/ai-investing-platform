@@ -158,6 +158,15 @@ def find_claude_binary(configured: str = "") -> str | None:
 class ClaudeCodeResearchModel:
     """Implements dynamo.domain.ports.ResearchModel via the local Claude Code CLI."""
 
+    # submit_batch is a sequential local loop and its results live ONLY in
+    # this instance's memory (no durable batch store). A collector in another
+    # process — e.g. Dagster's sensor-triggered advance job, which runs in a
+    # fresh run worker — sees batch_status "ended" with ZERO results and
+    # resolves the batch empty, silently discarding every call the submitter
+    # already paid for. Orchestration reads this flag and keeps submission
+    # and collection in ONE process (the sync deep-dive path) instead.
+    executes_batches_in_process = True
+
     def __init__(
         self,
         settings: Settings,

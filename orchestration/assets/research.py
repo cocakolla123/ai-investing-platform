@@ -1625,7 +1625,14 @@ def submit_committee_deep_dives(context: OpExecutionContext, dynamo: DynamoResou
     if engine is None or model is None:
         context.log.warning("committee: ANTHROPIC_API_KEY unset — degraded quant-only night")
         return
-    if len(symbols) <= SYNC_DEEP_DIVE_MAX:
+    # A model that executes "batches" in-process (claude_code, ADR-0014) keeps
+    # results only in THIS process's memory. The batch flow hands collection to
+    # the sensor-triggered advance job — a separate Dagster run in a separate
+    # process, whose fresh model instance would report the batch "ended" with
+    # zero results and resolve it empty, discarding every call just paid for.
+    # For such models the whole night runs through the sync path, where
+    # submission and persistence share one process.
+    if len(symbols) <= SYNC_DEEP_DIVE_MAX or getattr(model, "executes_batches_in_process", False):
         completed = run_deep_dives_sync_impl(context, dynamo, symbols, as_of)
         context.log.info("committee: %d deep dives completed synchronously", completed)
         return

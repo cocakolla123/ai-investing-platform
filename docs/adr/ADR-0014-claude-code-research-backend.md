@@ -66,6 +66,26 @@ premium over Sonnet.
 - **Scale ceiling**: right-sized for ~35 nightly calls; wrong for large
   replay campaigns — keep `research_backend="api"` for those.
 
+## Addendum (2026-09-13): batches never cross a process boundary
+
+The original decision claimed the sensor -> advance-stage flow "runs
+unchanged" over the synthetic local batches. Under the Dagster daemon that
+was wrong in a way hand-run CLIs never exposed: `submit_batch` keeps its
+results only in the submitting process's memory, while the sensor-triggered
+`committee_advance_job` executes in a **separate run worker process**. Its
+fresh model instance reports the batch "ended" with zero results, the
+advance op resolves it empty, and every call the submitter already executed
+is discarded — then the next night's deterministic custom_ids resubmit and
+lose it all again. With `deep_dive_cap_per_night=8` above the sync
+threshold (3), the scheduled committee would burn ~32 CLI calls a night and
+never persist a verdict.
+
+Fix: the client declares `executes_batches_in_process = True`, and
+`submit_committee_deep_dives` routes such models through the sync deep-dive
+path for ANY set size, so submission and persistence share one process. The
+API backend (real Message Batches, durable server-side) keeps the batch
+flow unchanged.
+
 ## Replay implication (documentation only — no replay code changed)
 
 The committee-replay knowledge gate reads `ModelSpec.knowledge_cutoff` plus
