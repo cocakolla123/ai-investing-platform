@@ -35,6 +35,33 @@ RETURNS_LOOKBACK_DAYS = 750
 BENCHMARK_SYMBOLS = ("SPY", "TLT")
 
 
+def consolidated_adv_20d(bars: pd.DataFrame) -> dict[str, float]:
+    """Per-symbol 20d median dollar volume in CONSOLIDATED-EQUIVALENT dollars.
+
+    The risk/sizing layer's units contract (``dynamo.risk.liquidity``) says
+    every ``adv_dollar_20d`` it receives is consolidated-equivalent, yet the
+    live assets fed it raw feed dollars: IEX volume for most equities (~15x
+    under the tape) and Alpaca's own crypto venue volume (>= 1000x under the
+    global spot market — the first campaign vetoed every crypto buy on a
+    ~$4k "dollar volume" for AVAX). This helper is the conversion at the
+    point of computation, using the ``volume_source`` label the canonical
+    bars frame carries; frames without the column (tests, ad-hoc frames)
+    scale by 1.0, the conservative assume-consolidated default.
+    """
+    from dynamo.domain.volume_source import dominant_source
+    from dynamo.risk.liquidity import consolidated_equivalent_adv
+
+    adv: dict[str, float] = {}
+    if bars is None or bars.empty:
+        return adv
+    for sym, grp in bars.groupby("symbol"):
+        tail = grp.sort_values("ts").tail(20)
+        observed = float((tail["close"].astype(float) * tail["volume"].astype(float)).median())
+        source = dominant_source(tail["volume_source"]) if "volume_source" in tail.columns else None
+        adv[str(sym)] = consolidated_equivalent_adv(observed, source)
+    return adv
+
+
 class UtcClock:
     """Injectable wall clock for execution components (domain Clock port)."""
 
@@ -194,11 +221,7 @@ def risk_verdict_asset(context: AssetExecutionContext, dynamo: DynamoResource) -
         },
         _ballast_symbol(dynamo),
     )
-    adv: dict[str, float] = {}
-    for sym, grp in bars.groupby("symbol"):
-        adv[str(sym)] = float(
-            (grp["close"].astype(float) * grp["volume"].astype(float)).tail(20).median()
-        )
+    adv = consolidated_adv_20d(bars)
 
     spy = wide.get("SPY")
     if spy is None or spy.dropna().empty:
@@ -629,15 +652,12 @@ def target_portfolio_asset(
     )
     bars = dynamo.bars_window(candidate_symbols or None, as_of, 120)
     sigma_annual: dict[str, float] = {}
-    adv: dict[str, float] = {}
     if not bars.empty:
         for sym, grp in bars.groupby("symbol"):
             closes = grp.sort_values("ts")["close"].astype(float)
             if len(closes) > 21:
                 sigma_annual[str(sym)] = float(closes.pct_change().std() * (252**0.5))
-            adv[str(sym)] = float(
-                (grp["close"].astype(float) * grp["volume"].astype(float)).tail(20).median()
-            )
+    adv = consolidated_adv_20d(bars)
     ballast = _ballast_symbol(dynamo)
     inst = schema.instruments
     inst_df = _read_df(dynamo, select(inst.c.symbol, inst.c.sector))

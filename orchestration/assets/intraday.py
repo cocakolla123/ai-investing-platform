@@ -25,6 +25,7 @@ from orchestration.assets.portfolio_exec import (
     _meta_effective_probability,
     _order_manager,
     _portfolio_state,
+    consolidated_adv_20d,
 )
 from orchestration.assets.research import _pydate, _read_df, _rows_to_models
 from orchestration.resources import DynamoResource, utcnow
@@ -163,15 +164,13 @@ def intraday_evaluate_entries(context: OpExecutionContext, dynamo: DynamoResourc
 
     bars = dynamo.bars_window(symbols, as_of, 120)
     sigma_annual: dict[str, float] = {}
-    adv: dict[str, float] = {}
     if not bars.empty:
         for sym, grp in bars.groupby("symbol"):
             closes = grp.sort_values("ts")["close"].astype(float)
             if len(closes) > 21:
                 sigma_annual[str(sym)] = float(closes.pct_change().std() * (252**0.5))
-            adv[str(sym)] = float(
-                (grp["close"].astype(float) * grp["volume"].astype(float)).tail(20).median()
-            )
+    # Consolidated-equivalent dollars — the sizing layer's units contract.
+    adv = consolidated_adv_20d(bars)
     inst = schema.instruments
     inst_df = _read_df(dynamo, select(inst.c.symbol, inst.c.sector))
     sector_by_symbol = {

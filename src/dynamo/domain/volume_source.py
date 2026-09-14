@@ -72,6 +72,42 @@ from collections.abc import Mapping
 # arithmetic, is what would turn this estimate into a calibration.
 IEX_CONSOLIDATED_VOLUME_SHARE: float = 0.066
 
+# --- The crypto venue share -----------------------------------------------
+#
+# Alpaca's crypto feed reports ITS OWN venue's volume — there is no
+# consolidated crypto tape to read, but there IS a whole market this venue is
+# a sliver of, and dollar-volume thresholds in this codebase are calibrated
+# against whole-market liquidity. Left unscaled, the venue number walks into
+# the same $1M ``min_adv_dollar`` floor the equities use and vetoes the
+# entire crypto sleeve: the first live risk campaign zeroed every crypto buy,
+# reading ~$4k/day of "dollar volume" for AVAX.
+#
+# PROVENANCE (an ESTIMATE, NOT A CALIBRATION — same caveat as the IEX share):
+#
+#   Own venue (this repo's bars_1d, source='alpaca_crypto', median daily
+#   close x volume over 2026-07-01..2026-08-16, 47 sessions/pair):
+#     BTC/USD ~$64k   ETH/USD ~$37k   SOL/USD ~$10k
+#     AVAX/USD ~$4.9k LINK/USD ~$3.6k
+#   Whole market (public aggregator figures — CoinGecko/CoinMarketCap global
+#   spot volume, order of magnitude, 2024-2025):
+#     BTC ~$10-30B/day, ETH ~$5-15B/day, SOL ~$1-3B/day,
+#     AVAX and LINK each ~$100-500M/day.
+#   Implied venue share: ~1e-6 (BTC) to ~2e-5 (AVAX/LINK).
+#
+# The constant is 1e-3 — at least ~50x LARGER than any implied share above,
+# i.e. it deliberately under-scales. Scaling by it still under-states every
+# pair's whole-market liquidity by >= 50x, so it fails toward rejecting a
+# trade, while restoring the sleeve's floors and entry caps to roughly the
+# right order of magnitude (AVAX: $4.9k observed -> ~$4.9M equivalent vs
+# >= $250M reported globally). Sizing participation caps remain bounded by
+# the far tighter crypto sleeve caps (settings.crypto_max_position).
+#
+# TO RE-MEASURE: median close x volume per pair from bars_1d
+# (source='alpaca_crypto') over a recent window, against a public global
+# spot-volume aggregate for the same pairs and window; take the max implied
+# share and keep a >= 10x conservative margin above it.
+ALPACA_CRYPTO_CONSOLIDATED_VOLUME_SHARE: float = 0.001
+
 # Fraction of consolidated volume each bar source observes. A source absent
 # from this map is assumed consolidated (share 1.0) — the conservative choice,
 # since it under-states rather than over-states a name's liquidity and so
@@ -82,9 +118,8 @@ VOLUME_SOURCE_SHARE: Mapping[str, float] = {
     # Tiingo EOD is consolidated-tape volume — the reference this is measured
     # against, so 1.0 by construction.
     "tiingo": 1.0,
-    # Crypto has no consolidated tape and no IEX; Alpaca's crypto venue volume
-    # is what it is. Left at 1.0 so no phantom scaling is applied.
-    "alpaca_crypto": 1.0,
+    # Alpaca's own crypto venue vs the global spot market (see above).
+    "alpaca_crypto": ALPACA_CRYPTO_CONSOLIDATED_VOLUME_SHARE,
 }
 
 DEFAULT_VOLUME_SOURCE_SHARE: float = 1.0

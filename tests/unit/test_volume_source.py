@@ -13,6 +13,7 @@ import math
 import pytest
 
 from dynamo.domain.volume_source import (
+    ALPACA_CRYPTO_CONSOLIDATED_VOLUME_SHARE,
     DEFAULT_VOLUME_SOURCE_SHARE,
     IEX_CONSOLIDATED_VOLUME_SHARE,
     VOLUME_SOURCE_SHARE,
@@ -62,10 +63,38 @@ class TestSourceShare:
     def test_tiingo_is_the_consolidated_reference(self) -> None:
         assert volume_source_share("tiingo") == 1.0
 
-    def test_crypto_is_not_scaled(self) -> None:
-        """Crypto has no consolidated tape and no IEX — scaling it would be a
-        fabricated adjustment."""
-        assert volume_source_share("alpaca_crypto") == 1.0
+    def test_crypto_scales_against_the_global_spot_market(self) -> None:
+        """Alpaca's crypto venue prints a sliver of the global spot market;
+        unscaled, its volume walked the whole sleeve into the $1M
+        ``min_adv_dollar`` floor (~$4k/day "dollar volume" for AVAX) and the
+        risk engine vetoed every crypto buy."""
+        assert volume_source_share("alpaca_crypto") == ALPACA_CRYPTO_CONSOLIDATED_VOLUME_SHARE
+        assert VOLUME_SOURCE_SHARE["alpaca_crypto"] == ALPACA_CRYPTO_CONSOLIDATED_VOLUME_SHARE
+
+    def test_crypto_share_stays_conservative(self) -> None:
+        """The constant must under-scale: the implied venue shares measured
+        against public global spot volume are ~1e-6..2e-5, so 1e-3 leaves a
+        >= 50x margin that fails toward rejecting a trade. It must also be
+        small enough that the sleeve's observed volumes clear the $1M floor
+        they were wrongly vetoed by."""
+        assert pytest.approx(1e-3) == ALPACA_CRYPTO_CONSOLIDATED_VOLUME_SHARE
+        # AVAX at ~$4.9k/day observed clears the $1M consolidated floor...
+        assert consolidated_equivalent_dollar_volume(4_900.0, "alpaca_crypto") >= 1_000_000.0
+        # ...while staying far below its reported global volume (>= $100M).
+        assert consolidated_equivalent_dollar_volume(4_900.0, "alpaca_crypto") < 100_000_000.0
+
+    def test_crypto_module_source_documents_provenance(self) -> None:
+        """Like the IEX share, the crypto share must carry its own evidence."""
+        from pathlib import Path
+
+        import dynamo.domain.volume_source as mod
+
+        text = Path(str(mod.__file__)).read_text()
+        assert "ESTIMATE, NOT A CALIBRATION" in text
+        # measured own-venue medians and the public reference are both named
+        assert "alpaca_crypto" in text
+        assert "CoinGecko" in text
+        assert "TO RE-MEASURE" in text
 
     @pytest.mark.parametrize("source", [None, "", "some_new_vendor"])
     def test_unknown_source_assumes_consolidated(self, source: str | None) -> None:
