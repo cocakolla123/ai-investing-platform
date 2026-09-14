@@ -741,8 +741,6 @@ def _equity_gate(settings: Settings, readiness: Any = None) -> Callable[[Any], A
     consulted on EVERY submission: a switch thrown mid-job blocks the very
     next order instead of being noticed at the start of the next job.
     """
-    from pathlib import Path
-
     from dynamo.execution.gate import (
         Readiness,
         kill_switch_engaged,
@@ -752,7 +750,9 @@ def _equity_gate(settings: Settings, readiness: Any = None) -> Callable[[Any], A
 
     approval = None
     if settings.dynamo_env == DynamoEnv.LIVE:
-        path = Path(settings.approvals_dir) / f"live-{utcnow().date().isoformat()}.yaml"
+        # approvals_path anchors to $DYNAMO_HOME (like the kill switch) —
+        # never the process CWD, which differs across daemon/API/shell.
+        path = settings.approvals_path / f"live-{utcnow().date().isoformat()}.yaml"
         if path.exists():
             approval = load_approval(path)
 

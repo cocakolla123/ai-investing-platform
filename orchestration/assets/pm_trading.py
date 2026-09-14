@@ -23,7 +23,6 @@ import math
 import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -85,7 +84,9 @@ def _pm_gate(
     scope = scope_fn if scope_fn is not None else pm_scope
     approval = None
     if settings.dynamo_env == DynamoEnv.LIVE:
-        path = Path(settings.approvals_dir) / f"live-{utcnow().date().isoformat()}.yaml"
+        # approvals_path anchors to $DYNAMO_HOME (like the kill switch) —
+        # never the process CWD, which differs across daemon/API/shell.
+        path = settings.approvals_path / f"live-{utcnow().date().isoformat()}.yaml"
         if path.exists():
             approval = load_approval(path)
 
@@ -117,7 +118,7 @@ def _polymarket_live_gate_result(settings: Settings, readiness: Any | None = Non
     )
 
     approval = None
-    path = Path(settings.approvals_dir) / f"live-{utcnow().date().isoformat()}.yaml"
+    path = settings.approvals_path / f"live-{utcnow().date().isoformat()}.yaml"
     if path.exists():
         approval = load_approval(path)
     return live_orders_permitted(

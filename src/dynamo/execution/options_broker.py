@@ -1,7 +1,8 @@
 """Alpaca implementation of the ``OptionsBroker`` port (ADR-0010).
 
 Alpaca supports options trading in PAPER accounts; paper vs live is decided
-solely by ``settings.alpaca_base_url`` — the code path is identical, and every
+by ``settings.alpaca_base_url`` — the code path is identical, construction
+refuses a non-paper base URL unless ``DYNAMO_ENV=LIVE``, and every
 submission still passes the doc 09 §7 gate before it gets here. LIMIT ORDERS
 ONLY: the broker refuses any order without a limit price, by construction.
 
@@ -25,7 +26,7 @@ from alpaca.trading.enums import OrderSide as AlpacaSide
 from alpaca.trading.enums import TimeInForce
 from alpaca.trading.requests import LimitOrderRequest
 
-from dynamo.config.settings import Settings, get_settings
+from dynamo.config.settings import DynamoEnv, Settings, get_settings
 from dynamo.domain.models.options import OptionOrder
 from dynamo.domain.models.portfolio import OrderSide
 from dynamo.execution.errors import (
@@ -62,6 +63,15 @@ class AlpacaOptionsBroker:
             self._client = client
         else:
             paper = "paper" in cfg.alpaca_base_url
+            if cfg.dynamo_env != DynamoEnv.LIVE and not paper:
+                # Belt-and-suspenders with the doc 09 §7 gate: outside LIVE the
+                # trading client may only ever point at the paper endpoint. A
+                # mis-set ALPACA_BASE_URL must refuse here, not trade real money.
+                raise ValueError(
+                    f"DYNAMO_ENV={cfg.dynamo_env.value} but ALPACA_BASE_URL "
+                    f"{cfg.alpaca_base_url!r} is not the paper endpoint — "
+                    "refusing to construct a live trading client outside LIVE"
+                )
             self._client = TradingClient(
                 api_key=cfg.alpaca_api_key,
                 secret_key=cfg.alpaca_api_secret,

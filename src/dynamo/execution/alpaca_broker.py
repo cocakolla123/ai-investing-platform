@@ -1,7 +1,9 @@
 """Alpaca implementation of the ``Broker`` port (doc 09 §1, §3, §8).
 
-Paper vs live is decided solely by ``settings.alpaca_base_url`` — the code
-path is identical. US equities/ETFs plus Alpaca crypto pairs (ADR-0013);
+Paper vs live is decided by ``settings.alpaca_base_url`` — the code path is
+identical — and construction REFUSES a non-paper base URL unless
+``DYNAMO_ENV=LIVE`` (a mis-set URL must never out-vote the environment).
+US equities/ETFs plus Alpaca crypto pairs (ADR-0013);
 typed errors; rejects are never auto-retried; transient 5xx gets exactly one
 jittered retry then ``HaltSignal``.
 
@@ -40,7 +42,7 @@ from alpaca.trading.requests import (
     StopOrderRequest,
 )
 
-from dynamo.config.settings import Settings, get_settings
+from dynamo.config.settings import DynamoEnv, Settings, get_settings
 from dynamo.domain.models.portfolio import Order, OrderSide, OrderType
 from dynamo.domain.symbols import is_crypto_symbol, normalize_crypto_symbol
 from dynamo.execution.errors import (
@@ -76,6 +78,15 @@ class AlpacaBroker:
             self._client = client
         else:
             paper = "paper" in cfg.alpaca_base_url
+            if cfg.dynamo_env != DynamoEnv.LIVE and not paper:
+                # Belt-and-suspenders with the doc 09 §7 gate: outside LIVE the
+                # trading client may only ever point at the paper endpoint. A
+                # mis-set ALPACA_BASE_URL must refuse here, not trade real money.
+                raise ValueError(
+                    f"DYNAMO_ENV={cfg.dynamo_env.value} but ALPACA_BASE_URL "
+                    f"{cfg.alpaca_base_url!r} is not the paper endpoint — "
+                    "refusing to construct a live trading client outside LIVE"
+                )
             self._client = TradingClient(
                 api_key=cfg.alpaca_api_key,
                 secret_key=cfg.alpaca_api_secret,

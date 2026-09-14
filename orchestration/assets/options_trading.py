@@ -51,8 +51,6 @@ def _options_gate(settings: Settings, readiness: Any = None) -> Any:
     equities). Non-LIVE short-circuits to permitted (unless the kill-switch is
     engaged); LIVE requires the signed approval covering ``OPT:<occ>`` (or
     ``all``) plus readiness — fail-closed when either is absent."""
-    from pathlib import Path
-
     from dynamo.execution.gate import (
         Readiness,
         kill_switch_engaged,
@@ -63,7 +61,9 @@ def _options_gate(settings: Settings, readiness: Any = None) -> Any:
 
     approval = None
     if settings.dynamo_env == DynamoEnv.LIVE:
-        path = Path(settings.approvals_dir) / f"live-{utcnow().date().isoformat()}.yaml"
+        # approvals_path anchors to $DYNAMO_HOME (like the kill switch) —
+        # never the process CWD, which differs across daemon/API/shell.
+        path = settings.approvals_path / f"live-{utcnow().date().isoformat()}.yaml"
         if path.exists():
             approval = load_approval(path)
 
