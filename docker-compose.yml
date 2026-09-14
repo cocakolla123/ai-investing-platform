@@ -16,6 +16,10 @@ x-app-image: &app-image
   env_file:
     - path: .env
       required: false # fresh clones run partially configured (doc 01 §6)
+  # Survive daemon/host restarts: a stack that silently stays down after a
+  # reboot is the classic solo-operator failure (doc 12 §1). `unless-stopped`
+  # still honors an explicit `docker compose stop`.
+  restart: unless-stopped
   <<: *logging
 
 services:
@@ -36,6 +40,7 @@ services:
       retries: 5
     mem_limit: 2560m
     cpus: 1.5
+    restart: unless-stopped
     <<: *logging
 
   dagster-webserver:
@@ -119,6 +124,7 @@ services:
       - "127.0.0.1:9090:9090"
     mem_limit: 512m
     cpus: 0.25
+    restart: unless-stopped
     <<: *logging
 
   grafana:
@@ -136,6 +142,7 @@ services:
       - prometheus
     mem_limit: 256m
     cpus: 0.25
+    restart: unless-stopped
     <<: *logging
 
 volumes:
