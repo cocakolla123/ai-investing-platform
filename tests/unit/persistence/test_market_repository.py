@@ -10,9 +10,7 @@ def test_upsert_news_dedupes_within_batch() -> None:
 
     repo = MarketDataRepository.__new__(MarketDataRepository)
     captured: dict = {}
-    repo.upsert_rows = MagicMock(
-        side_effect=lambda t, rows: captured.setdefault("rows", rows) and len(rows) or len(rows)
-    )  # type: ignore[method-assign]
+    repo.upsert_rows = MagicMock(side_effect=lambda t, rows: len(captured.setdefault("rows", rows)))  # type: ignore[method-assign]
     dup = NewsItem(
         id="story-1",
         symbols=("AAPL",),
