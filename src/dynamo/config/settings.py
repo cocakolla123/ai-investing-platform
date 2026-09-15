@@ -114,6 +114,9 @@ class Settings(BaseSettings):
     # billing); False (default) -> raise PlanLimitExhausted and stop until
     # the next window.
     claude_code_fallback_to_api: bool = False
+    #: One-hop arbiter fallback when the arbiter model's own plan window is
+    #: exhausted (Fable has a separate weekly allowance). Empty disables.
+    claude_code_arbiter_fallback: str = "claude-opus-5"
     claude_code_timeout_seconds: int = 300
 
     # --- Broker (paper first; live requires the gate, doc 09 section 7) ---

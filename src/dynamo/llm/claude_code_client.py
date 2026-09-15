@@ -187,6 +187,12 @@ class ClaudeCodeResearchModel:
             "analyst": settings.claude_code_model_analyst.strip(),
             "arbiter": settings.claude_code_model_arbiter.strip(),
         }
+        # One-hop degradation on a model-specific window exhaustion; only the
+        # arbiter has one (Fable's weekly allowance is separate from the
+        # shared pool — "if fable runs out then go to opus").
+        self._tier_fallbacks: dict[str, str] = {
+            "arbiter": settings.claude_code_arbiter_fallback.strip(),
+        }
         # batch_id -> ordered results, produced eagerly by submit_batch.
         self._batch_results: dict[str, list[tuple[str, dict[str, Any] | None]]] = {}
 
@@ -355,6 +361,25 @@ class ClaudeCodeResearchModel:
                     max_tokens=max_tokens,
                 )
             except PlanLimitExhausted:
+                # Model-specific window fallback (user directive 2026-09-14:
+                # "if fable runs out then go to opus"). Fable carries its own
+                # weekly allowance separate from the shared pool, so the
+                # arbiter tier — and only that tier — degrades one step to
+                # Opus instead of soft-failing the whole night. One hop, no
+                # chains: if Opus is also exhausted, the normal soft-fail
+                # path takes over and the night resumes tomorrow.
+                fallback = self._tier_fallbacks.get(model_tier)
+                if fallback and self._tier_models.get(model_tier) != fallback:
+                    log.warning(
+                        "claude_code: %s window exhausted for tier %r — retrying on %s",
+                        self._tier_models.get(model_tier),
+                        model_tier,
+                        fallback,
+                    )
+                    degraded = dict(self._tier_models)
+                    degraded[model_tier] = fallback
+                    self._tier_models = degraded  # sticky for this process/night
+                    continue
                 if self._fallback_enabled and self._api_fallback is not None:
                     log.warning(
                         "claude_code: plan window exhausted — falling back to the API for role %r",

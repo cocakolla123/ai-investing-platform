@@ -494,3 +494,26 @@ def test_auth_error_envelope_raises_terminal_auth_error() -> None:
     client, _ = make_client(FakeRunner([ok(envelope)]))
     with pytest.raises(ClaudeCodeAuthError):
         complete(client)
+
+
+class TestArbiterFallback:
+    def test_fable_window_exhaustion_degrades_arbiter_to_opus(self) -> None:
+        """User directive: 'if fable runs out then go to opus'. The arbiter
+        tier gets ONE hop; the retried call must carry the fallback model."""
+        runner = FakeRunner(
+            [CliResult(1, "", "5-hour limit reached · resets 3pm"), ok(envelope(GOOD))]
+        )
+        client, _ = make_client(runner)
+        result = complete(client, model_tier="arbiter")
+        assert result is not None
+        assert len(runner.calls) == 2
+        first_cmd, second_cmd = (c[0] for c in runner.calls)
+        assert "claude-opus-5" in second_cmd
+        assert first_cmd != second_cmd
+
+    def test_non_arbiter_tiers_do_not_hop(self) -> None:
+        runner = FakeRunner([CliResult(1, "", "limit reached · resets 3pm")])
+        client, _ = make_client(runner)
+        with pytest.raises(PlanLimitExhausted):
+            complete(client, model_tier="analyst")
+        assert len(runner.calls) == 1
