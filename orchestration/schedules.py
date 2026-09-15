@@ -47,7 +47,7 @@ from dagster import (
 
 from orchestration.assets.ingestion import filings_poll_job
 from orchestration.assets.intraday import intraday_entries_job
-from orchestration.assets.learning_ops import failure_clustering_job, healthcheck_job
+from orchestration.assets.learning_ops import backup_job, failure_clustering_job, healthcheck_job
 from orchestration.assets.options_trading import (
     options_reconciliation_job,
     options_trading_job,
@@ -350,6 +350,12 @@ healthcheck_schedule = ScheduleDefinition(
     job=healthcheck_job,
     execution_timezone=TZ,
 )
+backup_schedule = ScheduleDefinition(
+    name="backup_schedule",
+    cron_schedule="0 3 * * *",
+    job=backup_job,
+    execution_timezone=TZ,
+)
 weekly_learning_schedule = ScheduleDefinition(
     name="weekly_learning_schedule",
     cron_schedule="0 8 * * 0",
@@ -373,6 +379,7 @@ quant_retrain_check_schedule = ScheduleDefinition(
 )
 
 ALL_JOBS = [
+    backup_job,
     eod_ingest_job,
     crypto_bars_job,
     insider_job,
@@ -399,6 +406,7 @@ ALL_JOBS = [
 ]
 
 ALL_SCHEDULES = [
+    backup_schedule,
     eod_ingest_schedule,
     crypto_bars_schedule,
     insider_schedule,

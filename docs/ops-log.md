@@ -98,3 +98,10 @@ Rules:
 - Re-drill PASSED: full restore in 126.2s, all five critical tables exact (bars 7,427,210 / instruments 11,505 / xbrl 21,787,755 / corp_actions 104,835 / short_interest 3,904,106).
 - Still open: 03:00 cron not installed; no off-host copy.
 
+
+## 2026-09-15 — backup scheduling moved into Dagster
+
+- The 03:00 cron line fired on time and FAILED: `make: getcwd: Operation not permitted` — macOS privacy protection blocks /usr/sbin/cron from reading ~/Documents. A LaunchAgent hit the same wall (exit 78). Both would need Full Disk Access granted to cron/launchd in System Settings.
+- Fix: `backup_job` + `backup_schedule` (03:00 ET) now live in Dagster, which already runs as the user with the folder open and is the scheduler that demonstrably works here. Failure raises, so the run goes red and the dispatcher pages.
+- launchd job and cron entry removed. Schedules now 34.
+

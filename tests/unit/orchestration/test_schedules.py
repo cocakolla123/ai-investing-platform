@@ -40,6 +40,9 @@ EXPECTED_CRONS = {
     "daily_report_schedule": "15 2 * * *",
     "safety_checks_schedule": "20 2 * * *",
     "healthcheck_schedule": "30 2 * * *",
+    # Owned by Dagster, not cron/launchd: macOS privacy blocks both from
+    # reading ~/Documents (cron dies on getcwd, LaunchAgent exits 78).
+    "backup_schedule": "0 3 * * *",
     "weekly_learning_schedule": "0 8 * * 0",
     # Weekly Monte Carlo + 7-scenario stress suite (doc 06 §6), after the
     # 08:00 learning job so the week's outcomes are already resolved.

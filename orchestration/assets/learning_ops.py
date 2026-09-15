@@ -1559,6 +1559,33 @@ def healthcheck_job() -> None:
     ping_healthcheck()
 
 
+@op
+def run_nightly_backup(context: OpExecutionContext) -> None:
+    """Nightly logical dump, scheduled HERE rather than in cron/launchd.
+
+    macOS privacy protection blocks both from reading ~/Documents: cron dies
+    with "getcwd: Operation not permitted" before make even starts, and a
+    LaunchAgent exits 78 for the same reason -- both would need Full Disk
+    Access granted to /usr/sbin/cron or launchd itself. The Dagster daemon
+    already runs as the user with the folder open, so the scheduler that
+    demonstrably works is the one that should own the backup.
+
+    Raises on failure so the run goes red and the alert dispatcher pages.
+    """
+    from dynamo.cli.backup import main as backup_main
+
+    code = backup_main(["run"])
+    if code != 0:
+        raise RuntimeError(f"nightly backup failed (exit {code})")
+    context.log.info("backup: ok")
+
+
+@job
+def backup_job() -> None:
+    """Nightly pg_dump + retention prune (doc 12; ops-log 2026-09-15)."""
+    run_nightly_backup()
+
+
 LEARNING_ASSETS = [
     post_trade_reviews,
     experience_resolution,
