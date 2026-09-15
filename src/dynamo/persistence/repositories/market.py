@@ -415,6 +415,13 @@ class MarketDataRepository:
             }
             for n in items
         ]
+        # In-batch dedupe, last wins. Providers repeat a story id within one
+        # fetch (syndicated headlines, pagination overlap) and a multi-VALUES
+        # ON CONFLICT DO UPDATE refuses to touch the same row twice
+        # (CardinalityViolation) — this failed the live news_job every 30
+        # minutes on night one, the same class the earnings/insider backfill
+        # upserts hit.
+        rows = list({r["id"]: r for r in rows}.values())
         return self.upsert_rows(schema.news, rows)
 
     def upsert_macro(self, points: Iterable[MacroPoint]) -> int:
