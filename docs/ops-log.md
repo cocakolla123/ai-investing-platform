@@ -134,6 +134,13 @@ Rules:
   materialises the generator) and the truncation is reported in `rate_limited`
   metadata. 5 regression tests. This mattered before 23:30 ET — the committee
   reads news into its dossiers.
+- **Verified against the live failure** (run `933374be`): Finnhub 429'd mid-sweep
+  at 11:50:43, exactly as before. The guard caught it, TickerTick carried on for
+  another 7 minutes, and the run finished RUN_SUCCESS with
+  `rows=2429 finnhub=1296 tickertick=1133 symbols=63 rate_limited=['finnhub']`.
+  All 2,429 of those headlines were lost on each of the three prior runs: the
+  raise landed inside `upsert_news`'s list comprehension, so even Finnhub's
+  already-fetched 1,296 never reached the database and TickerTick never ran.
 - **Clean restart** to load the fix: killed all, verified 0 procs, relaunched.
   38 instigators RUNNING (34 schedules + 4 sensors), no boot race this time.
 - **Still open:** off-host backup copy; stale `crontab` line (removal hangs under
