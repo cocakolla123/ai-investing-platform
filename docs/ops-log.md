@@ -105,3 +105,36 @@ Rules:
 - Fix: `backup_job` + `backup_schedule` (03:00 ET) now live in Dagster, which already runs as the user with the folder open and is the scheduler that demonstrably works here. Failure raises, so the run goes red and the dispatcher pages.
 - launchd job and cron entry removed. Schedules now 34.
 
+
+## 2026-09-16 — host power loss, boot race, and the news 429
+
+- **Host was off** ~2026-09-14 late → 2026-09-16 10:36 PDT (user: "my computer was
+  dead"). No schedule fired in between, so 09-15's backup, both days' committee
+  batches, and Mon/Tue/Wed `paper_execution` (09:35 ET) never ran. The orders
+  table is still empty: no paper trades yet, which is the power loss, not a defect.
+- **Boot race on the catch-up.** The daemon came up and immediately tried to
+  launch ~16 missed schedules against a code server that was already shutting
+  down: `DagsterLaunchFailedError: Tried to start a run on a server after telling
+  it to shut down`. That batch — `backup_job`, `risk_portfolio_job`,
+  `paper_execution_job`, `healthcheck_job` and a dozen more — all went FAILURE
+  without executing. It self-corrected seconds later (24 consecutive SUCCESSes
+  after), so this is a startup-ordering wart, not a persistent fault. Worth a
+  guard if it recurs; a missed tick is silently a failed run in the history.
+- **Backup caught up manually:** `dynamo-dynamo_dev-20260916T184445Z.dump`,
+  541,509,953 bytes, exit 0.
+- **`news_job` failed 3×** on `RateLimited: [finnhub] 429 from /company-news` —
+  NOT a power-loss artifact. Finnhub free tier is 60 req/min and the asset sweeps
+  tier-1 + promoted one request per symbol, so a 429 partway through is expected
+  operating condition. `get_json` deliberately does not retry a 429 (doc 01 §6,
+  "no retry storm"), so it escaped into the asset and killed the whole run —
+  every symbol after the limit AND TickerTick's headlines, a separate keyless API
+  that had not been rate-limited at all but whose upsert sat downstream of the
+  raising generator. Fixed in `43ad375`: each source fetches under its own guard
+  that stops iteration on a 429; partial results persist (`upsert_news`
+  materialises the generator) and the truncation is reported in `rate_limited`
+  metadata. 5 regression tests. This mattered before 23:30 ET — the committee
+  reads news into its dossiers.
+- **Clean restart** to load the fix: killed all, verified 0 procs, relaunched.
+  38 instigators RUNNING (34 schedules + 4 sensors), no boot race this time.
+- **Still open:** off-host backup copy; stale `crontab` line (removal hangs under
+  macOS privacy gating — harmless, fails instantly with the getcwd error).
