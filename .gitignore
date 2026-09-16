@@ -41,3 +41,6 @@ secrets/
 # pg_dump archives (docs/runbooks/db-restore.md). Backups belong in object
 # storage, never in git.
 /backups/
+
+# Dagster scratch home, created when a CLI invocation runs without DAGSTER_HOME
+.tmp_dagster_home_*/
