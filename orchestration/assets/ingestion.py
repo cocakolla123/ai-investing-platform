@@ -5,6 +5,7 @@ return row-count metadata. Missing API key -> log skip, empty metadata; the
 platform runs partially configured (doc 01 §6 per-asset degradation).
 """
 
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime, time, timedelta
 
 from dagster import (
@@ -16,6 +17,8 @@ from dagster import (
 )
 from dagster import asset as dagster_asset
 
+from dynamo.data.errors import RateLimited
+from dynamo.domain.models.market import NewsItem
 from orchestration.partitions import daily_partitions
 from orchestration.resources import DEFAULT_FRED_SERIES, DynamoResource, as_of_from_partition
 
@@ -27,6 +30,37 @@ FILINGS_POLL_LOOKBACK = timedelta(minutes=30)
 
 def _skipped(reason: str) -> MaterializeResult:
     return MaterializeResult(metadata={"skipped": reason, "rows": 0})
+
+
+def _tolerate_rate_limit(
+    items: Iterable[NewsItem],
+    context: AssetExecutionContext,
+    *,
+    provider: str,
+    flags: dict[str, bool],
+) -> Iterator[NewsItem]:
+    """Yield from ``items`` until the provider rate-limits, then stop cleanly.
+
+    A 429 mid-sweep is an expected operating condition on the free tiers
+    (Finnhub caps at 60 req/min against a universe several times that), not
+    an incident: ``get_json`` deliberately does not retry it (doc 01 §6, "no
+    retry storm"). Letting it escape, though, cost us the whole asset — every
+    symbol after the limit AND the second, unrelated provider downstream.
+
+    Stopping iteration instead keeps what was already fetched (``upsert_news``
+    materialises the generator, so partial results persist) and records the
+    truncation in metadata rather than swallowing it silently.
+    """
+    try:
+        yield from items
+    except RateLimited as exc:
+        flags[provider] = True
+        context.log.warning(
+            "news: %s rate-limited mid-sweep (%s) — persisting partial results; "
+            "remaining symbols deferred to the next 30-minute tick",
+            provider,
+            exc,
+        )
 
 
 @dagster_asset(group_name=INGESTION_GROUP, partitions_def=daily_partitions)
@@ -139,7 +173,15 @@ def news(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeR
         return _skipped("no tier-1/promoted symbols")
     since = datetime.combine(as_of - timedelta(days=1), time.min, tzinfo=UTC)
     repo = dynamo.market_repo()
-    rows = repo.upsert_news(finnhub.news(symbols, since))
+    # Each source is fetched under its own rate-limit guard: a 429 from one
+    # provider must not cost us the other's headlines (they are independent
+    # APIs, and TickerTick is keyless).
+    limited: dict[str, bool] = {}
+    rows = repo.upsert_news(
+        _tolerate_rate_limit(
+            finnhub.news(symbols, since), context, provider="finnhub", flags=limited
+        )
+    )
     # Second source: TickerTick (free, keyless). Ids are namespaced per source
     # ('finnhub:<id>' vs 'tickertick:<id>') so the shared upsert needs no dedupe.
     tickertick = dynamo.tickertick()
@@ -147,13 +189,18 @@ def news(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeR
     if tickertick is None:
         context.log.info("news: tickertick disabled — finnhub only")
     else:
-        tickertick_rows = repo.upsert_news(tickertick.news(symbols, since))
+        tickertick_rows = repo.upsert_news(
+            _tolerate_rate_limit(
+                tickertick.news(symbols, since), context, provider="tickertick", flags=limited
+            )
+        )
     return MaterializeResult(
         metadata={
             "rows": rows + tickertick_rows,
             "finnhub": rows,
             "tickertick": tickertick_rows,
             "symbols": len(symbols),
+            "rate_limited": sorted(limited) or "none",
         }
     )
 
