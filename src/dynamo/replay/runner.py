@@ -79,6 +79,7 @@ from dynamo.backtest.costs import (
     order_skipped,
     whole_share_qty,
 )
+from dynamo.data.universe import feature_input_symbols
 from dynamo.domain.models.learning import DecisionExperience
 from dynamo.domain.models.portfolio import Lot, PortfolioState, Position, TargetPortfolio
 from dynamo.domain.models.research import (
@@ -527,7 +528,9 @@ def quant_scores_for(
     persisted = scores_from_frame(gw.quant_scores(universe), day, max_age_days)
     missing = sorted(set(universe) - set(persisted))
     if missing:
-        inputs = gw.feature_inputs(universe)
+        # Benchmarks' bars as well, exactly as training and the live builder
+        # load them (feature_input_symbols); features are built for `missing`.
+        inputs = gw.feature_inputs(feature_input_symbols(universe))
         features = build_features(inputs, day, missing)
         if not features.empty:
             active = bundle if bundle is not None else ModelBundle(model_version="baseline-v0")

@@ -446,10 +446,12 @@ def _feature_inputs(dynamo: DynamoResource, symbols: list[str], as_of: date) -> 
     describes, so bounding on the settlement date would hand the features
     ~8 days of look-ahead in replay and silently disagree with training.
     """
-    from dynamo.data.universe import default_sector_etf_map
+    from dynamo.data.universe import default_sector_etf_map, feature_input_symbols
     from dynamo.research.quant.catalog import FeatureInputs
 
-    bars = dynamo.bars_window(symbols, as_of, FEATURE_BARS_LOOKBACK_DAYS)
+    # Benchmarks' bars too (SPY + every sector SPDR): relative features read
+    # them, and training always had them — see feature_input_symbols.
+    bars = dynamo.bars_window(feature_input_symbols(symbols), as_of, FEATURE_BARS_LOOKBACK_DAYS)
     inst = schema.instruments
     inst_df = _read_df(dynamo, select(inst.c.symbol, inst.c.sector, inst.c.cik))
     sectors = {

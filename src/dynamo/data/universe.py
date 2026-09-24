@@ -388,25 +388,50 @@ STARTER_SECTORS: dict[str, str] = {
 }
 
 
+_GICS_TO_SPDR: dict[str, str] = {
+    "Information Technology": "XLK",
+    "Financials": "XLF",
+    "Energy": "XLE",
+    "Health Care": "XLV",
+    "Industrials": "XLI",
+    "Consumer Discretionary": "XLY",
+    "Consumer Staples": "XLP",
+    "Utilities": "XLU",
+    "Materials": "XLB",
+    "Real Estate": "XLRE",
+    "Communication Services": "XLC",
+}
+#: Every sector SPDR a symbol can be benchmarked against.
+SECTOR_SPDRS: tuple[str, ...] = tuple(sorted(set(_GICS_TO_SPDR.values())))
+#: The market benchmark for beta / residual features and the label fallback.
+MARKET_BENCHMARK_SYMBOL = "SPY"
+
+
 def default_sector_etf_map(sectors: Mapping[str, str]) -> dict[str, str]:
     """GICS sector → sector-SPDR map for the ``rel_strength`` detector.
 
     ``sectors`` maps symbol → GICS sector name (from ``instruments``).
     """
-    spdr: dict[str, str] = {
-        "Information Technology": "XLK",
-        "Financials": "XLF",
-        "Energy": "XLE",
-        "Health Care": "XLV",
-        "Industrials": "XLI",
-        "Consumer Discretionary": "XLY",
-        "Consumer Staples": "XLP",
-        "Utilities": "XLU",
-        "Materials": "XLB",
-        "Real Estate": "XLRE",
-        "Communication Services": "XLC",
+    return {
+        symbol: _GICS_TO_SPDR[sector]
+        for symbol, sector in sectors.items()
+        if sector in _GICS_TO_SPDR
     }
-    return {symbol: spdr[sector] for symbol, sector in sectors.items() if sector in spdr}
+
+
+def feature_input_symbols(universe: Sequence[str]) -> list[str]:
+    """The symbols whose BARS the feature builder must see for ``universe``.
+
+    Relative features (``rs_20d_sector``, beta, residual momentum) read a
+    benchmark's prices, not just the scored names'. Training read
+    ``universe + sector ETFs + SPY``; the live nightly builder and the replay
+    runner read only the universe, so any benchmark outside it was NaN at
+    serving time while fully populated in training — a train/serve skew that
+    no test caught because each path was consistent with itself. All three
+    paths now load exactly this set; features are still computed only for
+    ``universe``.
+    """
+    return sorted({*universe, *SECTOR_SPDRS, MARKET_BENCHMARK_SYMBOL})
 
 
 def seed_symbols_documented() -> Sequence[str]:

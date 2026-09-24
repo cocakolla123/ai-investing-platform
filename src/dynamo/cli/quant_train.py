@@ -867,6 +867,7 @@ def print_go_no_go(report: TrainReport, out: Callable[[str], None] = print) -> N
 def main(argv: list[str] | None = None) -> int:
     # Lazy imports: composition layer, import side-effect free module.
     from dynamo.config.settings import Settings
+    from dynamo.data.universe import feature_input_symbols
     from dynamo.persistence.db import make_engine
     from dynamo.persistence.repositories.learning import ModelRegistryRepository
     from dynamo.replay.gateway import HistoricalDataGateway
@@ -950,8 +951,9 @@ def main(argv: list[str] | None = None) -> int:
     # universe separately, so widening the INPUT symbols adds the benchmark
     # price columns without adding benchmark rows or perturbing the
     # cross-sectional normalization, which happens after reindex(universe).
-    benchmarks = sorted({*sector_map.values(), BENCHMARK_FALLBACK})
-    feature_symbols = sorted({*universe, *benchmarks})
+    # One rule for every path (live, replay, training): universe + every
+    # sector SPDR + SPY. A superset of this run's sector_map values.
+    feature_symbols = feature_input_symbols(universe)
     label_bars = gw_end.bars(
         feature_symbols,
         (args.train_end - args.train_start).days + 60,
