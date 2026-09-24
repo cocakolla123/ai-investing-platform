@@ -93,12 +93,27 @@ def gap_check(
     end: date,
     *,
     calendar_name: str = "XNYS",
+    now: datetime | None = None,
 ) -> list[QualityIssue]:
-    """Doc 02 §6.2 — missing trading days vs the exchange calendar."""
+    """Doc 02 §6.2 — missing trading days vs the exchange calendar.
+
+    ``now`` restricts the check to sessions that have already CLOSED. The
+    nightly caller runs at 22:30 ET and derives ``end`` from the UTC date,
+    which by then is already tomorrow — so without ``now`` every symbol was
+    "missing" a session that had not traded yet, and the whole universe was
+    quarantined every night. Closes come from the exchange calendar, so early
+    closes and holidays are handled rather than assumed.
+    """
     if bars.empty:
         return []
     calendar = xcals.get_calendar(calendar_name)
-    sessions = {s.date() for s in calendar.sessions_in_range(start.isoformat(), end.isoformat())}
+    in_range = calendar.sessions_in_range(start.isoformat(), end.isoformat())
+    if now is not None and len(in_range):
+        cutoff = pd.Timestamp(now)
+        cutoff = cutoff.tz_localize("UTC") if cutoff.tzinfo is None else cutoff.tz_convert("UTC")
+        closed = (calendar.closes.loc[in_range] <= cutoff).to_numpy(dtype=bool)
+        in_range = in_range[closed]
+    sessions = {s.date() for s in in_range}
     issues: list[QualityIssue] = []
     for symbol, grp in bars.groupby("symbol"):
         have = {_to_date(t) for t in grp["ts"]}
@@ -363,6 +378,62 @@ class QualityStore(Protocol):
         ackable: bool = True,
         created_at: datetime | None = None,
     ) -> None: ...
+
+
+# Every check above tags its issue with one of these names, and the runner
+# writes the quarantine reason as ``"{check}: {reason}"``. Release is scoped to
+# these prefixes so it can only ever undo a quarantine THIS module placed.
+QUALITY_CHECKS: tuple[str, ...] = ("dual_source_close", "gap", "corp_action_sanity", "staleness")
+
+
+class QuarantineReleaser(Protocol):
+    """The slice of ``MarketDataRepository`` that closes quarantines."""
+
+    def release_quarantines(
+        self,
+        *,
+        scope: str,
+        keys: Sequence[str],
+        reason_prefixes: Sequence[str],
+        resolved_at: datetime,
+    ) -> int: ...
+
+
+def release_cleared_quarantines(
+    store: QuarantineReleaser,
+    checked: Sequence[str],
+    issues: Sequence[QualityIssue],
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Close open data-quality quarantines for symbols that passed tonight.
+
+    The checks re-examine every symbol from scratch each night and quarantine
+    what fails, so tonight's result is the current state. Nothing used to
+    close a quarantine once its cause cleared, which made every one permanent:
+    a single bad night — the 2026-09-14/15 host outage left every tier-1 name
+    two sessions stale — froze trading in all 55 core symbols for good, since
+    the risk layer blocks on ANY unresolved quarantine regardless of age.
+
+    Only symbols in ``checked`` that raised no issue are released, and only
+    quarantines this module wrote (see :data:`QUALITY_CHECKS`). A symbol that
+    still fails keeps its old rows open AND gets tonight's fresh row. Returns
+    the number of rows closed; the rows are kept (``resolved_at`` set), so
+    the audit trail survives.
+    """
+    failed = {issue.symbol for issue in issues}
+    cleared = sorted(set(checked) - failed)
+    if not cleared:
+        return 0
+    released = store.release_quarantines(
+        scope="symbol",
+        keys=cleared,
+        reason_prefixes=tuple(f"{check}:" for check in QUALITY_CHECKS),
+        resolved_at=now or datetime.now(UTC),
+    )
+    if released:
+        log.info("quarantines_released", rows=released, symbols_cleared=len(cleared))
+    return released
 
 
 def run_quality_checks(

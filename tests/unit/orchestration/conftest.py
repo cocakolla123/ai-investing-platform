@@ -55,6 +55,7 @@ class FakeRepo:
         self.bars = bars
         self.members = members
         self.quarantines: list[dict[str, Any]] = []
+        self.released: list[dict[str, Any]] = []
         self.alerts: list[dict[str, Any]] = []
         self.flags: list[Any] = []
         # Mirrors the surveillance_flags TABLE: surrogate ids, a nullable
@@ -77,6 +78,10 @@ class FakeRepo:
 
     def add_quarantine(self, **kwargs: Any) -> None:
         self.quarantines.append(kwargs)
+
+    def release_quarantines(self, **kwargs: Any) -> int:
+        self.released.append(kwargs)
+        return len(kwargs["keys"])
 
     def add_alert(self, **kwargs: Any) -> None:
         self.alerts.append(kwargs)

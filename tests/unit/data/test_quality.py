@@ -100,6 +100,39 @@ def test_gap_check_vs_xnys_calendar() -> None:
     assert gap_check(complete, date(2026, 7, 27), date(2026, 7, 31)) == []
 
 
+def test_gap_check_ignores_a_session_that_has_not_closed_yet() -> None:
+    """The nightly check runs at 22:30 ET, when the UTC date is already
+    tomorrow. Asking for tomorrow's bar quarantined every symbol every night."""
+    bars = closes_frame("ACME", {"2026-09-21": 1.0, "2026-09-22": 1.0, "2026-09-23": 1.0})
+    # 22:30 ET on Wed 09-23 == 02:30 UTC on Thu 09-24.
+    tonight = datetime(2026, 9, 24, 2, 30, tzinfo=UTC)
+    assert gap_check(bars, date(2026, 9, 21), date(2026, 9, 24), now=tonight) == []
+    # Without the cutoff the unfinished session is (wrongly) reported.
+    legacy = gap_check(bars, date(2026, 9, 21), date(2026, 9, 24))
+    assert legacy[0].details["missing_days"] == ["2026-09-24"]
+
+
+def test_gap_check_still_flags_a_closed_session_that_is_missing() -> None:
+    """Tonight's own session HAS closed (16:00 ET) — if eod ingest failed, the
+    cutoff must not hide that."""
+    bars = closes_frame("ACME", {"2026-09-21": 1.0, "2026-09-22": 1.0})
+    tonight = datetime(2026, 9, 24, 2, 30, tzinfo=UTC)
+    issues = gap_check(bars, date(2026, 9, 21), date(2026, 9, 24), now=tonight)
+    assert issues[0].details["missing_days"] == ["2026-09-23"]
+
+
+def test_gap_check_respects_an_early_close() -> None:
+    """2026-11-27 (day after Thanksgiving) closes at 13:00 ET. At 14:00 ET it
+    has closed and must be required; at 12:00 ET it has not."""
+    bars = closes_frame("ACME", {"2026-11-25": 1.0})
+    after = datetime(2026, 11, 27, 19, 0, tzinfo=UTC)  # 14:00 ET
+    before = datetime(2026, 11, 27, 17, 0, tzinfo=UTC)  # 12:00 ET
+    assert gap_check(bars, date(2026, 11, 25), date(2026, 11, 27), now=after)[0].details[
+        "missing_days"
+    ] == ["2026-11-27"]
+    assert gap_check(bars, date(2026, 11, 25), date(2026, 11, 27), now=before) == []
+
+
 def test_corp_action_sanity_flags_unexplained_jump() -> None:
     bars = closes_frame("ACME", {"2026-07-30": 100.0, "2026-07-31": 50.0})  # -50%
     no_actions = pd.DataFrame({"symbol": [], "ex_date": []})

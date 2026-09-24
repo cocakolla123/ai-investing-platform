@@ -432,3 +432,41 @@ def test_append_estimate_vintages_appends_only_on_change(
     # Events with no estimate at all never write vintages.
     bare = EarningsEvent(symbol="MSFT", event_date=date(2026, 9, 2))
     assert repo.append_estimate_vintages([bare], fetched_at=t0) == 0
+
+
+def test_release_quarantines_closes_only_matching_open_rows(
+    repo: MarketDataRepository, engine: Engine
+) -> None:
+    """The real UPDATE: key-, scope-, reason-prefix- and open-scoped, rows kept."""
+    earlier = datetime(2026, 9, 16, tzinfo=UTC)
+    now = datetime(2026, 9, 23, 22, 0, tzinfo=UTC)
+    repo.add_quarantine(scope="symbol", key="AAPL", reason="staleness: last bar 09-11")
+    repo.add_quarantine(scope="symbol", key="AAPL", reason="gap: 3 missing trading day(s)")
+    repo.add_quarantine(scope="symbol", key="MSFT", reason="staleness: last bar 09-11")
+    repo.add_quarantine(scope="symbol", key="AAPL", reason="manual: under review")
+    repo.add_quarantine(scope="record", key="AAPL", reason="staleness: other scope")
+    repo.add_quarantine(scope="symbol", key="100%_off", reason="gap: wildcard-looking key")
+
+    released = repo.release_quarantines(
+        scope="symbol",
+        keys=["AAPL", "100%_off"],
+        reason_prefixes=["staleness:", "gap:"],
+        resolved_at=now,
+    )
+    assert released == 3
+    with engine.connect() as conn:
+        rows = conn.execute(select(schema.quarantine)).all()
+    open_rows = {(r.scope, r.key, r.reason) for r in rows if r.resolved_at is None}
+    assert open_rows == {
+        ("symbol", "MSFT", "staleness: last bar 09-11"),  # not in keys
+        ("symbol", "AAPL", "manual: under review"),  # not a data-quality reason
+        ("record", "AAPL", "staleness: other scope"),  # other scope
+    }
+    assert len(rows) == 6, "closed rows are kept for the audit trail"
+    # Already-closed rows are not touched again.
+    assert (
+        repo.release_quarantines(
+            scope="symbol", keys=["AAPL"], reason_prefixes=["staleness:"], resolved_at=earlier
+        )
+        == 0
+    )

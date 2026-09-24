@@ -23,7 +23,7 @@ from typing import Any, cast
 
 import pandas as pd
 import structlog
-from sqlalchemy import Engine, Table, delete, func, select, tuple_, update
+from sqlalchemy import Engine, Table, delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from dynamo.domain.models.market import (
@@ -1035,6 +1035,40 @@ class MarketDataRepository:
                 }
             ],
         )
+
+    def release_quarantines(
+        self,
+        *,
+        scope: str,
+        keys: Sequence[str],
+        reason_prefixes: Sequence[str],
+        resolved_at: datetime,
+    ) -> int:
+        """Close open quarantines for ``keys`` whose reason starts with a prefix.
+
+        Rows are closed (``resolved_at`` set), never deleted, so the history of
+        what was quarantined and why survives. Returns rows closed.
+        """
+        if not keys or not reason_prefixes:
+            return 0
+        t = schema.quarantine
+        reason_match = or_(*(t.c.reason.startswith(p, autoescape=True) for p in reason_prefixes))
+        total = 0
+        with self._engine.begin() as conn:
+            for start in range(0, len(keys), 1000):
+                chunk = list(keys[start : start + 1000])
+                result = conn.execute(
+                    update(t)
+                    .where(
+                        t.c.scope == scope,
+                        t.c.key.in_(chunk),
+                        t.c.resolved_at.is_(None),
+                        reason_match,
+                    )
+                    .values(resolved_at=resolved_at)
+                )
+                total += int(result.rowcount or 0)
+        return total
 
     def add_alert(
         self,

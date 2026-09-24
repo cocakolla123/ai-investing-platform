@@ -35,6 +35,11 @@ def test_data_quality_and_tier2_scan_materialize(
 
     dq = result.asset_materializations_for_node("data_quality")
     assert dq and "symbols_quarantined" in dq[0].metadata
+    # Every checked symbol that did NOT fail tonight is released; none that failed is.
+    failed = {q["key"] for q in fake_repo.quarantines}
+    released = {k for call in fake_repo.released for k in call["keys"]}
+    assert released and not (released & failed)
+    assert int(dq[0].metadata["quarantines_released"].value) == len(released)  # type: ignore[union-attr]
 
     t2 = result.asset_materializations_for_node("tier2_scan")
     assert t2 and "flags" in t2[0].metadata
