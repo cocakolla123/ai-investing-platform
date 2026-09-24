@@ -16,6 +16,7 @@ Division of labour between the two market-data adapters:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Iterator, Sequence
 from datetime import UTC, date, datetime
 from typing import Any
@@ -23,7 +24,7 @@ from typing import Any
 import httpx
 import structlog
 
-from dynamo.data.errors import DataGap
+from dynamo.data.errors import DataGap, RateLimited
 from dynamo.data.http import get_json
 from dynamo.data.ratelimit import TokenBucket
 from dynamo.domain.models.market import Bar, CorporateAction, Instrument
@@ -36,6 +37,11 @@ TIINGO_BASE = "https://api.tiingo.com"
 def _ts(value: str) -> datetime:
     """Tiingo dates like ``2026-07-31T00:00:00.000Z`` → aware UTC datetime."""
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+# Tiingo's quota-exhaustion bodies (monthly unique-symbol cap, hourly/daily
+# request caps). Matched only on non-list payloads, where no price data exists.
+_QUOTA_RE = re.compile(r"symbol look ?up|over your .*limit|limits? increased|rate limit", re.I)
 
 
 class TiingoClient:
@@ -80,6 +86,13 @@ class TiingoClient:
             },
         )
         if not isinstance(payload, list):
+            detail = str(payload.get("detail", "")) if isinstance(payload, dict) else ""
+            if _QUOTA_RE.search(detail):
+                # Tiingo reports an exhausted plan quota as HTTP 200 with
+                # {"detail": "You have run over your 500 symbol look up for
+                # this month..."} — not a 429. It is a rate limit, not bad data:
+                # classifying it as DataGap failed the whole nightly ingest.
+                raise RateLimited("tiingo", f"plan quota exhausted: {detail[:160]}")
             raise DataGap("tiingo", f"unexpected prices payload for {symbol}")
         return payload
 

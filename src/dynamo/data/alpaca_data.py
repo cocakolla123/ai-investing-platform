@@ -84,6 +84,11 @@ _DAILY = TimeFrame(1, TimeFrameUnit.Day)  # type: ignore[arg-type]
 DAILY_BAR_ADJUSTMENT = Adjustment.SPLIT
 
 
+#: Symbols per bars request. The backfill CLI's measured-safe default; the
+#: whole universe in one request exceeds the server's URI limit (HTTP 414).
+DAILY_BARS_SYMBOLS_PER_REQUEST = 200
+
+
 class _Transient(Exception):
     """Internal retryable marker (5xx / connection issues)."""
 
@@ -155,31 +160,37 @@ class AlpacaMarketData:
         dual-source close check and any corporate-action audit want it), but
         the default is split-adjusted: see :data:`DAILY_BAR_ADJUSTMENT`.
         """
-        request = StockBarsRequest(
-            symbol_or_symbols=list(symbols),
-            timeframe=_DAILY,
-            start=datetime(start.year, start.month, start.day, tzinfo=UTC),
-            end=datetime(end.year, end.month, end.day, 23, 59, tzinfo=UTC),
-            adjustment=adjustment,
-            feed=DataFeed.IEX,
-        )
-        barset = self._call(self._data.get_stock_bars, request)
-        data: dict[str, list[Any]] = getattr(barset, "data", {}) or {}
-        for symbol, bars in data.items():
-            for b in bars:
-                yield Bar(
-                    symbol=symbol,
-                    ts=b.timestamp.astimezone(UTC),
-                    open=float(b.open),
-                    high=float(b.high),
-                    low=float(b.low),
-                    close=float(b.close),
-                    volume=int(b.volume),
-                    # Tiingo owns the FULLY adjusted close (doc 02 §5); these
-                    # closes are split-adjusted only, so they are not that.
-                    adj_close=None,
-                    source=self.source,
-                )
+        # Symbols travel in the query string. The nightly ingest passes the
+        # whole universe (~11,000 names) and the server rejected that single
+        # request with 414 Request-URI Too Large (2026-09-23) — every night,
+        # so live EOD prices never landed. Batch it, as the backfill does.
+        wanted = list(symbols)
+        for offset in range(0, len(wanted), DAILY_BARS_SYMBOLS_PER_REQUEST):
+            request = StockBarsRequest(
+                symbol_or_symbols=wanted[offset : offset + DAILY_BARS_SYMBOLS_PER_REQUEST],
+                timeframe=_DAILY,
+                start=datetime(start.year, start.month, start.day, tzinfo=UTC),
+                end=datetime(end.year, end.month, end.day, 23, 59, tzinfo=UTC),
+                adjustment=adjustment,
+                feed=DataFeed.IEX,
+            )
+            barset = self._call(self._data.get_stock_bars, request)
+            data: dict[str, list[Any]] = getattr(barset, "data", {}) or {}
+            for symbol, bars in data.items():
+                for b in bars:
+                    yield Bar(
+                        symbol=symbol,
+                        ts=b.timestamp.astimezone(UTC),
+                        open=float(b.open),
+                        high=float(b.high),
+                        low=float(b.low),
+                        close=float(b.close),
+                        volume=int(b.volume),
+                        # Tiingo owns the FULLY adjusted close (doc 02 §5); these
+                        # closes are split-adjusted only, so they are not that.
+                        adj_close=None,
+                        source=self.source,
+                    )
 
     def latest_quotes(self, symbols: Sequence[str]) -> dict[str, float]:
         """Latest quote midpoint per symbol (falls back to the ask/bid side)."""

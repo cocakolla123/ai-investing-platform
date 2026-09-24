@@ -18,7 +18,6 @@ from dagster import (
 from dagster import asset as dagster_asset
 
 from dynamo.data.errors import RateLimited
-from dynamo.domain.models.market import NewsItem
 from orchestration.partitions import daily_partitions
 from orchestration.resources import DEFAULT_FRED_SERIES, DynamoResource, as_of_from_partition
 
@@ -32,13 +31,14 @@ def _skipped(reason: str) -> MaterializeResult:
     return MaterializeResult(metadata={"skipped": reason, "rows": 0})
 
 
-def _tolerate_rate_limit(
-    items: Iterable[NewsItem],
+def _tolerate_rate_limit[T](
+    items: Iterable[T],
     context: AssetExecutionContext,
     *,
     provider: str,
     flags: dict[str, bool],
-) -> Iterator[NewsItem]:
+    asset: str = "news",
+) -> Iterator[T]:
     """Yield from ``items`` until the provider rate-limits, then stop cleanly.
 
     A 429 mid-sweep is an expected operating condition on the free tiers
@@ -47,17 +47,22 @@ def _tolerate_rate_limit(
     retry storm"). Letting it escape, though, cost us the whole asset — every
     symbol after the limit AND the second, unrelated provider downstream.
 
-    Stopping iteration instead keeps what was already fetched (``upsert_news``
-    materialises the generator, so partial results persist) and records the
+    Stopping iteration instead keeps what was already fetched (the upserts
+    materialise the generator, so partial results persist) and records the
     truncation in metadata rather than swallowing it silently.
+
+    The same shape applies to the EOD price ingest: Tiingo's free tier allows
+    500 unique symbols a month, and once a research backfill has spent them
+    the nightly Tiingo leg 429s — which must not turn the run red when the
+    Alpaca leg (the one every symbol actually relies on) already landed.
     """
     try:
         yield from items
     except RateLimited as exc:
         flags[provider] = True
         context.log.warning(
-            "news: %s rate-limited mid-sweep (%s) — persisting partial results; "
-            "remaining symbols deferred to the next 30-minute tick",
+            "%s: %s rate-limited mid-sweep (%s) — persisting partial results",
+            asset,
             provider,
             exc,
         )
@@ -66,22 +71,45 @@ def _tolerate_rate_limit(
 @dagster_asset(group_name=INGESTION_GROUP, partitions_def=daily_partitions)
 def eod_bars(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """EOD bars, full market, both sources (Alpaca IEX + Tiingo adjusted)."""
+    from dynamo.domain.symbols import is_crypto_symbol
+
     as_of = as_of_from_partition(context.partition_key)
     repo = dynamo.market_repo()
-    symbols = dynamo.universe_symbols(as_of)
+    # Crypto pairs share the universe table but not the equity endpoints: one
+    # "AVAX/USD" in a batch fails the whole batch ("invalid symbol", HTTP 400).
+    # Their bars come from crypto_bars, exactly as the backfill CLI splits them.
+    symbols = [s for s in dynamo.universe_symbols(as_of) if not is_crypto_symbol(s)]
     if not symbols:
         context.log.warning("eod_bars: universe empty at %s — seed it first", as_of)
         return _skipped("empty universe")
+    # Tiingo is the ADJUSTED-price source for the tier-1 core (canonical_bars:
+    # "only 55 names carry Tiingo"); Alpaca covers the whole market. Tiingo is
+    # one request per symbol, and the free plan allows 50/hour and 500 unique
+    # symbols/month — asking it for all ~11,000 names could never succeed.
+    tier1 = set(dynamo.universe_symbols(as_of, tiers=(1,)))
+    scope = {"alpaca": symbols, "tiingo": [s for s in symbols if s in tier1]}
     counts: dict[str, int] = {}
+    limited: dict[str, bool] = {}
     for name, provider in (("alpaca", dynamo.alpaca()), ("tiingo", dynamo.tiingo())):
         if provider is None:
             context.log.warning("eod_bars: %s not configured — skipping source", name)
             counts[name] = 0
             continue
-        bars = provider.daily_bars(symbols, as_of, as_of)
+        bars = _tolerate_rate_limit(
+            provider.daily_bars(scope[name], as_of, as_of),
+            context,
+            provider=name,
+            flags=limited,
+            asset="eod_bars",
+        )
         counts[name] = repo.upsert_bars(bars, timeframe="1d")
     return MaterializeResult(
-        metadata={"rows": sum(counts.values()), "symbols": len(symbols), **counts}
+        metadata={
+            "rows": sum(counts.values()),
+            "symbols": len(symbols),
+            **counts,
+            "rate_limited": sorted(limited) or "none",
+        }
     )
 
 
@@ -121,12 +149,20 @@ def corporate_actions(context: AssetExecutionContext, dynamo: DynamoResource) ->
     start = as_of - timedelta(days=7)
     repo = dynamo.market_repo()
     total = 0
+    limited: dict[str, bool] = {}
     for name, provider in (("alpaca", dynamo.alpaca()), ("tiingo", dynamo.tiingo())):
         if provider is None:
             context.log.warning("corporate_actions: %s not configured — skipping", name)
             continue
-        total += repo.upsert_corporate_actions(provider.corporate_actions(start, as_of))
-    return MaterializeResult(metadata={"rows": total})
+        actions = _tolerate_rate_limit(
+            provider.corporate_actions(start, as_of),
+            context,
+            provider=name,
+            flags=limited,
+            asset="corporate_actions",
+        )
+        total += repo.upsert_corporate_actions(actions)
+    return MaterializeResult(metadata={"rows": total, "rate_limited": sorted(limited) or "none"})
 
 
 @dagster_asset(group_name=INGESTION_GROUP, partitions_def=daily_partitions)

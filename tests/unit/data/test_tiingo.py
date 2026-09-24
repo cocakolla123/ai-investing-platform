@@ -94,3 +94,24 @@ def test_daily_bars_maps_dot_share_classes_to_hyphen_urls() -> None:
     client = make_client(httpx.MockTransport(handler))
     bars = list(client.daily_bars(["BRK.B"], date(2026, 7, 30), date(2026, 7, 31)))
     assert bars and all(b.symbol == "BRK.B" for b in bars)
+
+
+def test_monthly_symbol_cap_body_is_a_rate_limit_not_a_data_gap() -> None:
+    """Tiingo answers an exhausted plan quota with HTTP 200 and a detail body
+    (verbatim below, captured 2026-09-23). Read as DataGap it failed the whole
+    nightly ingest; it is a rate limit, which the ingest tolerates."""
+    import pytest
+
+    from dynamo.data.errors import DataGap, RateLimited
+
+    body = {
+        "detail": "You have run over your 500 symbol look up for this month. Please "
+        "upgrade at https://api.tiingo.com/pricing to have your limits increased."
+    }
+    client = make_client(httpx.MockTransport(lambda r: httpx.Response(200, json=body)))
+    with pytest.raises(RateLimited):
+        list(client.daily_bars(["AAA"], date(2026, 9, 23), date(2026, 9, 23)))
+
+    odd = make_client(httpx.MockTransport(lambda r: httpx.Response(200, json={"x": 1})))
+    with pytest.raises(DataGap):  # genuinely malformed payloads still are DataGap
+        list(odd.daily_bars(["AAA"], date(2026, 9, 23), date(2026, 9, 23)))

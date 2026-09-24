@@ -168,3 +168,42 @@ def test_tradable_instruments_filters_untradable() -> None:
     instruments = list(make_adapter().tradable_instruments())
     assert [i.symbol for i in instruments] == ["ACME"]
     assert instruments[0].exchange == "NYSE"
+
+
+def test_daily_bars_batches_a_whole_universe_request() -> None:
+    """The nightly ingest passes ~11,000 symbols. As one request that is a
+    414 Request-URI Too Large from the server — every night (2026-09-23)."""
+    from dynamo.data.alpaca_data import DAILY_BARS_SYMBOLS_PER_REQUEST
+
+    class _Recording(FakeDataClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.requested: list[list[str]] = []
+
+        def get_stock_bars(self, request: Any) -> Any:
+            syms = list(request.symbol_or_symbols)
+            self.requested.append(syms)
+            bar = SimpleNamespace(
+                timestamp=datetime(2026, 9, 23, 4, 0, tzinfo=UTC),
+                open=1.0,
+                high=1.0,
+                low=1.0,
+                close=1.0,
+                volume=1,
+            )
+            return SimpleNamespace(data={s: [bar] for s in syms})
+
+    client = _Recording()
+    adapter = AlpacaMarketData(
+        "key",
+        "secret",
+        data_client=cast(StockHistoricalDataClient, client),
+        trading_client=cast(TradingClient, FakeTradingClient()),
+        bucket=TokenBucket(rate=10_000.0, capacity=10_000.0),
+    )
+    universe = [f"S{i:05d}" for i in range(11_246)]
+    bars = list(adapter.daily_bars(universe, date(2026, 9, 23), date(2026, 9, 23)))
+
+    assert max(len(chunk) for chunk in client.requested) <= DAILY_BARS_SYMBOLS_PER_REQUEST
+    assert [s for chunk in client.requested for s in chunk] == universe  # all, once, in order
+    assert len(bars) == len(universe)
