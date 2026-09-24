@@ -10,6 +10,47 @@ is a NO-GO bundle run deliberately as a mechanics control; the panel is survivor
 (99.87% survivors — optimistic, concentrated in flagged/promoted names); volume is IEX-only
 (never quote capacity/slippage); SPY's +14.7% over this window is a strong-market baseline.
 
+## CORRECTION 2026-09-23 — the committee arm was index exposure, not skill
+
+Applying the methodology from paperswithbacktest/awesome-systematic-trading
+(report beta-adjusted skill beside every headline) changes this page's main
+conclusion. The beta and alpha below were in each run's `report.json` all
+along; they were never printed or quoted. Re-verified independently,
+date-matched against SPY:
+
+| arm | return | beta | alpha / yr | alpha t-stat |
+|---|---|---|---|---|
+| quant, wide-traded | +7.80% | 1.07 | −14.84% | −0.76 |
+| quant, core control | +14.57% | 0.87 | +3.49% | +0.58 |
+| quant, true discovery | +10.65% | 0.97 | −6.73% | −0.62 |
+| **committee** | +12.80% | **0.91** | **−1.01%** | **−0.41** |
+
+**No arm has alpha distinguishable from zero.** The committee's +12.80% is
+what 0.91 x SPY earned (+13.36%), and its 1.66% tracking error is the tell:
+reconstructed from its fills, the committee portfolio was on average **86%
+SPY ballast, 1% committee picks, 13% cash**, and held two symbols in 115
+sessions (SPY and MCD). How 72 buy/add verdicts became one position:
+
+1. The portfolio pass ran tier-1 only with discovery off, so verdicts on 251
+   of the 267 debated symbols (56 of the 72 buys) never reached sizing.
+2. Of the 16 that did, 36 decisions were crypto buys, all zeroed by the
+   understated-crypto-volume bug fixed before launch.
+3. What remained traded MCD; the idle-cash ballast held the rest in SPY.
+
+So "committee beat both quant arms on every metric" is true only in the
+sense that holding SPY beat the quant picks. **The committee's stock
+selection was never tested by this campaign.** The "Sharpe 2.08" is largely
+SPY's own Sharpe in a strong window.
+
+Also from that repo: a strategy needs roughly (1.96 / IR)^2 years to prove
+itself. At IR 0.5 that is ~15 years; a 115-session window can only
+demonstrate skill above IR ~2.9. The paper run will validate mechanics for
+months before it can say anything statistical about edge.
+
+`replay compare` and `replay report` now print beta, alpha, IR, alpha
+t-stat and the proof horizon (commit 2d6fb8c). The original text below is
+left as written.
+
 ## Headline table
 
 | arm | universe | return | sharpe (defl.) | maxDD | turnover | costs | vs SPY |
