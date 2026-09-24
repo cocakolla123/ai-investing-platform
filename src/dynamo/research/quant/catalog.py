@@ -243,6 +243,23 @@ def to_ts(value: object) -> pd.Timestamp:
     return cast(pd.Timestamp, pd.Timestamp(value))  # type: ignore[arg-type]
 
 
+def naive_utc_ts(value: object) -> pd.Timestamp:
+    """An ``as_of`` Timestamp in this module's one comparable dtype: tz-naive UTC.
+
+    Every DATA column is normalized with :func:`dt_naive_utc` where it is read,
+    but ``as_of`` arrives from the caller. The live orchestration derives it
+    from repository timestamps, which are tz-aware (timestamptz), while tests
+    and the replay gateway pass naive values — so an aware ``as_of`` compared
+    against the naive panels raised on every live night and never in a test.
+    Use this, not :func:`to_ts`, for an ``as_of``; ``to_ts`` deliberately
+    preserves tz so a value can be compared back against its own column.
+    """
+    ts = to_ts(value)
+    if ts.tzinfo is not None:
+        ts = cast(pd.Timestamp, ts.tz_convert("UTC").tz_localize(None))
+    return ts
+
+
 def dt_naive_utc(values: object) -> pd.Series:
     """Datetime series normalized to tz-naive UTC.
 
@@ -382,7 +399,7 @@ def _pivot(bars: pd.DataFrame, column: str, as_of: pd.Timestamp) -> pd.DataFrame
 def build_context(
     inputs: FeatureInputs, as_of: date | pd.Timestamp, universe: Sequence[str]
 ) -> FeatureContext:
-    ts_as_of = to_ts(as_of)
+    ts_as_of = naive_utc_ts(as_of)
     bars = inputs.bars
     if bars is None or bars.empty or "ts" not in bars.columns or "symbol" not in bars.columns:
         empty = _empty_panel()

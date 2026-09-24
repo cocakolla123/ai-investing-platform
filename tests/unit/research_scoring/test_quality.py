@@ -160,3 +160,23 @@ def test_config_validation_and_hash() -> None:
         QualityConfig(weights={"business_quality": 1.0})
     tweaked = QualityConfig(weights=dict(cfg.weights))
     assert tweaked.config_hash == cfg.config_hash  # hash is content-derived
+
+
+def test_live_tz_aware_bars_score_identically(fundamentals: pd.DataFrame) -> None:
+    """Repository bars are tz-aware; ``_price_panel`` compared them against a
+    naive as_of and raised on every live night (``quality_scores`` never
+    completed). Aware input must give exactly the naive result."""
+    sessions = pd.bdate_range("2024-06-03", "2025-06-30")
+    naive = pd.DataFrame(
+        [
+            {"symbol": sym, "ts": ts, "close": 50.0 + i + k}
+            for k, sym in enumerate(sorted(SECTOR_MAP))
+            for i, ts in enumerate(sessions)
+        ]
+    )
+    aware = naive.assign(ts=pd.to_datetime(naive["ts"]).dt.tz_localize("UTC"))
+    kwargs = {"fundamentals": fundamentals, "sector_map": SECTOR_MAP, "as_of": AS_OF}
+    expected = compute_quality_scores(bars=naive, **kwargs)  # type: ignore[arg-type]
+    live = compute_quality_scores(bars=aware, **kwargs)  # type: ignore[arg-type]
+    assert [s.model_dump() for s in live] == [s.model_dump() for s in expected]
+    assert any(s.subscores["valuation"] is not None for s in expected), "prices must be used"

@@ -29,10 +29,12 @@ from dynamo.domain.models.research import QualityScore
 from dynamo.research.quant.catalog import (
     _fcf_ttm,  # point-in-time helpers shared with the feature catalog
     _rows,
+    dt_naive_utc,
     gross_margin_stability,
     insider_net_buy_signed,
     latest_value,
     n_filed_quarters,
+    naive_utc_ts,
     pit_close,
     pit_facts,
     quarterly_series,
@@ -98,7 +100,8 @@ def _price_panel(bars: pd.DataFrame | None, as_of: pd.Timestamp) -> pd.DataFrame
     if bars is None or bars.empty or not {"symbol", "ts", "close"} <= set(bars.columns):
         return pd.DataFrame(index=pd.DatetimeIndex([]))
     df = bars.copy()
-    df["ts"] = pd.to_datetime(df["ts"])
+    # Repository bars are tz-aware; as_of is naive UTC (see naive_utc_ts).
+    df["ts"] = dt_naive_utc(df["ts"])
     df = df[df["ts"] <= as_of]
     if df.empty:
         return pd.DataFrame(index=pd.DatetimeIndex([]))
@@ -290,7 +293,7 @@ def compute_quality_scores(
     so a historical ``as_of`` replayed today reproduces the historical scores.
     """
     cfg = config or QualityConfig()
-    ts_as_of = to_ts(as_of)
+    ts_as_of = naive_utc_ts(as_of)
     facts = pit_facts(fundamentals, ts_as_of)
     price = _price_panel(bars, ts_as_of)
     symbols = sorted(sector_map)

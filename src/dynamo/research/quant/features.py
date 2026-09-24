@@ -25,7 +25,7 @@ from dynamo.research.quant.catalog import (
     FeatureInputs,
     build_context,
     dt_naive_utc,
-    to_ts,
+    naive_utc_ts,
 )
 
 WINSOR_LOW = 0.01
@@ -221,7 +221,7 @@ def build_labels(
         close_panel = df.pivot_table(index="ts", columns="symbol", values="close", aggfunc="last")
         panel = panel.combine_first(close_panel)
     panel = panel.sort_index()
-    ts_as_of = to_ts(as_of)
+    ts_as_of = naive_utc_ts(as_of)
     market = (
         cast(pd.Series, panel[market_symbol]).dropna() if market_symbol in panel.columns else None
     )
