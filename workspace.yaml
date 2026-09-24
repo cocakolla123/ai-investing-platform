@@ -1,0 +1,12 @@
+# Persistent Dagster workspace for the always-on host (scripts/dagster_host.sh).
+#
+# `dagster dev` writes a workspace file like this into a TemporaryDirectory
+# under /var/folders/.../T, which macOS purges after ~3 days — the daemon then
+# crashes with FileNotFoundError on its next workspace refresh (2026-09-20,
+# 03:39). This file lives in the repo, so it cannot be cleaned out from under
+# a running daemon.
+load_from:
+  - python_file:
+      relative_path: orchestration/definitions.py
+      working_directory: .
+      location_name: definitions.py

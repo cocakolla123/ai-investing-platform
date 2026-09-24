@@ -31,10 +31,23 @@ migrate:        ## Apply DB migrations (M1+)
 	uv run alembic upgrade head
 
 # --- Orchestration (M1) ---------------------------------------------------
-.PHONY: dagster pipeline-dry api dash
+.PHONY: dagster dagster-host dagster-host-stop dagster-host-status pipeline-dry api dash
 
-dagster:        ## Dagster dev UI (webserver + daemon, local)
-	uv run dagster dev -f orchestration/definitions.py
+# Always the persistent instance. Without this, `dagster dev` silently creates a
+# throwaway .tmp_dagster_home_* with every schedule off (2026-09-16 outage).
+export DAGSTER_HOME ?= $(CURDIR)/.dagster_home
+
+dagster:        ## Dagster dev UI for LOCAL DEVELOPMENT only (temp workspace; not for the always-on host)
+	uv run dagster dev -w workspace.yaml
+
+dagster-host:   ## Always-on scheduler for paper/live: daemon + webserver, supervised, persistent state
+	./scripts/dagster_host.sh start
+
+dagster-host-stop:  ## Stop the always-on scheduler
+	./scripts/dagster_host.sh stop
+
+dagster-host-status:  ## Is the scheduler alive, and how many schedules are RUNNING in the instance it uses?
+	./scripts/dagster_host.sh status
 
 pipeline-dry:   ## Wiring dry-run job: no DB or API keys needed
 	uv run dagster job execute -f orchestration/definitions.py -j dry_run_job
