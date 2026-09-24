@@ -120,6 +120,37 @@ class CliResult:
     stderr: str
 
 
+def _parse_envelope(stdout: str) -> dict[str, Any] | None:
+    """The CLI's JSON envelope, or None when stdout is not one."""
+    try:
+        parsed = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _tail(text: str, limit: int = 300) -> str:
+    """Last ``limit`` chars of CLI output, one line — enough to diagnose."""
+    flat = " ".join(text.split())
+    return flat[-limit:]
+
+
+def _raise_for_error_envelope(envelope: dict[str, Any]) -> None:
+    """Classify an ``is_error`` envelope into the client's typed errors."""
+    subtype = str(envelope.get("subtype", "unknown"))
+    body = str(envelope.get("result", ""))
+    if _PLAN_LIMIT_RE.search(body) or _PLAN_LIMIT_RE.search(subtype):
+        raise PlanLimitExhausted("Claude Code plan window exhausted (CLI reported a usage limit)")
+    if _AUTH_ERROR_RE.search(body):
+        # Auth failures are terminal for the whole run — every later call
+        # fails identically, so soft-skipping would silently void days.
+        raise ClaudeCodeAuthError(
+            f"claude CLI authentication failed: {body[:200]} "
+            "(run the CLI interactively and /login, then retry)"
+        )
+    raise ClaudeCodeError(f"claude CLI returned error envelope (subtype={subtype}): {body[:200]}")
+
+
 # runner(cmd, prompt_stdin, timeout_seconds) -> CliResult. Injectable for tests.
 CliRunner = Callable[[list[str], str, float], CliResult]
 
@@ -259,13 +290,25 @@ class ClaudeCodeResearchModel:
                 raise PlanLimitExhausted(
                     "Claude Code plan window exhausted (CLI reported a usage limit)"
                 )
+            # With --output-format json the CLI reports its own failures (auth,
+            # unsupported model, API errors) as an is_error envelope on stdout
+            # AND exits 1. Checking the exit code first used to discard that
+            # envelope, so every such failure surfaced as a bare "exited 1" —
+            # the 2026-09-16 committee failure is undiagnosable for exactly
+            # this reason — and the auth branch below could never fire for it.
+            failed = _parse_envelope(result.stdout)
+            if failed is not None and failed.get("is_error"):
+                _raise_for_error_envelope(failed)
+            detail = _tail(result.stderr) or _tail(result.stdout)
             log.error(
-                "claude CLI exited %d (prompt %d chars, stderr %d chars)",
+                "claude CLI exited %d (prompt %d chars): %s",
                 result.returncode,
                 len(prompt),
-                len(result.stderr),
+                detail,
             )
-            raise ClaudeCodeError(f"claude CLI exited {result.returncode}")
+            raise ClaudeCodeError(
+                f"claude CLI exited {result.returncode}" + (f": {detail}" if detail else "")
+            )
         try:
             envelope = json.loads(result.stdout)
         except (json.JSONDecodeError, ValueError) as exc:
@@ -275,22 +318,7 @@ class ClaudeCodeResearchModel:
         if not isinstance(envelope, dict):
             raise ClaudeCodeError("claude CLI envelope was not a JSON object")
         if envelope.get("is_error"):
-            subtype = str(envelope.get("subtype", "unknown"))
-            body = str(envelope.get("result", ""))
-            if _PLAN_LIMIT_RE.search(body) or _PLAN_LIMIT_RE.search(subtype):
-                raise PlanLimitExhausted(
-                    "Claude Code plan window exhausted (CLI reported a usage limit)"
-                )
-            if _AUTH_ERROR_RE.search(body):
-                # Auth failures are terminal for the whole run — every later call
-                # fails identically, so soft-skipping would silently void days.
-                raise ClaudeCodeAuthError(
-                    f"claude CLI authentication failed: {body[:200]} "
-                    "(run the CLI interactively and /login, then retry)"
-                )
-            raise ClaudeCodeError(
-                f"claude CLI returned error envelope (subtype={subtype}): {body[:200]}"
-            )
+            _raise_for_error_envelope(envelope)
         return envelope
 
     def _record(self, envelope: dict[str, Any], *, role: str, model: str) -> None:

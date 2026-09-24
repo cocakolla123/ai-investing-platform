@@ -517,3 +517,49 @@ class TestArbiterFallback:
         with pytest.raises(PlanLimitExhausted):
             complete(client, model_tier="analyst")
         assert len(runner.calls) == 1
+
+
+class TestFailedExitEnvelope:
+    """The CLI exits 1 AND prints an is_error JSON envelope for its own
+    failures. The envelope used to be discarded, leaving a bare "exited 1"."""
+
+    # Verbatim shape captured from the real CLI (2026-09-23) for a model the
+    # installed version does not support.
+    UNSUPPORTED = json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "result": "API Error: 400 Claude Code 2.1.269 does not support this model; "
+            "version 2.1.280 or newer is required",
+            "usage": {},
+        }
+    )
+
+    def test_error_envelope_on_exit_1_explains_the_failure(self) -> None:
+        stderr = '[claude-code:unrecognized_model] {"model":"claude-opus-5-5"}'
+        failed = CliResult(1, self.UNSUPPORTED, stderr)
+        runner = FakeRunner([failed, failed])  # a generic error is retried once
+        client, _ = make_client(runner)
+        with pytest.raises(ClaudeCodeError, match="does not support this model"):
+            complete(client)
+
+    def test_auth_envelope_on_exit_1_is_terminal_auth_error(self) -> None:
+        from dynamo.llm.claude_code_client import ClaudeCodeAuthError
+
+        body = json.dumps(
+            {
+                "is_error": True,
+                "subtype": "success",
+                "result": "Failed to authenticate: OAuth expired",
+            }
+        )
+        client, _ = make_client(FakeRunner([CliResult(1, body, "")]))
+        with pytest.raises(ClaudeCodeAuthError):
+            complete(client)
+
+    def test_non_json_failure_carries_the_stderr_tail(self) -> None:
+        crash = CliResult(1, "", "Error: ENOSPC: no space left on device, write")
+        client, _ = make_client(FakeRunner([crash, crash]))
+        with pytest.raises(ClaudeCodeError, match="ENOSPC"):
+            complete(client)
