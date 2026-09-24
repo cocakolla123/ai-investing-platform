@@ -97,6 +97,7 @@ def data_quality(context: AssetExecutionContext, dynamo: DynamoResource) -> Mate
         corp_action_sanity,
         dual_source_close_check,
         gap_check,
+        release_cleared_quarantines,
         run_quality_checks,
         staleness_check,
     )
@@ -125,12 +126,21 @@ def data_quality(context: AssetExecutionContext, dynamo: DynamoResource) -> Mate
 
     issues = (
         dual_source_close_check(alpaca_df, tiingo_df)
-        + gap_check(canonical, start, as_of)
+        + gap_check(canonical, start, as_of, now=utcnow())
         + corp_action_sanity(canonical, actions)
         + staleness_check(latest_ts, tier1, as_of=utcnow(), max_age_days=2)
     )
     quarantined = run_quality_checks(repo, issues)
-    return MaterializeResult(metadata={"issues": len(issues), "symbols_quarantined": quarantined})
+    # Tonight's checks are the current state: close the quarantines of every
+    # checked symbol that passed, or one bad night freezes it for good.
+    released = release_cleared_quarantines(repo, tier1, issues)
+    return MaterializeResult(
+        metadata={
+            "issues": len(issues),
+            "symbols_quarantined": quarantined,
+            "quarantines_released": released,
+        }
+    )
 
 
 # --------------------------------------------------------------------------
@@ -618,6 +628,7 @@ def quality_scores(context: AssetExecutionContext, dynamo: DynamoResource) -> Ma
 @dagster_asset(group_name=RESEARCH_GROUP, deps=["quant_features_scores"])
 def strategy_signals(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Evaluate the doc 05 strategy set over recent feature history -> signals."""
+    from dynamo.research.quant.catalog import dt_naive_utc
     from dynamo.research.quant.features import build_raw_features
     from dynamo.research.strategies import DEFAULT_STRATEGIES, evaluate_strategies
 
@@ -631,7 +642,9 @@ def strategy_signals(context: AssetExecutionContext, dynamo: DynamoResource) -> 
     if bars is None or bars.empty:
         return MaterializeResult(metadata={"signals": 0, "skipped": "no bars"})
 
-    sessions = sorted(pd.to_datetime(bars["ts"]).dt.normalize().unique())[-10:]
+    # Repository bars are tz-aware; the history frame is compared against a
+    # naive as_of downstream (evaluate_strategies), so sessions are naive UTC.
+    sessions = sorted(dt_naive_utc(bars["ts"]).dt.normalize().unique())[-10:]
     frames: list[pd.DataFrame] = []
     for ts in sessions:
         frame = build_raw_features(inputs, cast(pd.Timestamp, pd.Timestamp(ts)), universe)
@@ -682,6 +695,7 @@ def regime_state(context: AssetExecutionContext, dynamo: DynamoResource) -> Mate
 
     from dynamo.domain.models.risk import RiskConfig
     from dynamo.risk.regime import RegimeHistory, latest_regime
+    from orchestration.assets._macro import aligned_series
 
     as_of = utcnow().date()
     repo = dynamo.market_repo()
@@ -691,27 +705,17 @@ def regime_state(context: AssetExecutionContext, dynamo: DynamoResource) -> Mate
         return MaterializeResult(metadata={"skipped": "no SPY bars"})
     spy = spy.sort_values("ts")
     dates = tuple(_pydate(t) for t in spy["ts"])
-    n = len(dates)
 
     m = schema.macro_series
     macro = _read_df(
         dynamo,
-        select(m.c.series_id, m.c.ts, m.c.value).where(m.c.ts >= as_of - timedelta(days=900)),
+        select(m.c.series_id, m.c.ts, m.c.vintage_ts, m.c.value).where(
+            m.c.ts >= as_of - timedelta(days=900)
+        ),
     )
 
     def _aligned(series_id: str, default: float) -> Any:
-        if macro.empty:
-            return np.full(n, default)
-        sub = cast(pd.DataFrame, macro[macro["series_id"] == series_id]).sort_values("ts")
-        if sub.empty:
-            return np.full(n, default)
-        s = pd.Series(
-            sub["value"].to_numpy(),
-            index=pd.to_datetime(sub["ts"]),
-        )
-        idx = pd.to_datetime([d.isoformat() for d in dates])
-        aligned = s.reindex(idx, method="ffill").fillna(default)
-        return cast(Any, aligned).to_numpy(dtype=float)
+        return aligned_series(macro, series_id, dates, default)
 
     close = spy["close"].to_numpy(dtype=float)
     ma200 = np.asarray(pd.Series(close).rolling(200, min_periods=1).mean(), dtype=float)
@@ -751,9 +755,15 @@ def regime_state(context: AssetExecutionContext, dynamo: DynamoResource) -> Mate
 
 def _macro_context(dynamo: DynamoResource, as_of: date) -> str:
     m = schema.macro_series
-    macro = _read_df(
-        dynamo,
-        select(m.c.series_id, m.c.ts, m.c.value).where(m.c.ts >= as_of - timedelta(days=120)),
+    from orchestration.assets._macro import latest_revisions
+
+    macro = latest_revisions(
+        _read_df(
+            dynamo,
+            select(m.c.series_id, m.c.ts, m.c.vintage_ts, m.c.value).where(
+                m.c.ts >= as_of - timedelta(days=120)
+            ),
+        )
     )
     if macro.empty:
         return "no macro series ingested"

@@ -25,6 +25,7 @@ from sqlalchemy import select
 
 from dynamo.config.settings import DynamoEnv, Settings
 from dynamo.persistence import schema
+from orchestration.assets._macro import aligned_series
 from orchestration.assets.research import _pydate, _read_df, _rows_to_models
 from orchestration.resources import DynamoResource, utcnow
 
@@ -232,20 +233,13 @@ def risk_verdict_asset(context: AssetExecutionContext, dynamo: DynamoResource) -
     m = schema.macro_series
     macro = _read_df(
         dynamo,
-        select(m.c.series_id, m.c.ts, m.c.value).where(
+        select(m.c.series_id, m.c.ts, m.c.vintage_ts, m.c.value).where(
             m.c.ts >= as_of - timedelta(days=RETURNS_LOOKBACK_DAYS + 200)
         ),
     )
 
     def _aligned(series_id: str, default: float) -> Any:
-        if macro.empty:
-            return np.full(n, default)
-        sub = cast(pd.DataFrame, macro[macro["series_id"] == series_id]).sort_values("ts")
-        if len(sub) == 0:
-            return np.full(n, default)
-        s = pd.Series(sub["value"].to_numpy(), index=pd.to_datetime(sub["ts"]))
-        aligned = s.reindex(pd.to_datetime(spy.index), method="ffill").fillna(default)
-        return np.asarray(aligned, dtype=float)
+        return aligned_series(macro, series_id, spy.index, default)
 
     close = spy.to_numpy(dtype=float)
     ma200 = np.asarray(pd.Series(close).rolling(200, min_periods=1).mean(), dtype=float)
