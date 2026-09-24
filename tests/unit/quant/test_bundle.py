@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -159,18 +160,49 @@ def test_sha_mismatch_is_loud(saved: dict, tmp_path: Path) -> None:
 
 
 def test_feature_drift_is_loud(saved: dict, tmp_path: Path) -> None:
-    # Trained-name list differs from today's catalog -> refuse to score.
-    with pytest.raises(QuantBundleError, match="feature drift"):
+    # A trained feature the catalog no longer computes -> refuse to score.
+    with pytest.raises(QuantBundleError, match="no longer computes"):
         bundle_from_version(
             VERSION,
             saved["dir"],
             current_feature_names=[*list(FEATURE_CATALOG)[:-1], "brand_new_feature"],
         )
-    # Same names, different order is ALSO drift (column order feeds the model).
-    reordered = list(FEATURE_CATALOG)
-    reordered[0], reordered[1] = reordered[1], reordered[0]
-    with pytest.raises(QuantBundleError, match="ORDER"):
-        bundle_from_version(VERSION, saved["dir"], current_feature_names=reordered)
+
+
+def _day(saved: dict) -> pd.DataFrame:
+    features: pd.DataFrame = saved["features"]
+    return cast(
+        pd.DataFrame, features.xs(cast(Any, features.index.get_level_values(0)[-1]), level="ts")
+    )
+
+
+def test_a_grown_catalog_still_loads_and_scores_identically(saved: dict) -> None:
+    """Adding features to the catalog used to make EVERY existing bundle
+    unloadable (exact-equality drift check) — campaign-v8 included. The bundle
+    now selects its own trained columns by name, so the new column is ignored
+    and the scores are bit-identical."""
+    as_of = date(2024, 2, 27)
+    base = _day(saved)
+    grown_names = [*list(FEATURE_CATALOG), "brand_new_feature"]
+    loaded = bundle_from_version(VERSION, saved["dir"], current_feature_names=grown_names)
+    assert loaded.feature_names == tuple(FEATURE_CATALOG)
+
+    grown = base.assign(brand_new_feature=123.0)
+    a = score_universe(loaded, base, as_of)
+    b = score_universe(loaded, grown, as_of)
+    assert [s.model_dump() for s in a] == [s.model_dump() for s in b]
+
+
+def test_a_reordered_frame_is_realigned_not_misfed(saved: dict) -> None:
+    """Column order feeds a tree model positionally; selecting by name in the
+    TRAINING order makes a reordered frame score exactly like the original."""
+    as_of = date(2024, 2, 27)
+    base = _day(saved)
+    loaded = bundle_from_version(VERSION, saved["dir"])
+    shuffled = cast(pd.DataFrame, base[list(reversed(base.columns))])
+    a = score_universe(loaded, base, as_of)
+    b = score_universe(loaded, shuffled, as_of)
+    assert [s.model_dump() for s in a] == [s.model_dump() for s in b]
 
 
 def test_missing_task_entry_is_loud(saved: dict, tmp_path: Path) -> None:

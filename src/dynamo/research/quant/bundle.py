@@ -207,20 +207,26 @@ def read_bundle_manifest(directory: str | Path, version: str) -> dict[str, Any]:
 def _check_feature_drift(
     version: str, manifest_names: Sequence[str], current_names: Sequence[str]
 ) -> None:
-    if list(manifest_names) == list(current_names):
-        return
-    missing = [n for n in manifest_names if n not in set(current_names)]
-    added = [n for n in current_names if n not in set(manifest_names)]
-    if missing or added:
-        detail = f"trained-only features {missing[:8]}, catalog-only features {added[:8]}"
-    else:
-        detail = "same names, different ORDER"
-    raise QuantBundleError(
-        f"feature drift: bundle {version!r} was trained on "
-        f"{len(manifest_names)} features but the current FEATURE_CATALOG "
-        f"(build_features output) has {len(current_names)} — {detail}. "
-        "Retrain the bundle against the current catalog."
-    )
+    """Refuse a bundle that needs a feature the catalog no longer computes.
+
+    Only MISSING trained features are drift. Scoring selects the bundle's own
+    columns by name in its training order (``ModelBundle.feature_names``), so
+    catalog-only additions and reordering can no longer reach the model.
+    This used to demand exact equality, which made every existing bundle
+    unloadable the moment any feature was ADDED to the catalog — including
+    campaign-v8, the model behind the committee campaign — and made a bundle
+    trained with --feature-groups impossible to score at all.
+    """
+    current = set(current_names)
+    missing = [n for n in manifest_names if n not in current]
+    if not manifest_names:
+        raise QuantBundleError(f"feature drift: bundle {version!r} records no feature names")
+    if missing:
+        raise QuantBundleError(
+            f"feature drift: bundle {version!r} was trained on {len(manifest_names)} "
+            f"features, {len(missing)} of which the current FEATURE_CATALOG no longer "
+            f"computes: {missing[:8]}. Retrain the bundle against the current catalog."
+        )
 
 
 def bundle_from_version(
@@ -274,4 +280,5 @@ def bundle_from_version(
         train_feature_quantiles=_quantiles_from_json(manifest.get("train_feature_quantiles") or {}),
         fold_ic_dispersion=float(manifest.get("fold_ic_dispersion") or 0.0),
         vol_is_log=bool(manifest.get("vol_is_log", True)),
+        feature_names=tuple(names),
     )

@@ -94,6 +94,11 @@ class ModelBundle:
     train_feature_quantiles: pd.DataFrame | None = None
     fold_ic_dispersion: float = 0.0
     vol_is_log: bool = True
+    # The columns the models were trained on, in training order. Scoring
+    # selects exactly these by NAME, so a catalog that has since grown new
+    # features (or reordered) feeds an older bundle the matrix it was fit on.
+    # None = legacy/in-memory bundles that consume the frame as given.
+    feature_names: tuple[str, ...] | None = None
 
 
 def _predict(model: ForecastModel | None, features: pd.DataFrame) -> np.ndarray | None:
@@ -170,6 +175,10 @@ def score_universe(
     """
     if features.empty:
         return []
+    if bundle.feature_names is not None:
+        # Missing trained columns are a load-time error (bundle_from_version);
+        # reindex here only drops catalog-only columns and fixes the order.
+        features = features.reindex(columns=list(bundle.feature_names))
     symbols = [str(s) for s in features.index]
     expected = _predict(bundle.ranker, features)
     downside = _predict(bundle.downside, features)
