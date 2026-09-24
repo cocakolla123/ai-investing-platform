@@ -56,3 +56,32 @@ IC > 0; ≥ 4 folds; rank-IC t-stat ≥ **2.0**; winning-fold share ≥ 0.60.
   comparable; absolute levels are not).
 - A pass is evidence the ranker has signal, not that any portfolio built on
   it will beat SPY after beta — see the campaign correction (44d266f).
+
+---
+
+## RESULT (appended 2026-09-24, after the single pre-registered run)
+
+**NO-GO.** 680 sessions, 1,315 symbols, 79 features, 894,200 rows, 19 folds.
+
+| | campaign-v8 | campaign-v10 |
+|---|---|---|
+| folds | 11 | 19 |
+| pooled rank IC | +3.37% | +2.95% |
+| rank-IC t-stat (gate 2.0) | 1.72 | **1.58** |
+| winning-fold share (gate 0.60) | 0.45 | **0.53** |
+| fold IC dispersion | 6.5% | 8.1% |
+| downside AUC | 0.605 | 0.617 (Brier worse than base rate) |
+
+The ten anomaly features plus fourteen more months of history did not
+produce a pass; the edge is a small, regime-unstable ~3% IC (folds range
+−15% to +18%). Per the decision rule: reported as NO-GO, bundle left as
+`candidate`, no rescue re-run.
+
+**Found after the run (not a rescue lever, a data defect):** since 2024,
+605 of 1,218 CIKs report revenue ONLY under the ASC 606 tag
+`RevenueFromContractWithCustomerExcludingAssessedTax`; the catalog and the
+quality score read only `Revenues`. Every revenue-based input — ps_ttm,
+ps_sector_pctile, rev_growth_yoy, rev_cagr_3y, and three quality sub-scores
+— was NaN for half the panel in both v8 and v10. Fixing it is a data fix; a
+model trained afterwards would be a NEW test with its own pre-registration,
+and should be counted as a second attempt (multiple testing), not as v10.
