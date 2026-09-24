@@ -145,3 +145,66 @@ Rules:
   38 instigators RUNNING (34 schedules + 4 sensors), no boot race this time.
 - **Still open:** off-host backup copy; stale `crontab` line (removal hangs under
   macOS privacy gating — harmless, fails instantly with the getcwd error).
+
+## 2026-09-23 — paper run placed zero orders in its first week: root causes
+
+**Symptom.** `orders` empty on 2026-09-23, nine days after the paper run went
+live. Every layer of the nightly chain turned out to be broken; each fix
+exposed the next.
+
+**Operator error (mine, 2026-09-16).** Restarting Dagster to load the news
+fix, I ran `make dagster` without `DAGSTER_HOME`. `dagster dev` then created a
+throwaway `.tmp_dagster_home_*` instance with every schedule off. I verified
+"38 schedules RUNNING" against the *old* `.dagster_home` — not the instance
+the new process used — so the check proved nothing. I then deleted the temp
+directory as junk: it was the live instance's storage. The daemon spent three
+days logging `sqlite unable to open database file` once per second (16.5 GB,
+kept as `artifacts/logs/dagster.log.2026-09-20-crashloop`), and on 09-20 03:39
+died when macOS purged `dagster dev`'s temp workspace file.
+
+**Code defects — live-only, invisible to every test and to replay:**
+1. `scores_job` never succeeded live: FRED revisions duplicated `ts` in the
+   regime reindex; tz-aware repository timestamps met naive `as_of` in
+   `quality_scores` and `strategy_signals`.
+2. `risk_verdict`: the same FRED-revision reindex bug.
+3. `eod_bars` never ingested the full universe: one 11,000-symbol request
+   (414), crypto pairs sent to the stock endpoint (400), Tiingo's monthly-quota
+   body misread as bad data, and Tiingo asked for every symbol on a
+   50-requests/hour plan. Equity bars stopped at 09-11.
+4. Quarantines were permanent (nothing ever set `resolved_at`), and the gap
+   check — running at 22:30 ET on a UTC date that is already tomorrow —
+   demanded an untraded session every night and quarantined everything.
+5. `claude CLI exited 1` discarded the CLI's own error envelope; the 09-16
+   committee failure cannot be diagnosed after the fact.
+
+**What the risk engine did right.** With 13-day-old prices it vetoed all new
+risk (`returns history is stale`). With 55 symbols quarantined it held cash.
+Both were correct refusals on bad inputs — they are why a broken week cost
+nothing but time.
+
+**Fixes** (425a820, 9c1b481, dc5339e, c50aa58, 779c14f, 42a5e7e): supervised
+production scheduler (`make dagster-host`) on the persistent instance and a
+committed `workspace.yaml`; tz normalization at the `as_of` boundary; shared
+FRED latest-revision helper; quarantine release + closed-session gap check;
+batched, crypto-free, tier-1-scoped EOD ingest with quota classification; CLI
+error envelopes surfaced. Missing bars 09-12→09-23 backfilled from Alpaca.
+Schedule cursors reset before restart so no stale tick (notably
+`paper_execution`) fired off-hours. 2,623 unit tests, pyright 0, contracts 3/3.
+
+**Verified live, 2026-09-23 ~21:40 ET:** scheduler writing heartbeats to
+`.dagster_home` (checked from the daemon's own environment); `eod_ingest` and
+`crypto_bars` fired from their schedules; nightly ingest RUN_SUCCESS on 11,241
+symbols; regime → risk → target chain completes with `new_risk_allowed=true`.
+Target tonight is 95% SPY ballast because no committee verdict is fresh; the
+23:30 committee run is the next real test.
+
+**Lessons.** (1) Verify a restart against the process's *own* environment,
+never a separate read. (2) The replay/test paths share code with live but not
+its data shapes (tz-aware timestamptz, FRED revisions, an 11k universe with
+crypto in it); the new tests feed live shapes. (3) Never delete a directory a
+running process might own.
+
+**Still open:** Tiingo monthly symbol cap exhausted until Oct 1 (Power plan
+decision pending with the user); pre-existing formatting drift in 19 files
+outside today's changes; `.tmp_dagster_home_vszy9o_t` (empty, gitignored)
+left in place.
