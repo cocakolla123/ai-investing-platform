@@ -125,6 +125,7 @@ BARS_DRIVEN_GROUPS = frozenset(
         "weekly",
         "accumulation",
         "momentum_quality",
+        "anomaly_price",  # 52w high, MAX, beta/idio/residual (vs SPY), seasonality
     }
 )
 # ...minus the members of those groups that need something other than bars.

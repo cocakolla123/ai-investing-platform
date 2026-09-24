@@ -97,7 +97,24 @@ GROUP_TARGETS: dict[str, int] = {
     "momentum_quality": 3,
     "attention": 1,
     "shortinterest": 3,
+    "anomaly_price": 6,
+    "anomaly_fundamental": 4,
 }
+
+# Published anomalies (groups 16-17). Pre-registered from the classic strategy
+# implementations in paperswithbacktest/awesome-systematic-trading
+# (static/strategies) — chosen BEFORE any of them was evaluated here, because
+# that list's headline table is "the 61 strongest of 1,687 replications", and
+# selecting features by their measured strength would repeat its winner's curse.
+#: Market benchmark for beta/residual features. Must equal
+#: dynamo.data.universe.MARKET_BENCHMARK_SYMBOL (core may not import adapters;
+#: a test pins the two together).
+MARKET_SYMBOL = "SPY"
+MARKET_MODEL_WINDOW = TRADING_DAYS_PER_YEAR  # sessions used to estimate beta
+MARKET_MODEL_MIN_OBS = 200  # fewer joint sessions -> no beta, not a noisy one
+IDIO_VOL_WINDOW = 60
+MAX_RET_WINDOW = 21
+RESIDUAL_SKIP = 21  # the "-1" of 12-1: skip the most recent month
 
 # Accumulation / distribution (group 12).
 OBV_SLOPE_WINDOWS = (20, 60)
@@ -169,6 +186,9 @@ class FeatureContext:
     # Point-in-time facts split per symbol, built lazily once and shared by
     # every fundamental feature — see :meth:`symbol_facts`.
     facts_cache: dict[str, pd.DataFrame] | None = field(default=None, repr=False)
+    # Market-model regressions shared by the beta / idiosyncratic-vol /
+    # residual-momentum features — see :func:`_market_model`.
+    derived_cache: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def symbol_facts(self, symbol: str) -> pd.DataFrame:
         """This symbol's point-in-time XBRL facts, and only this symbol's.
@@ -735,8 +755,14 @@ def pit_facts(fundamentals: pd.DataFrame | None, as_of: pd.Timestamp) -> pd.Data
 
 
 def quarterly_series(facts: pd.DataFrame, symbol: str, tag: str, as_of: pd.Timestamp) -> pd.Series:
-    """Latest filed value per period_end, sorted by period_end ascending."""
-    sub = _rows(facts, (facts["symbol"] == symbol) & (facts["tag"] == tag))
+    """Latest filed value per period_end, sorted by period_end ascending.
+
+    Only facts filed on or before ``as_of`` count (see :func:`latest_value`).
+    """
+    sub = _rows(
+        facts,
+        (facts["symbol"] == symbol) & (facts["tag"] == tag) & (facts["filed_at"] <= as_of),
+    )
     if sub.empty:
         return pd.Series(dtype=float)
     latest = cast(
@@ -763,8 +789,18 @@ def ttm_sum(
 
 
 def latest_value(facts: pd.DataFrame, symbol: str, tag: str, as_of: pd.Timestamp) -> float:
-    """Most recently filed value (balance-sheet style tags)."""
-    sub = _rows(facts, (facts["symbol"] == symbol) & (facts["tag"] == tag))
+    """Most recently filed value as of ``as_of`` (balance-sheet style tags).
+
+    ``as_of`` used to be accepted and ignored, which was harmless while every
+    caller passed the date the facts were already filtered to — and silently
+    wrong for the one that asked about the PAST: the quality score's
+    ``dilution_yoy`` compared "shares now" with "shares a year ago" and got
+    the latest filing both times, so dilution read 0.0 for every company.
+    """
+    sub = _rows(
+        facts,
+        (facts["symbol"] == symbol) & (facts["tag"] == tag) & (facts["filed_at"] <= as_of),
+    )
     if sub.empty:
         return float("nan")
     ordered = sub.sort_values(["filed_at", "period_end"])
@@ -1712,6 +1748,277 @@ def _short_interest_change(ctx: FeatureContext) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
+# Group 16 — published price anomalies (awesome-systematic-trading)
+# ---------------------------------------------------------------------------
+
+
+def _high_52w_ratio(ctx: FeatureContext) -> pd.Series:
+    """Close over its 52-week high — George & Hwang (2004), "The 52-Week High
+    and Momentum Investing" (repo: 52-weeks-high-effect-in-stocks). Near-high
+    names keep outperforming: investors anchor on the high and under-react to
+    news that pushes a price toward it."""
+    p = ctx.price
+    if len(p) < TRADING_DAYS_PER_YEAR:
+        return _nan_series(ctx)
+    hi = _roll_per_symbol(p, TRADING_DAYS_PER_YEAR, "max").iloc[-1]
+    return _finite(p.iloc[-1] / hi).reindex(ctx.universe)
+
+
+def _max_ret_21d(ctx: FeatureContext) -> pd.Series:
+    """Largest single-session return over the last month — Bali, Cakici &
+    Whitelaw (2011), "Maxing Out" (the MAX / lottery effect). Lottery-like
+    names are overpriced and underperform."""
+    p = ctx.price
+    if len(p) <= MAX_RET_WINDOW:
+        return _nan_series(ctx)
+    simple = cast(pd.DataFrame, np.expm1(_log_returns(p)))
+    return _roll_per_symbol(simple, MAX_RET_WINDOW, "max").iloc[-1].reindex(ctx.universe)
+
+
+@dataclass(frozen=True)
+class _MarketFit:
+    beta: float
+    residuals: pd.Series  # r_sym - beta * r_mkt on joint sessions, oldest first
+
+
+def _market_model(ctx: FeatureContext) -> dict[str, _MarketFit]:
+    """Per-symbol market-model fit on its OWN sessions joined to the market's.
+
+    One regression serves three features, so it is memoized on the context.
+    Daily log returns over the last :data:`MARKET_MODEL_WINDOW` joint sessions;
+    ``beta`` is the OLS slope (with intercept, so drift cannot bias it).
+    ``residuals`` are ``r - beta * r_mkt`` — beta-adjusted returns that keep
+    the stock's own drift, which is the thing residual momentum measures.
+
+    Joining on dates each symbol actually traded keeps every value invariant
+    to what else is in the universe: a crypto pair's weekend sessions simply
+    have no market return and drop out of ITS fit, never anyone else's.
+    """
+    cached = ctx.derived_cache.get("market_model")
+    if cached is not None:
+        return cast(dict[str, _MarketFit], cached)
+    fits: dict[str, _MarketFit] = {}
+    p = ctx.price
+    if MARKET_SYMBOL in p.columns and len(p) > MARKET_MODEL_MIN_OBS:
+        lr = _log_returns(p)
+        mkt = cast(pd.Series, lr[MARKET_SYMBOL]).dropna()
+        for sym in ctx.universe:
+            if sym not in lr.columns:
+                continue
+            own = cast(pd.Series, lr[sym]).dropna()
+            joint = pd.concat([own, mkt], axis=1, join="inner").tail(MARKET_MODEL_WINDOW)
+            if len(joint) < MARKET_MODEL_MIN_OBS:
+                continue
+            y = joint.iloc[:, 0].to_numpy(dtype=float)
+            x = joint.iloc[:, 1].to_numpy(dtype=float)
+            var_x = float(np.var(x))
+            if not math.isfinite(var_x) or var_x <= 0.0:
+                continue
+            beta = float(np.cov(x, y, bias=True)[0, 1] / var_x)
+            fits[sym] = _MarketFit(beta=beta, residuals=pd.Series(y - beta * x, index=joint.index))
+    ctx.derived_cache["market_model"] = fits
+    return fits
+
+
+def _from_fits(ctx: FeatureContext, fn: Callable[[_MarketFit], float]) -> pd.Series:
+    fits = _market_model(ctx)
+    return pd.Series(
+        {sym: fn(fits[sym]) if sym in fits else float("nan") for sym in ctx.universe},
+        dtype=float,
+    ).reindex(ctx.universe)
+
+
+def _beta_252d(ctx: FeatureContext) -> pd.Series:
+    """One-year market beta — Frazzini & Pedersen (2014), "Betting Against
+    Beta" (repo: betting-against-beta-factor-in-stocks). Leverage-constrained
+    investors bid up high-beta names, so low beta earns more per unit risk."""
+    return _from_fits(ctx, lambda f: f.beta)
+
+
+def _idio_vol_60d(ctx: FeatureContext) -> pd.Series:
+    """Annualized std of beta-adjusted returns over the last 60 sessions —
+    Ang, Hodrick, Xing & Zhang (2006) idiosyncratic volatility. Adaptation:
+    market model only (no size/value factor data here)."""
+
+    def fn(f: _MarketFit) -> float:
+        tail = f.residuals.tail(IDIO_VOL_WINDOW)
+        if len(tail) < IDIO_VOL_WINDOW:
+            return float("nan")
+        return float(tail.std(ddof=1) * math.sqrt(TRADING_DAYS_PER_YEAR))
+
+    return _from_fits(ctx, fn)
+
+
+def _residual_mom_12_1(ctx: FeatureContext) -> pd.Series:
+    """Standardized residual momentum — Blitz, Huij & Martens (2011),
+    "Residual Momentum" (repo: residual-momentum-factor). Momentum in the
+    part of a return the market does not explain, scaled by its volatility;
+    it keeps plain momentum's premium with far less crash risk.
+
+    Daily adaptation: beta-adjusted returns over the 12-1 window (the most
+    recent :data:`RESIDUAL_SKIP` sessions skipped), as mean / std * sqrt(n) —
+    the information-ratio form the paper uses. Market factor only.
+    """
+
+    def fn(f: _MarketFit) -> float:
+        window = f.residuals.iloc[:-RESIDUAL_SKIP] if len(f.residuals) > RESIDUAL_SKIP else None
+        if window is None or len(window) < MARKET_MODEL_MIN_OBS - RESIDUAL_SKIP:
+            return float("nan")
+        sd = float(window.std(ddof=1))
+        if not math.isfinite(sd) or sd <= 0.0:
+            return float("nan")
+        return float(window.mean() / sd * math.sqrt(len(window)))
+
+    return _from_fits(ctx, fn)
+
+
+def _seasonal_lag12(ctx: FeatureContext) -> pd.Series:
+    """Last year's return in the calendar month the label is about to span —
+    Heston & Sadka (2008), "Seasonality in the Cross-Section of Stock Returns"
+    (repo: 12-month-cycle-in-cross-section-of-stocks-returns). Their headline
+    finding is exactly this lag-12 effect: a stock's return in month t-12
+    predicts its return in month t.
+
+    The target month is the one the 20-session label mostly falls in (as_of +
+    14 days). The month read ended ~11 months before as_of, so the value is
+    point-in-time by construction. Only the one-year lag: every feature path
+    loads 420 days of bars (FEATURE_BARS_LOOKBACK_DAYS), so the paper's
+    multi-year average could never be filled — widening the window would
+    change existing features' values and is a separate decision.
+    """
+    p = ctx.price
+    if p.empty:
+        return _nan_series(ctx)
+    target = cast(pd.Timestamp, ctx.as_of + pd.Timedelta(days=14))
+    year, month = int(target.year) - 1, int(target.month)
+    prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
+    period = pd.Period(year=year, month=month, freq="M")
+    prev = pd.Period(year=prev_year, month=prev_month, freq="M")
+    out: dict[str, float] = {}
+    for sym in ctx.universe:
+        own = cast(pd.Series, p[sym]).dropna() if sym in p.columns else pd.Series(dtype=float)
+        if own.empty:
+            out[sym] = float("nan")
+            continue
+        monthly = own.groupby(pd.DatetimeIndex(own.index).to_period("M")).last()
+        # Both month-ends must exist: a return spanning a gap is not a month.
+        if period in monthly.index and prev in monthly.index and float(monthly[prev]) > 0:
+            out[sym] = float(monthly[period]) / float(monthly[prev]) - 1.0
+        else:
+            out[sym] = float("nan")
+    return pd.Series(out, dtype=float).reindex(ctx.universe)
+
+
+# ---------------------------------------------------------------------------
+# Group 17 — published fundamental anomalies (awesome-systematic-trading)
+# ---------------------------------------------------------------------------
+
+
+def _yoy_pair(
+    facts: pd.DataFrame, symbol: str, tag: str, as_of: pd.Timestamp
+) -> tuple[float, float] | None:
+    """(latest, same-tag value for the period ~one year earlier), or None.
+
+    Keyed on REPORTING PERIOD, not filing date: asking "what was filed as of
+    a year ago" returns the latest filing again whenever nothing newer has
+    been filed since, and a ratio of a value to itself reads as 0% change.
+    The prior period must sit within 45 days of one year before the latest.
+    """
+    q = quarterly_series(facts, symbol, tag, as_of)
+    if len(q) < 2:
+        return None
+    target = cast(pd.Timestamp, q.index[-1]) - pd.Timedelta(days=365)
+    gaps = np.abs((pd.DatetimeIndex(q.index) - target).days)
+    i = int(np.argmin(gaps))
+    if gaps[i] > 45 or i == len(q) - 1:
+        return None
+    return float(q.iloc[-1]), float(q.iloc[i])
+
+
+def share_count_yoy(
+    facts: pd.DataFrame, symbol: str, as_of: pd.Timestamp
+) -> tuple[float, float] | None:
+    """(shares now, shares a year earlier) from ONE share tag, two periods.
+
+    Shared by ``net_share_issuance_1y`` and the quality score's dilution
+    input, which used to compare the latest filing with itself (see
+    :func:`latest_value`). Tags are tried in :data:`SHARES_TAGS` order.
+    """
+    for tag in SHARES_TAGS:
+        pair = _yoy_pair(facts, symbol, tag, as_of)
+        if pair is not None and pair[0] > 0 and pair[1] > 0:
+            return pair
+    return None
+
+
+def _asset_growth_yoy(ctx: FeatureContext) -> pd.Series:
+    """Year-over-year growth in total assets — Cooper, Gulen & Schill (2008),
+    "Asset Growth and the Cross-Section of Stock Returns" (repo:
+    asset-growth-effect). Fast balance-sheet expansion predicts LOW returns."""
+
+    def fn(facts: pd.DataFrame, sym: str) -> float:
+        pair = _yoy_pair(facts, sym, "Assets", ctx.as_of)
+        if pair is None or pair[1] <= 0:
+            return float("nan")
+        return pair[0] / pair[1] - 1.0
+
+    return _per_symbol(ctx, fn)
+
+
+def _book_to_market(ctx: FeatureContext) -> pd.Series:
+    """Book equity over market cap — Fama & French (1992) value (repo:
+    value-book-to-market-factor). NaN for non-positive book equity, the
+    standard exclusion: a negative ratio is not "extremely cheap"."""
+
+    def fn(facts: pd.DataFrame, sym: str) -> float:
+        equity = latest_value(facts, sym, "StockholdersEquity", ctx.as_of)
+        mcap = _market_cap(ctx, facts, sym)
+        if math.isnan(equity) or equity <= 0 or math.isnan(mcap) or mcap <= 0:
+            return float("nan")
+        return equity / mcap
+
+    return _per_symbol(ctx, fn)
+
+
+def _net_share_issuance_1y(ctx: FeatureContext) -> pd.Series:
+    """log(shares now / shares a year ago) — Pontiff & Woodgate (2008),
+    "Share Issuance and Cross-Sectional Returns" (repo:
+    earnings-announcements-combined-with-stock-repurchases). Issuers
+    underperform, repurchasers outperform.
+
+    Both counts come from the SAME share tag (the tags mix point-in-time and
+    period-weighted definitions; a ratio across them measures the definition
+    change) and from two DIFFERENT reporting periods a year apart (see
+    :func:`_yoy_pair` — a stale filing compared with itself is not "no
+    issuance", it is no information).
+    """
+
+    def fn(facts: pd.DataFrame, sym: str) -> float:
+        pair = share_count_yoy(facts, sym, ctx.as_of)
+        return float("nan") if pair is None else math.log(pair[0] / pair[1])
+
+    return _per_symbol(ctx, fn)
+
+
+def _rd_to_mcap(ctx: FeatureContext) -> pd.Series:
+    """Trailing-twelve-month R&D over market cap — Chan, Lakonishok &
+    Sougiannis (2001), "The Stock Market Valuation of Research and Development
+    Expenditures" (repo: rd-expenditures-and-stock-returns). Heavy R&D is
+    expensed, so book value understates these firms and the market under-
+    prices them. NaN where no R&D is reported (about half the panel), left
+    for the model to treat as its own state rather than imputed as zero."""
+
+    def fn(facts: pd.DataFrame, sym: str) -> float:
+        rd = ttm_sum(facts, sym, "ResearchAndDevelopmentExpense", ctx.as_of)
+        mcap = _market_cap(ctx, facts, sym)
+        if math.isnan(rd) or rd < 0 or math.isnan(mcap) or mcap <= 0:
+            return float("nan")
+        return rd / mcap
+
+    return _per_symbol(ctx, fn)
+
+
+# ---------------------------------------------------------------------------
 # The catalog
 # ---------------------------------------------------------------------------
 
@@ -1838,6 +2145,18 @@ def _specs() -> list[FeatureSpec]:
         s("short_interest_pct_float", "shortinterest", 60, _short_interest_pct_float),
         s("days_to_cover", "shortinterest", 60, _days_to_cover),
         s("short_interest_change", "shortinterest", 60, _short_interest_change),
+        # 16 — published price anomalies (6) — awesome-systematic-trading
+        s("high_52w_ratio", "anomaly_price", TRADING_DAYS_PER_YEAR, _high_52w_ratio),
+        s("max_ret_21d", "anomaly_price", MAX_RET_WINDOW + 1, _max_ret_21d),
+        s("beta_252d", "anomaly_price", MARKET_MODEL_WINDOW + 1, _beta_252d),
+        s("idio_vol_60d", "anomaly_price", MARKET_MODEL_WINDOW + 1, _idio_vol_60d),
+        s("residual_mom_12_1", "anomaly_price", MARKET_MODEL_WINDOW + 1, _residual_mom_12_1),
+        s("seasonal_lag12", "anomaly_price", 400, _seasonal_lag12),
+        # 17 — published fundamental anomalies (4)
+        s("asset_growth_yoy", "anomaly_fundamental", 2 * 365, _asset_growth_yoy),
+        s("book_to_market", "anomaly_fundamental", 400, _book_to_market),
+        s("net_share_issuance_1y", "anomaly_fundamental", 2 * 365, _net_share_issuance_1y),
+        s("rd_to_mcap", "anomaly_fundamental", 400, _rd_to_mcap),
     ]
 
 
@@ -1880,7 +2199,7 @@ ASSET_CLASS_ETF = "etf"
 ASSET_CLASS_CRYPTO = "crypto"
 ASSET_CLASSES: tuple[str, ...] = (ASSET_CLASS_EQUITY, ASSET_CLASS_ETF, ASSET_CLASS_CRYPTO)
 
-_NON_ISSUER_GROUPS = frozenset({"value", "quality", "estimates", "insider"})
+_NON_ISSUER_GROUPS = frozenset({"value", "quality", "estimates", "insider", "anomaly_fundamental"})
 _NON_ISSUER_FEATURES = frozenset(
     {"days_to_next_earnings", "days_since_last_earnings", "rs_20d_sector"}
 )

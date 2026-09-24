@@ -39,6 +39,7 @@ from dynamo.research.quant.catalog import (
     pit_facts,
     quarterly_series,
     roic_ttm,
+    share_count_yoy,
     shares_outstanding,
     to_ts,
     ttm_sum,
@@ -235,11 +236,11 @@ def _symbol_metrics(
         m["interest_coverage"] = ebit / interest
 
     # management: dilution + insider record
-    sh_now = shares_outstanding(facts, sym, as_of)
-    sh_prior = shares_outstanding(facts, sym, to_ts(as_of - pd.Timedelta(days=365)))
-    m["dilution_yoy"] = (
-        sh_now / sh_prior - 1.0 if not math.isnan(sh_now) and sh_prior > 0 else _nan()
-    )
+    # Same share tag, two reporting periods a year apart. This compared the
+    # latest filing with itself (latest_value ignored its as_of), so dilution
+    # read 0.0 for every company and the management sub-score never saw it.
+    shares = share_count_yoy(facts, sym, to_ts(as_of))
+    m["dilution_yoy"] = _nan() if shares is None else shares[0] / shares[1] - 1.0
     m["insider_net_buy"] = insider_net_buy_signed(insider, sym, as_of, window_days=180)
     return m
 
