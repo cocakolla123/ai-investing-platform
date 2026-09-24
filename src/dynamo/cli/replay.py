@@ -1193,13 +1193,40 @@ def _cmd_report(args: argparse.Namespace) -> int:
     drag = f" ({costs / initial * 100.0:.2f}% of initial equity)" if initial > 0 else ""
     print(f"  cost drag:        ${costs:,.2f}{drag}")
     if report.benchmark is not None:
-        print(
-            f"  benchmark excess: {report.benchmark.excess_total_return * 100.0:+.2f}% "
-            f"vs {report.benchmark.benchmark}"
-        )
+        b = report.benchmark
+        print(f"  benchmark excess: {b.excess_total_return * 100.0:+.2f}% vs {b.benchmark}")
+        for line in skill_lines(b):
+            print(f"  {line}")
     else:
         print("  benchmark excess: n/a (no SPY bars over the window)")
     return 0
+
+
+def skill_lines(b: Any) -> list[str]:
+    """Beta-adjusted skill, the numbers a raw return and Sharpe hide.
+
+    awesome-systematic-trading's replication record: the median published
+    strategy's edge shrinks by ~40% once its index beta is removed. Our own
+    committee campaign read "+12.80%, Sharpe 2.08" and was, on inspection,
+    beta 0.91 with alpha -1.0%/yr (t = -0.41): 86% of the book was the SPY
+    ballast. Always print these beside the headline.
+    """
+    years = b.years_to_significance
+    needed = "never (negative alpha)" if years is None else f"{years:.1f} years"
+    lines = [
+        f"beta:             {b.beta:.2f}",
+        f"alpha (annual):   {b.alpha_annual * 100.0:+.2f}%   "
+        f"tracking error {b.tracking_error_annual * 100.0:.2f}%",
+        f"info ratio:       {b.information_ratio:+.2f}   alpha t-stat {b.alpha_t_stat:+.2f}   "
+        f"({b.n_aligned} sessions)",
+        f"proof horizon:    {needed} to reach t=1.96 at this information ratio",
+    ]
+    if abs(b.alpha_t_stat) < 1.96:
+        lines.append(
+            f"verdict:          alpha NOT distinguishable from zero — the return is "
+            f"explained by {b.beta:.2f} x {b.benchmark}"
+        )
+    return lines
 
 
 def _cmd_discovery_report(args: argparse.Namespace) -> int:
@@ -1290,7 +1317,7 @@ def _cmd_discovery_report(args: argparse.Namespace) -> int:
 def _cmd_compare(args: argparse.Namespace) -> int:
     """Cross-run metrics table (+ optional normalized-curve png); exit 2 on
     any unknown run id, 1 when a run has no persisted curve."""
-    from dynamo.backtest.metrics import metrics_block
+    from dynamo.backtest.metrics import benchmark_comparison, metrics_block
     from dynamo.persistence.repositories.replay import ReplayRepository
     from dynamo.replay.report import (
         derive_turnover_total,
@@ -1319,6 +1346,8 @@ def _cmd_compare(args: argparse.Namespace) -> int:
         curve = equity_series(equity_rows)
         curves[run_id] = curve
         block = metrics_block(curve)
+        spy = _benchmark_closes(engine, run)
+        bench = benchmark_comparison(curve, spy) if spy is not None and len(spy) >= 2 else None
         pnls = [p for _, _, p in realized_pnls(fills)]
         rows.append(
             {
@@ -1335,12 +1364,15 @@ def _cmd_compare(args: argparse.Namespace) -> int:
                 "win_rate_pct": (
                     100.0 * sum(1 for p in pnls if p > 0.0) / len(pnls) if pnls else 0.0
                 ),
+                "beta": bench.beta if bench is not None else float("nan"),
+                "alpha_pct": bench.alpha_annual * 100.0 if bench is not None else float("nan"),
+                "alpha_t": bench.alpha_t_stat if bench is not None else float("nan"),
             }
         )
     header = (
         f"{'run':<22} {'label':<14} {'initial':>12} {'final':>12} {'return':>8} "
         f"{'sharpe':>7} {'sortino':>8} {'maxDD':>7} {'turnover':>9} "
-        f"{'costs':>10} {'win%':>6}"
+        f"{'costs':>10} {'win%':>6} {'beta':>5} {'alpha/yr':>9} {'t(a)':>6}"
     )
     print(header)
     for r in rows:
@@ -1348,8 +1380,13 @@ def _cmd_compare(args: argparse.Namespace) -> int:
             f"{r['run_id']:<22} {r['label'][:14]:<14} {r['initial']:>12,.2f} "
             f"{r['final']:>12,.2f} {r['return_pct']:>+7.2f}% {r['sharpe']:>7.2f} "
             f"{r['sortino']:>8.2f} {r['max_dd_pct']:>6.2f}% {r['turnover']:>9.2f} "
-            f"{r['costs']:>10,.2f} {r['win_rate_pct']:>5.1f}%"
+            f"{r['costs']:>10,.2f} {r['win_rate_pct']:>5.1f}% {r['beta']:>5.2f} "
+            f"{r['alpha_pct']:>+8.2f}% {r['alpha_t']:>+6.2f}"
         )
+    print(
+        "t(a) is the alpha t-stat vs SPY; |t| < 1.96 means the return is explained by "
+        "beta x SPY, whatever the Sharpe says."
+    )
     if args.png:
         _write_compare_png(curves, {r["run_id"]: r["label"] for r in rows}, args.png)
     return 0

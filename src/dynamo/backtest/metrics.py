@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from statistics import NormalDist
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -64,6 +65,16 @@ class BenchmarkComparison(BaseModel):
     alpha_annual: float = 0.0
     beta: float = 0.0
     excess_total_return: float = 0.0
+    # Skill net of market exposure (awesome-systematic-trading's core caution:
+    # a large slice of published "edge" is just index beta). Residual =
+    # strategy return minus beta x benchmark return, per aligned session.
+    tracking_error_annual: float = 0.0
+    information_ratio: float = 0.0  # alpha_annual / tracking_error_annual
+    alpha_t_stat: float = 0.0  # information_ratio * sqrt(years)
+    # (1.96 / IR)^2: years of track record needed for this IR to clear
+    # t = 1.96. None when IR <= 0 (no amount of time proves a negative edge).
+    years_to_significance: float | None = None
+    n_aligned: int = 0  # sessions where both series had a return
 
 
 class BacktestReport(BaseModel):
@@ -211,16 +222,22 @@ def benchmark_comparison(
     b_equity = bench / float(bench.iloc[0])
     b_block = metrics_block(pd.Series(b_equity.to_numpy()))
     s_block = metrics_block(equity)
-    rs = _returns(equity)
-    rb = _returns(bench)
-    n = min(rs.size, rb.size)
-    beta = alpha = 0.0
+    x, y = _aligned_returns(bench, equity)
+    n = int(x.size)
+    beta = alpha = te = ir = t_stat = 0.0
+    years_needed: float | None = None
     if n >= 2:
-        x, y = rb[:n], rs[:n]
         var = float(np.var(x))
         if var > 0.0:
             beta = float(np.cov(x, y, ddof=0)[0, 1] / var)
             alpha = float((np.mean(y) - beta * np.mean(x)) * TRADING_DAYS)
+            resid = y - beta * x
+            if n >= 3:
+                te = float(np.std(resid, ddof=1) * math.sqrt(TRADING_DAYS))
+            if te > 0.0:
+                ir = alpha / te
+                t_stat = ir * math.sqrt(n / TRADING_DAYS)
+                years_needed = (1.96 / ir) ** 2 if ir > 0.0 else None
     return BenchmarkComparison(
         benchmark=name,
         benchmark_total_return=b_block.total_return,
@@ -229,7 +246,58 @@ def benchmark_comparison(
         alpha_annual=alpha,
         beta=beta,
         excess_total_return=s_block.total_return - b_block.total_return,
+        tracking_error_annual=te,
+        information_ratio=ir,
+        alpha_t_stat=t_stat,
+        years_to_significance=years_needed,
+        n_aligned=n,
     )
+
+
+def _aligned_returns(bench: pd.Series, equity: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+    """(benchmark, strategy) simple returns over the SAME sessions.
+
+    With dated indexes the two series are joined on date before differencing,
+    so a session one side lacks can never pair a return with the wrong day.
+    (Positional truncation was the old rule: correct only when both series
+    covered exactly the same sessions.) Undated series fall back to position.
+    """
+    if _is_dated(bench.index) and _is_dated(equity.index):
+        joint = pd.concat(
+            [
+                pd.Series(bench.to_numpy(dtype=float), index=_day_index(bench.index)),
+                pd.Series(equity.to_numpy(dtype=float), index=_day_index(equity.index)),
+            ],
+            axis=1,
+            join="inner",
+        ).sort_index()
+        joint = joint[~joint.index.duplicated(keep="last")]
+        r = (joint / joint.shift(1) - 1.0).iloc[1:]
+        r = r[np.isfinite(r).all(axis=1)]
+        return r.iloc[:, 0].to_numpy(dtype=float), r.iloc[:, 1].to_numpy(dtype=float)
+    rb, rs = _returns(bench), _returns(equity)
+    n = min(rb.size, rs.size)
+    return rb[:n], rs[:n]
+
+
+def _is_dated(index: pd.Index) -> bool:
+    if len(index) == 0:
+        return False
+    if isinstance(index, pd.DatetimeIndex):
+        return True
+    sample = index[0]
+    return hasattr(sample, "year") and hasattr(sample, "month") and hasattr(sample, "day")
+
+
+def _day_index(index: pd.Index) -> pd.DatetimeIndex:
+    """Calendar days, tz-naive: aware stamps are read in UTC, naive as-is."""
+    out: list[pd.Timestamp] = []
+    for t in index:
+        ts = cast(pd.Timestamp, pd.Timestamp(t))
+        if ts.tzinfo is not None:
+            ts = cast(pd.Timestamp, ts.tz_convert("UTC").tz_localize(None))
+        out.append(cast(pd.Timestamp, pd.Timestamp(year=ts.year, month=ts.month, day=ts.day)))
+    return pd.DatetimeIndex(out)
 
 
 # --------------------------------------------------- deflated Sharpe (BLdP)
