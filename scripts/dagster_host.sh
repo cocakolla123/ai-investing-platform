@@ -57,7 +57,10 @@ supervise() {  # name log cmd... — restart on exit, rotating the log between r
   disown "$!" 2>/dev/null || true
 }
 
-stray() { pgrep -f "dagster(-daemon| dev|_daemon|-webserver|_webserver)" || true; }
+# Real dagster executables only. A looser pattern matched any shell whose
+# command line merely MENTIONED them (e.g. `tail dagster-daemon.log`) and
+# made start() refuse to run beside its own caller.
+stray() { pgrep -f "bin/dagster-daemon run|bin/dagster-webserver|bin/dagster dev|-m dagster[ ._]|dagster\._daemon|-m dagster_webserver" || true; }
 
 start() {
   if alive daemon || alive webserver; then
