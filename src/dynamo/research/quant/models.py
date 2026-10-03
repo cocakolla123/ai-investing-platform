@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib
 import warnings
 from collections.abc import Mapping
+from statistics import NormalDist
 from typing import Any, Literal, cast
 
 import numpy as np
@@ -34,10 +35,12 @@ Objective = Literal["regression", "binary"]
 Calibration = Literal["isotonic", "mapie"]
 
 __all__ = [
+    "AbstainModel",
     "LightGBMModel",
     "MapieCalibratedClassifier",
     "RandomForestModel",
     "StatsforecastBaseline",
+    "TrendRule",
 ]
 
 
@@ -415,6 +418,56 @@ class StatsforecastBaseline:
         return np.asarray(
             [self._per_symbol.get(str(s), self._global_mean) for s in symbols], dtype=float
         )
+
+    def feature_importances(self) -> dict[str, float]:
+        return {}
+
+
+class TrendRule:
+    """Rule ranker: 12-1 momentum, nothing fitted (docs/preregistration_trend_rule.md).
+
+    The ORDER is plain ``mom_12_1``. The VALUE maps that order onto a
+    20-session expected excess return, the scale the sizing and dossier code
+    read ``expected_excess_return`` on (Grinold: alpha = IC x sigma x z):
+    ``z`` is the standard-normal score of the name's cross-sectional rank
+    among the rows scored together (one session's universe in production).
+    A raw momentum of 0.40 would otherwise read as a 40% expected excess
+    return. Missing momentum -> NaN, so the name abstains.
+    """
+
+    def __init__(self, feature: str = "mom_12_1", ic: float = 0.04, sigma: float = 0.08):
+        self.feature = feature
+        self.ic = ic
+        self.sigma = sigma
+
+    def fit(self, x: Any, y: Any, cfg: dict[str, Any] | None = None) -> TrendRule:
+        return self  # a rule: nothing to fit
+
+    def predict(self, x: Any) -> np.ndarray:
+        values = pd.DataFrame(x)[self.feature].to_numpy(dtype=float)
+        out = np.full(len(values), np.nan)
+        ok = ~np.isnan(values)
+        n = int(ok.sum())
+        if n:
+            ranks = pd.Series(values[ok]).rank(method="average").to_numpy()
+            dist = NormalDist()
+            z = np.asarray([dist.inv_cdf((r - 0.5) / n) for r in ranks])
+            out[ok] = self.ic * self.sigma * z
+        return out
+
+    def feature_importances(self) -> dict[str, float]:
+        return {self.feature: 1.0}
+
+
+class AbstainModel:
+    """Predicts NaN for every row: a bundle task the rule doesn't model
+    (downside, vol) scores as unknown instead of as a made-up number."""
+
+    def fit(self, x: Any, y: Any, cfg: dict[str, Any] | None = None) -> AbstainModel:
+        return self
+
+    def predict(self, x: Any) -> np.ndarray:
+        return np.full(len(pd.DataFrame(x)), np.nan)
 
     def feature_importances(self) -> dict[str, float]:
         return {}
