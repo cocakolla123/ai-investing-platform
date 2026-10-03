@@ -101,7 +101,14 @@ def paired_boot(a: list[float], b: list[float], n: int = 10_000) -> tuple[float,
 
 
 def main() -> None:
-    queries = [json.loads(line) for line in (EVAL / "queries.jsonl").open()]
+    import sys
+
+    # --stripped: queries with the "## Journal hits" section removed (the
+    # post-hoc contamination correction; same labels, same methods).
+    stripped = "--stripped" in sys.argv
+    qfile = "queries_journal_stripped.jsonl" if stripped else "queries.jsonl"
+    suffix = "_stripped" if stripped else ""
+    queries = [json.loads(line) for line in (EVAL / qfile).open()]
     qrels: dict[str, dict[str, int]] = json.loads((EVAL / "qrels.json").read_text())
     engine = make_engine(Settings().database_url)
     repo = JournalRepository(engine)
@@ -215,8 +222,8 @@ def main() -> None:
         "latency_ms": {m: {"p50": pct(v, 50), "p95": pct(v, 95)} for m, v in lat.items()},
         "query_embedding_ms": {"p50": pct(embed_ms, 50), "p95": pct(embed_ms, 95)},
     }
-    (EVAL / "results_phase2.json").write_text(json.dumps(results, indent=2))
-    with (EVAL / "results_phase2_per_query.jsonl").open("w") as fh:
+    (EVAL / f"results_phase2{suffix}.json").write_text(json.dumps(results, indent=2))
+    with (EVAL / f"results_phase2{suffix}_per_query.jsonl").open("w") as fh:
         for r in per_query:
             fh.write(json.dumps(r) + "\n")
     print(json.dumps(results, indent=2))

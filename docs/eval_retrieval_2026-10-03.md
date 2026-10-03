@@ -45,6 +45,24 @@ it on stratum X from **0.322 to 0.103**, statistically tied with vector
 (0.127; diff −0.025 [−0.071, +0.020]). Keyword's cross-stock "win" was mostly
 the label rule, not retrieval skill.
 
+### Query contamination, found after the run (correction)
+
+37 of 41 query texts contained a `## Journal hits` section of "Prior similar
+case" lines from the campaign's within-run learning — summaries of earlier
+trades, outcomes included, which overlap with the lessons being retrieved.
+Re-run with that section stripped (`queries_journal_stripped.jsonl`, same
+labels, same methods; `results_phase2_stripped.json`):
+
+| method | all, as registered | all, stripped | S, stripped | X, stripped |
+|---|---|---|---|---|
+| keyword | 0.388 | 0.390 | 0.564 | 0.327 |
+| vector | 0.264 | 0.264 | 0.635 | 0.127 |
+| hybrid | 0.344 | 0.329 | 0.621 | 0.222 |
+
+Vector is unchanged (bge reads only the first 512 tokens; the section sits
+near the end). The only conclusion that does not survive is "hybrid > keyword
+on same-stock" (stripped: +0.057 [−0.062, +0.185]). Everything else holds.
+
 ## What this means
 
 1. **Same-stock precedent is a filter problem, already solved.** The ticker
