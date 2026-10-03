@@ -198,6 +198,38 @@ def test_vector_search_excludes_hash_fallback_entries_by_default(engine) -> None
     assert {e.id for e, _ in repo.search(text_query="j-random")} == {"j-random"}
 
 
+def test_default_vector_search_enforces_both_guards_at_once(engine) -> None:  # type: ignore[no-untyped-def]
+    """The two retrieval guards together, with NO opt-in: a hash-fallback row
+    and a row written after ``as_of`` must both be invisible to the default
+    search every committee prompt goes through. The as-of test above has to
+    switch the fallback guard off to do its job, so until this test nothing
+    exercised the combination the live and replay paths actually run."""
+    from dynamo.learning.journal import HASH_FALLBACK_BACKEND
+    from dynamo.persistence.repositories.learning import JournalRepository
+
+    repo = JournalRepository(engine)  # type: ignore[arg-type]
+    rows = {
+        "j-past-real": (NOW, "sentence-transformers"),
+        "j-past-random": (NOW, HASH_FALLBACK_BACKEND),
+        "j-future-real": (NOW + timedelta(days=5), "sentence-transformers"),
+        "j-future-random": (NOW + timedelta(days=5), HASH_FALLBACK_BACKEND),
+    }
+    for entry_id, (created_at, version) in rows.items():
+        repo.insert(
+            JournalEntry(
+                id=entry_id,
+                kind=JournalKind.LESSON,
+                symbols=("AAPL",),
+                text=f"AAPL lesson {entry_id}",
+                created_at=created_at,
+            ),
+            embedding=[0.1] * 384,
+            embedding_version=version,
+        )
+    hits = repo.search(embedding=[0.1] * 384, top_k=10, as_of=NOW + timedelta(days=1))
+    assert {e.id for e, _ in hits} == {"j-past-real"}
+
+
 def test_proposal_calibration_metrics_roundtrip(engine) -> None:  # type: ignore[no-untyped-def]
     from dynamo.learning.calibration import CalibrationObservation, compute_calibration
     from dynamo.persistence.repositories.learning import (

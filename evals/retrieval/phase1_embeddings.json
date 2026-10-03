@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-03",
+  "embedder_backend": "sentence-transformers",
+  "model": "BAAI/bge-small-en-v1.5",
+  "journal_entries": 166,
+  "by_kind": {"lesson": 79, "review": 34, "thesis": 53},
+  "hash_fallback_stamped_before": 0,
+  "hash_fallback_stamped_after": 0,
+  "re_embedded_this_phase": 0,
+  "stored_vs_recomputed_cosine": {"min": 1.0, "median": 1.0, "below_0_999": 0},
+  "point_in_time": {
+    "lessons_reviews_linked_to_experience": 113,
+    "dated_before_their_trade_exit": 0,
+    "min_lag_from_decision_days": 2,
+    "theses_note": "53 live theses, written at decision time (knowable by definition)"
+  },
+  "note": "The re-embed the plan called for had already happened before this phase; this phase verified it rather than performing it."
+}
