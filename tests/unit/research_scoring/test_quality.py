@@ -180,3 +180,16 @@ def test_live_tz_aware_bars_score_identically(fundamentals: pd.DataFrame) -> Non
     live = compute_quality_scores(bars=aware, **kwargs)  # type: ignore[arg-type]
     assert [s.model_dump() for s in live] == [s.model_dump() for s in expected]
     assert any(s.subscores["valuation"] is not None for s in expected), "prices must be used"
+
+
+def test_asc606_revenue_tag_filer_scores_like_revenues_filer(fundamentals: pd.DataFrame) -> None:
+    """About half of filers report revenue ONLY under the ASC 606 contract tag.
+    The same company filed that way must score identically, not drop out."""
+    asc606 = fundamentals.copy()
+    aaa_rev = (asc606["symbol"] == "AAA") & (asc606["tag"] == "Revenues")
+    asc606.loc[aaa_rev, "tag"] = "RevenueFromContractWithCustomerExcludingAssessedTax"
+    base = compute_quality_scores(fundamentals=fundamentals, sector_map=SECTOR_MAP, as_of=AS_OF)
+    renamed = compute_quality_scores(fundamentals=asc606, sector_map=SECTOR_MAP, as_of=AS_OF)
+    assert [s.model_dump() for s in renamed] == [s.model_dump() for s in base]
+    aaa = next(s for s in renamed if s.symbol == "AAA")
+    assert aaa.composite is not None

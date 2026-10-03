@@ -72,6 +72,7 @@ import pandas as pd
 
 from dynamo.domain.models.market import Frozen
 from dynamo.research.quant.catalog import (
+    REVENUE_TAGS,
     SHARES_TAGS,
     latest_value,
     pit_facts,
@@ -109,12 +110,6 @@ MAX_CFO_REVENUE_MULTIPLE = 3.0
 
 # --- tag candidates (obstacle (c)) -----------------------------------------
 
-REVENUE_TAGS = (
-    "Revenues",
-    "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "RevenueFromContractWithCustomerIncludingAssessedTax",
-    "SalesRevenueNet",
-)
 COGS_TAGS = (
     "CostOfGoodsAndServicesSold",
     "CostOfRevenue",

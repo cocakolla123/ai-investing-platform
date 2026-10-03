@@ -61,6 +61,17 @@ SHARES_TAGS = (
     "WeightedAverageNumberOfDilutedSharesOutstanding",
 )
 
+# Revenue concept candidates, in preference order. Since ASC 606 about half of
+# filers report revenue ONLY under the contract-revenue tag, so hard-coding
+# "Revenues" silently blanked every revenue-based feature (and, through
+# n_filed_quarters, the whole quality score) for them. See revenue_tag().
+REVENUE_TAGS = (
+    "Revenues",
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+    "SalesRevenueNet",
+)
+
 # Groups whose features stay raw (context shared across names) — doc 04 section 3.
 RAW_GROUPS = frozenset({"macro", "calendar"})
 
@@ -807,8 +818,32 @@ def latest_value(facts: pd.DataFrame, symbol: str, tag: str, as_of: pd.Timestamp
     return float(ordered["value"].iloc[-1])
 
 
+def revenue_tag(facts: pd.DataFrame, symbol: str, as_of: pd.Timestamp) -> str:
+    """The revenue tag this filer currently reports, as known at ``as_of``.
+
+    Among :data:`REVENUE_TAGS`, the one whose latest filed ``period_end`` is
+    most recent wins (a filer that switched tags is read on its current one,
+    never a stale pre-switch series); ties go to the earlier candidate. Only
+    facts filed on or before ``as_of`` are consulted. Falls back to
+    ``"Revenues"`` when the filer has none, so callers get their usual NaN.
+    """
+    sub = _rows(
+        facts,
+        (facts["symbol"] == symbol)
+        & facts["tag"].isin(REVENUE_TAGS)
+        & (facts["filed_at"] <= as_of),
+    )
+    if sub.empty:
+        return REVENUE_TAGS[0]
+    latest = sub.groupby("tag")["period_end"].max()
+    return max(
+        (t for t in REVENUE_TAGS if t in latest.index),
+        key=lambda t: (latest[t], -REVENUE_TAGS.index(t)),
+    )
+
+
 def n_filed_quarters(facts: pd.DataFrame, symbol: str, as_of: pd.Timestamp) -> int:
-    return len(quarterly_series(facts, symbol, "Revenues", as_of))
+    return len(quarterly_series(facts, symbol, revenue_tag(facts, symbol, as_of), as_of))
 
 
 def shares_outstanding(facts: pd.DataFrame, symbol: str, as_of: pd.Timestamp) -> float:
@@ -891,7 +926,7 @@ def _fcf_yield(ctx: FeatureContext) -> pd.Series:
 def _ps_ttm(ctx: FeatureContext) -> pd.Series:
     def fn(facts: pd.DataFrame, sym: str) -> float:
         mcap = _market_cap(ctx, facts, sym)
-        rev = ttm_sum(facts, sym, "Revenues", ctx.as_of)
+        rev = ttm_sum(facts, sym, revenue_tag(facts, sym, ctx.as_of), ctx.as_of)
         if math.isnan(mcap) or math.isnan(rev) or rev <= 0:
             return float("nan")
         return mcap / rev
@@ -929,11 +964,12 @@ def _fcf_yield_history(
     ctx: FeatureContext, facts: pd.DataFrame, sym: str, n_quarters: int = 12
 ) -> list[float]:
     """FCF yield replayed at each of the last N quarter filing dates."""
-    q = quarterly_series(facts, sym, "Revenues", ctx.as_of)
+    rev_tag = revenue_tag(facts, sym, ctx.as_of)
+    q = quarterly_series(facts, sym, rev_tag, ctx.as_of)
     if q.empty:
         return []
     filings = (
-        _rows(facts, (facts["symbol"] == sym) & (facts["tag"] == "Revenues"))
+        _rows(facts, (facts["symbol"] == sym) & (facts["tag"] == rev_tag))
         .sort_values(["period_end", "filed_at"])
         .groupby("period_end", sort=True)
         .last()["filed_at"]
@@ -972,7 +1008,7 @@ def _fcf_yield_vs_3y(ctx: FeatureContext) -> pd.Series:
 def _gross_margin_ttm(ctx: FeatureContext) -> pd.Series:
     def fn(facts: pd.DataFrame, sym: str) -> float:
         gp = ttm_sum(facts, sym, "GrossProfit", ctx.as_of)
-        rev = ttm_sum(facts, sym, "Revenues", ctx.as_of)
+        rev = ttm_sum(facts, sym, revenue_tag(facts, sym, ctx.as_of), ctx.as_of)
         if math.isnan(gp) or math.isnan(rev) or rev <= 0:
             return float("nan")
         return gp / rev
@@ -983,7 +1019,7 @@ def _gross_margin_ttm(ctx: FeatureContext) -> pd.Series:
 def gross_margin_stability(facts: pd.DataFrame, sym: str, as_of: pd.Timestamp) -> float:
     """Negative sigma of quarterly gross margin over up to 12 quarters (>=8 needed)."""
     gp = quarterly_series(facts, sym, "GrossProfit", as_of).iloc[-12:]
-    rev = quarterly_series(facts, sym, "Revenues", as_of).iloc[-12:]
+    rev = quarterly_series(facts, sym, revenue_tag(facts, sym, as_of), as_of).iloc[-12:]
     gm = (gp / rev.where(rev > 0)).dropna()
     if len(gm) < 8:
         return float("nan")
@@ -1013,8 +1049,9 @@ def _roic_feature(ctx: FeatureContext) -> pd.Series:
 
 def _rev_growth_yoy(ctx: FeatureContext) -> pd.Series:
     def fn(facts: pd.DataFrame, sym: str) -> float:
-        cur = ttm_sum(facts, sym, "Revenues", ctx.as_of)
-        prev = ttm_sum(facts, sym, "Revenues", ctx.as_of, offset_quarters=4)
+        rev_tag = revenue_tag(facts, sym, ctx.as_of)
+        cur = ttm_sum(facts, sym, rev_tag, ctx.as_of)
+        prev = ttm_sum(facts, sym, rev_tag, ctx.as_of, offset_quarters=4)
         if math.isnan(cur) or math.isnan(prev) or prev <= 0:
             return float("nan")
         return cur / prev - 1.0
@@ -1024,8 +1061,9 @@ def _rev_growth_yoy(ctx: FeatureContext) -> pd.Series:
 
 def _rev_cagr_3y(ctx: FeatureContext) -> pd.Series:
     def fn(facts: pd.DataFrame, sym: str) -> float:
-        cur = ttm_sum(facts, sym, "Revenues", ctx.as_of)
-        old = ttm_sum(facts, sym, "Revenues", ctx.as_of, offset_quarters=12)
+        rev_tag = revenue_tag(facts, sym, ctx.as_of)
+        cur = ttm_sum(facts, sym, rev_tag, ctx.as_of)
+        old = ttm_sum(facts, sym, rev_tag, ctx.as_of, offset_quarters=12)
         if math.isnan(cur) or math.isnan(old) or old <= 0 or cur <= 0:
             return float("nan")
         return (cur / old) ** (1.0 / 3.0) - 1.0

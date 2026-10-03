@@ -38,6 +38,7 @@ from dynamo.research.quant.catalog import (
     pit_close,
     pit_facts,
     quarterly_series,
+    revenue_tag,
     roic_ttm,
     share_count_yoy,
     shares_outstanding,
@@ -125,8 +126,9 @@ def _valuation_history(
     facts: pd.DataFrame, price: pd.DataFrame, sym: str, as_of: pd.Timestamp, n_quarters: int = 12
 ) -> tuple[list[float], list[float]]:
     """(ev_ebit history, fcf_yield history) replayed at past quarter filings."""
+    rev_tag = revenue_tag(facts, sym, as_of)
     filings = (
-        _rows(facts, (facts["symbol"] == sym) & (facts["tag"] == "Revenues"))
+        _rows(facts, (facts["symbol"] == sym) & (facts["tag"] == rev_tag))
         .sort_values(["period_end", "filed_at"])
         .groupby("period_end", sort=True)
         .last()["filed_at"]
@@ -167,7 +169,8 @@ def _symbol_metrics(
     """Raw metric values (NaN = unavailable). Sign conventions noted per metric."""
     m: dict[str, float] = {}
     quarters = n_filed_quarters(facts, sym, as_of)
-    rev = ttm_sum(facts, sym, "Revenues", as_of)
+    rev_tag = revenue_tag(facts, sym, as_of)
+    rev = ttm_sum(facts, sym, rev_tag, as_of)
     ebit = ttm_sum(facts, sym, "OperatingIncomeLoss", as_of)
     ni = ttm_sum(facts, sym, "NetIncomeLoss", as_of)
     fcf = _fcf_ttm(facts, sym, as_of)
@@ -177,7 +180,7 @@ def _symbol_metrics(
     if quarters >= min_quarters:
         m["gm_stability"] = gross_margin_stability(facts, sym, as_of)  # higher (less neg) better
         gp = quarterly_series(facts, sym, "GrossProfit", as_of).iloc[-12:]
-        rv = quarterly_series(facts, sym, "Revenues", as_of).iloc[-12:]
+        rv = quarterly_series(facts, sym, rev_tag, as_of).iloc[-12:]
         gm_q = (gp / rv.where(rv > 0)).dropna()
         m["roic_persistence"] = (
             float((gm_q > gm_q.median()).mean()) if len(gm_q) >= min_quarters else _nan()
@@ -188,14 +191,14 @@ def _symbol_metrics(
 
     # revenue growth
     if quarters >= min_quarters and not math.isnan(rev):
-        prev = ttm_sum(facts, sym, "Revenues", as_of, offset_quarters=4)
+        prev = ttm_sum(facts, sym, rev_tag, as_of, offset_quarters=4)
         m["rev_yoy"] = rev / prev - 1.0 if prev > 0 else _nan()
-        prev2 = ttm_sum(facts, sym, "Revenues", as_of, offset_quarters=8)
+        prev2 = ttm_sum(facts, sym, rev_tag, as_of, offset_quarters=8)
         if prev > 0 and prev2 > 0:
             m["rev_accel"] = (rev / prev - 1.0) - (prev / prev2 - 1.0)
         else:
             m["rev_accel"] = _nan()
-        old = ttm_sum(facts, sym, "Revenues", as_of, offset_quarters=12)
+        old = ttm_sum(facts, sym, rev_tag, as_of, offset_quarters=12)
         m["rev_cagr_3y"] = (rev / old) ** (1.0 / 3.0) - 1.0 if old > 0 and rev > 0 else _nan()
     else:
         m["rev_yoy"] = m["rev_accel"] = m["rev_cagr_3y"] = _nan()
