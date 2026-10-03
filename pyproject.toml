@@ -63,6 +63,9 @@ analysis = ["quantstats>=0.0.62", "alphalens-reloaded>=0.4.3"]
 # machinery, so it stays out of the base install. The broker guards the
 # import and reports configured=False (sim fallback) when absent.
 polymarket = ["py-clob-client>=0.34.6"]
+# Experiment tracking for quant training runs (local file store under
+# artifacts/mlruns; no server). quant_train guards the import.
+tracking = ["mlflow-skinny>=2.16"]
 
 [dependency-groups]
 dev = [
