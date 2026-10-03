@@ -135,6 +135,11 @@ DEFAULT_CANDIDATE_PERCENTILE = 0.6
 PROMPT_VERSION = "replay-quant-synth-v1"
 
 
+JOURNAL_RETRIEVAL_MODES = ("vector", "off", "hybrid")
+# ReplayConfig fields excluded from config_hash while at these values.
+_HASH_NEUTRAL_DEFAULTS: dict[str, object] = {"journal_retrieval": "vector", "replicate": 0}
+
+
 class ReplayConfig(BaseModel):
     """Frozen, hashable replay run configuration (determinism anchor)."""
 
@@ -235,6 +240,15 @@ class ReplayConfig(BaseModel):
     discovery_promotions_per_day: int = Field(default=60, ge=0)
     discovery_promotion_days: int = Field(default=30, ge=0)
     code_version: str = ""
+    # --- Retrieval ablation (eval Phase 3, docs/preregistration_eval_decisions.md).
+    # Committee mode only. How the journal section of each dossier is filled:
+    #   "vector" — production as deployed: template query + ticker filter;
+    #   "off"    — no journal hits and no prior-case lines at all;
+    #   "hybrid" — BM25 + vector (RRF) over the dossier text, no ticker filter.
+    journal_retrieval: str = "vector"
+    # Repeat index for measuring run-to-run LLM noise: an identical config
+    # with replicate=1 gets its own run id and its own sampled outputs.
+    replicate: int = Field(default=0, ge=0)
 
     @field_validator("discovery_mode")
     @classmethod
@@ -243,9 +257,24 @@ class ReplayConfig(BaseModel):
             raise ValueError(f"discovery_mode {value!r} is not one of {DISCOVERY_MODES}")
         return value
 
+    @field_validator("journal_retrieval")
+    @classmethod
+    def _known_journal_retrieval(cls, value: str) -> str:
+        if value not in JOURNAL_RETRIEVAL_MODES:
+            raise ValueError(f"journal_retrieval {value!r} is not one of {JOURNAL_RETRIEVAL_MODES}")
+        return value
+
     @property
     def config_hash(self) -> str:
-        return hashlib.sha256(self.model_dump_json().encode("utf-8")).hexdigest()
+        # Fields added after runs were already persisted are hashed ONLY when
+        # set away from their default, so adding them changed no existing run
+        # id (stored campaign configs still rebuild to their own ids — see
+        # tests/unit/replay/test_config_hash_stability.py). Earlier field
+        # additions did not do this, which is why ten older runs no longer
+        # reproduce their ids.
+        neutral = {k for k, d in _HASH_NEUTRAL_DEFAULTS.items() if getattr(self, k) == d}
+        payload = self.model_dump_json(exclude=neutral or None)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @property
     def run_id(self) -> str:

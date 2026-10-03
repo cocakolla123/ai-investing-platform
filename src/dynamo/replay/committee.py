@@ -100,6 +100,9 @@ PRICE_STATS_LOOKBACK_DAYS = 420
 NEWS_LOOKBACK_DAYS = 7  # live parity
 NEWS_MAX_ITEMS = 10  # live parity
 JOURNAL_TOP_K = 3  # live experience_retrieval_top_k default
+# Hybrid arm (eval Phase 3): BM25 pool cap and per-ranking depth before RRF.
+HYBRID_POOL_LIMIT = 10_000
+HYBRID_DEPTH = 50
 RESOLUTION_BARS_LOOKBACK_DAYS = 750
 
 # Poll cadence for in-process batch collection: start fast, back off, never
@@ -334,14 +337,29 @@ def replay_journal_hits(
     embedder: Embedder | None,
     top_k: int = JOURNAL_TOP_K,
     include_replay_run_id: str | None = None,
+    mode: str = "vector",
+    query_texts: Mapping[str, str] | None = None,
 ) -> dict[str, list[tuple[str, str]]]:
     """(entry/experience id, evidence text) per symbol, ALL through the
-    gateway: as-of journal vector hits (skipped without an embedder) plus
-    prior-similar-case lines — the live pipeline's shape, point-in-time.
-    ``include_replay_run_id`` (within-run learning) additionally surfaces
-    THIS run's own resolved replay experiences."""
+    gateway: as-of journal hits plus prior-similar-case lines — the live
+    pipeline's shape, point-in-time. ``include_replay_run_id`` (within-run
+    learning) additionally surfaces THIS run's own resolved replay experiences.
+
+    ``mode`` is the retrieval-ablation arm (``ReplayConfig.journal_retrieval``):
+
+    * ``"vector"`` — production as deployed: template query, ticker filter.
+    * ``"off"`` — nothing: no journal hits AND no prior-case lines.
+    * ``"hybrid"`` — BM25 + vector reciprocal rank fusion over the symbol's
+      dossier text (``query_texts``, journal section excluded), no ticker
+      filter. The method measured in docs/eval_retrieval_2026-10-03.md.
+    """
     hits: dict[str, list[tuple[str, str]]] = {sym: [] for sym in symbols}
-    if embedder is not None and symbols:
+    if mode == "off":
+        return hits
+    if mode == "hybrid":
+        if embedder is not None and symbols:
+            hits = _hybrid_journal_hits(gw, symbols, embedder, query_texts or {}, top_k)
+    elif embedder is not None and symbols:
         from dynamo.learning.journal import JournalFilters, rank_similar
 
         queries = [f"{sym} investment thesis, lessons and post-trade reviews" for sym in symbols]
@@ -369,6 +387,36 @@ def replay_journal_hits(
         )
         hits[sym].extend((c.id, _prior_case_line(c)) for c in cases)
     return hits
+
+
+def _hybrid_journal_hits(
+    gw: ReplayCommitteeGateway,
+    symbols: Sequence[str],
+    embedder: Embedder,
+    query_texts: Mapping[str, str],
+    top_k: int,
+) -> dict[str, list[tuple[str, str]]]:
+    """RRF(BM25, vector) journal hits per symbol, both rankings as-of bounded
+    by the gateway. The BM25 pool is every journal entry visible at as_of;
+    the vector ranking goes through the same repository search (and its
+    hash-fallback guard) as production, just without the ticker filter."""
+    from dynamo.learning.retrieval import BGE_QUERY_PREFIX, bm25_rank, rrf, tokens
+
+    pool = {e.id: e for e, _ in gw.journal_search(top_k=HYBRID_POOL_LIMIT)}
+    docs = {eid: tokens(e.text) for eid, e in pool.items()}
+    texts = [BGE_QUERY_PREFIX + query_texts.get(sym, sym) for sym in symbols]
+    vectors = embedder.embed(texts)
+    out: dict[str, list[tuple[str, str]]] = {}
+    for sym, vector in zip(symbols, vectors, strict=True):
+        vec_hits = gw.journal_search(embedding=vector, top_k=HYBRID_DEPTH)
+        by_id = {**pool, **{e.id: e for e, _ in vec_hits}}
+        fused = rrf(
+            bm25_rank(query_texts.get(sym, sym), docs, depth=HYBRID_DEPTH),
+            [e.id for e, _ in vec_hits],
+            depth=top_k,
+        )
+        out[sym] = [(eid, by_id[eid].text) for eid in fused if eid in by_id]
+    return out
 
 
 def _macro_context_text(gw: ReplayCommitteeGateway) -> str:
@@ -421,6 +469,7 @@ def build_replay_contexts(
     embedder: Embedder | None = None,
     macro_digest_text: str | None = None,
     include_replay_run_id: str | None = None,
+    journal_retrieval: str = "vector",
 ) -> tuple[dict[str, str], dict[str, list[tuple[str, str]]]]:
     """(symbol -> dossier context, symbol -> journal hit ids/texts).
 
@@ -447,12 +496,8 @@ def build_replay_contexts(
     bars = gw.bars(sorted(set(symbols) | set(reference_symbols)), PRICE_STATS_LOOKBACK_DAYS)
     facts = _fundamentals_frame(gw, sorted(set(symbols) | set(reference_symbols)))
     closes = _latest_closes(bars)
-    journal_hits = replay_journal_hits(
-        gw, symbols, embedder=embedder, include_replay_run_id=include_replay_run_id
-    )
 
-    contexts: dict[str, str] = {}
-    for sym in symbols:
+    def assemble(sym: str, hit_texts: Sequence[str]) -> str:
         instrument = instruments.get(sym) or Instrument(symbol=sym, name=sym)
         sector = instrument.sector or sectors.get(sym)
         fundamentals = build_fundamentals(
@@ -470,7 +515,7 @@ def build_replay_contexts(
             name=instrument.name,
             max_items=NEWS_MAX_ITEMS,
         )
-        contexts[sym] = assemble_dossier_context(
+        return assemble_dossier_context(
             instrument=instrument,
             quant_score=quant_scores.get(sym),
             price_stats=price_stats(bars, sym),
@@ -479,9 +524,27 @@ def build_replay_contexts(
             news_items=primary_news,
             market_news_items=market_news,
             macro_digest_text=macro_text,
-            journal_hits=[text for _, text in journal_hits.get(sym, [])],
+            journal_hits=list(hit_texts),
             earnings_call_excerpt=transcripts_by_symbol.get(sym, ""),
         )
+
+    # The hybrid arm queries with the dossier the committee will read, minus
+    # the journal section it is about to fill — assembled once without hits,
+    # then again with them. Every input to both passes is as-of bounded.
+    query_texts = (
+        {sym: assemble(sym, ()) for sym in symbols} if journal_retrieval == "hybrid" else None
+    )
+    journal_hits = replay_journal_hits(
+        gw,
+        symbols,
+        embedder=embedder,
+        include_replay_run_id=include_replay_run_id,
+        mode=journal_retrieval,
+        query_texts=query_texts,
+    )
+    contexts = {
+        sym: assemble(sym, [text for _, text in journal_hits.get(sym, [])]) for sym in symbols
+    }
     return contexts, journal_hits
 
 
@@ -594,6 +657,7 @@ class CommitteeReplay:
         resume_skip_days: Collection[date] = (),
         prior_dives: Mapping[date, Sequence[str]] | None = None,
         discovery: DiscoveryDriver | None = None,
+        validation_log: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> None:
         if config.mode != "committee":
             raise ValueError(f"CommitteeReplay requires mode='committee', got {config.mode!r}")
@@ -640,6 +704,7 @@ class CommitteeReplay:
         self._schemas = dict(schemas)
         self._engine = CommitteeEngine(research_model, self._prompts, self._schemas)
         self._embedder = embedder
+        self._validation_log = validation_log
         self._sleep = sleep_fn
         self._poll_initial_s = poll_initial_s
         self._poll_timeout_s = poll_timeout_s
@@ -789,15 +854,39 @@ class CommitteeReplay:
             embedder=self._embedder,
             macro_digest_text=macro_text,
             include_replay_run_id=(self.config.run_id if self.config.within_run_learning else None),
+            journal_retrieval=self.config.journal_retrieval,
         )
+
+        # Structured-output accounting for this day (eval Phase 3): per stage,
+        # requests sent vs payloads parsed; verdicts assembled vs quarantined;
+        # payloads that validated only after extra keys were stripped.
+        from dynamo.research.committee import VALIDATION_REPAIRS
+
+        repairs_before = VALIDATION_REPAIRS.total()
+        stats: dict[str, Any] = {
+            "run_id": self.config.run_id,
+            "as_of": day.isoformat(),
+            "shortlist": len(shortlist),
+            "journal_hits": {
+                sym: [eid for eid, _ in journal_hits.get(sym, [])] for sym in shortlist
+            },
+        }
+
+        def emit(dives: list[ReplayDeepDive]) -> list[ReplayDeepDive]:
+            stats["assembled"] = len(dives)
+            stats["key_repairs"] = VALIDATION_REPAIRS.total() - repairs_before
+            if self._validation_log is not None:
+                self._validation_log(stats)
+            return dives
 
         # Stage 1: dossier.
         dossier_requests = self._engine.build_batch_requests("dossier", contexts, day)
         dossiers, _ = CommitteeEngine.parse_stage_results(
             self._submit_and_collect(dossier_requests), "dossier"
         )
+        stats["dossier"] = [len(dossier_requests), len(dossiers)]
         if not dossiers:
-            return []
+            return emit([])
 
         # Stage 2+3: bull & bear in ONE batch (live pipeline parity).
         adv_items = {
@@ -808,9 +897,11 @@ class CommitteeReplay:
         adv_results = self._submit_and_collect(adv_requests)
         bulls, _ = CommitteeEngine.parse_stage_results(adv_results, "bull")
         bears, _ = CommitteeEngine.parse_stage_results(adv_results, "bear")
+        stats["bull"] = [len(adv_items), len(bulls)]
+        stats["bear"] = [len(adv_items), len(bears)]
         ready = sorted(set(bulls) & set(bears) & set(dossiers))
         if not ready:
-            return []
+            return emit([])
 
         # Stage 4: arbiter.
         arb_items = {
@@ -823,6 +914,7 @@ class CommitteeReplay:
         arbiters, _ = CommitteeEngine.parse_stage_results(
             self._submit_and_collect(arb_requests), "arbiter"
         )
+        stats["arbiter"] = [len(arb_requests), len(arbiters)]
 
         sectors = gw.sectors(list(shortlist))
         regime = gw.regime_state()
@@ -844,6 +936,7 @@ class CommitteeReplay:
                 # Fault isolation (live-path quarantine parity): one dive with
                 # unsalvageable model output must never void the day or the run.
                 log.exception("replay_dive_quarantined", symbol=sym, as_of=day.isoformat())
+                stats["quarantined"] = stats.get("quarantined", 0) + 1
                 continue
             dives.append(
                 ReplayDeepDive(
@@ -861,7 +954,7 @@ class CommitteeReplay:
                     },
                 )
             )
-        return dives
+        return emit(dives)
 
     # ------------------------------------------------- replay macro digest
     def _macro_prompt(self) -> Any:

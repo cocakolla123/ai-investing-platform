@@ -44,10 +44,12 @@ Committee mode routes through the research backend selected by
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from collections.abc import Callable
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 
@@ -341,6 +343,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "committee mode: exclude THIS run's own resolved replay "
             "experiences from prior-case retrieval (part of config_hash)"
+        ),
+    )
+    run.add_argument(
+        "--journal-retrieval",
+        choices=("vector", "off", "hybrid"),
+        default="vector",
+        help=(
+            "committee mode, retrieval ablation: 'vector' = production as "
+            "deployed (template query + ticker filter); 'off' = no journal hits "
+            "and no prior-case lines; 'hybrid' = BM25+vector RRF over the "
+            "dossier text, no ticker filter (non-default is part of config_hash)"
+        ),
+    )
+    run.add_argument(
+        "--replicate",
+        type=int,
+        default=0,
+        help=(
+            "committee mode: repeat index for measuring run-to-run LLM noise — "
+            "an otherwise identical config gets its own run id (non-zero is "
+            "part of config_hash)"
         ),
     )
 
@@ -860,6 +883,8 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         within_run_learning=not args.no_within_run_learning,
         **_discovery_kwargs(args),
         code_version=args.code_version,
+        journal_retrieval=args.journal_retrieval,
+        replicate=args.replicate,
     )
     extras = _preflight_extras(
         engine,
@@ -869,6 +894,16 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
     )
     if extras is None:
         return 1
+    # Per-day structured-output accounting (eval Phase 3), one JSON line per day.
+    validation_path = Path(settings.artifact_dir) / "replay" / config.run_id / "validation.jsonl"
+    validation_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def validation_log(record: Any) -> None:
+        with validation_path.open("a") as fh:
+            fh.write(json.dumps(dict(record), default=str) + "\n")
+
+    extras["tier_models"] = dict(tier_models)
+    extras["arbiter_fallback"] = settings.claude_code_arbiter_fallback
     # Network isolation (Phase 4): the embedder must never download model
     # weights mid-run — offline env vars are already set in main(); the live
     # backend actually loaded is recorded into config_json for the audit.
@@ -929,6 +964,7 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
             resume_skip_days=done_days,
             prior_dives=prior_dives,
             discovery=discovery,
+            validation_log=validation_log,
         )
     except ModelKnowledgeError as exc:
         print(f"model knowledge gate BLOCKED the run ($0 spent):\n  {exc}")

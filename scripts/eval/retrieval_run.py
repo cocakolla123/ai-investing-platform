@@ -11,66 +11,25 @@ from __future__ import annotations
 import json
 import math
 import os
-import re
 import statistics
 import time
-from collections import Counter
 from datetime import UTC, date, datetime
 from datetime import time as dtime
 from pathlib import Path
 
 import numpy as np
-from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 from sqlalchemy import text
 
 from dynamo.config.settings import Settings
+from dynamo.learning.retrieval import BGE_QUERY_PREFIX, bm25_rank, rrf, tokens
 from dynamo.llm.embeddings import LocalEmbedder
 from dynamo.persistence.db import make_engine
 from dynamo.persistence.repositories.learning import JournalRepository
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 EVAL = Path("evals/retrieval")
-BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
-K1, B = 1.2, 0.75
-RRF_K = 60
 DEPTH = 50
 HASH_FALLBACK = "hash-fallback"
-TOKEN = re.compile(r"[a-z0-9]+")
-
-
-def tokens(s: str) -> list[str]:
-    return [t for t in TOKEN.findall(s.lower()) if t not in ENGLISH_STOP_WORDS]
-
-
-def bm25_rank(query: str, docs: dict[str, list[str]]) -> list[str]:
-    n = len(docs)
-    if n == 0:
-        return []
-    avgdl = sum(len(d) for d in docs.values()) / n
-    df: Counter[str] = Counter()
-    for d in docs.values():
-        df.update(set(d))
-    q = Counter(tokens(query))
-    scores = {}
-    for doc_id, d in docs.items():
-        tf = Counter(d)
-        s = 0.0
-        for term, qtf in q.items():
-            if term not in tf:
-                continue
-            idf = math.log(1 + (n - df[term] + 0.5) / (df[term] + 0.5))
-            f = tf[term]
-            s += qtf * idf * f * (K1 + 1) / (f + K1 * (1 - B + B * len(d) / avgdl))
-        scores[doc_id] = s
-    return [k for k, v in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0])) if v > 0][:DEPTH]
-
-
-def rrf(*rankings: list[str]) -> list[str]:
-    score: dict[str, float] = {}
-    for ranking in rankings:
-        for pos, doc_id in enumerate(ranking):
-            score[doc_id] = score.get(doc_id, 0.0) + 1.0 / (RRF_K + pos + 1)
-    return [k for k, _ in sorted(score.items(), key=lambda kv: (-kv[1], kv[0]))][:DEPTH]
 
 
 def ndcg_at(ranking: list[str], grades: dict[str, int], k: int = 10) -> float:

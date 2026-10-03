@@ -810,3 +810,126 @@ def test_claude_code_plan_exhaustion_soft_fails_then_resumes(frames: Any) -> Non
     # Day 1 was never re-submitted on resume: the healthy runner only saw
     # the remaining days' stages.
     assert len(healthy.calls) == 8 * (RUN_SESSIONS - 1)
+
+
+# --------------------------------------------------------------------------
+# retrieval ablation arms (eval Phase 3)
+# --------------------------------------------------------------------------
+
+
+def _entry(eid: str, text: str, symbol: str = "OTHER") -> Any:
+    from dynamo.domain.models.learning import JournalEntry, JournalKind
+
+    return JournalEntry(
+        id=eid,
+        kind=JournalKind.LESSON,
+        symbols=(symbol,),
+        text=text,
+        created_at=datetime(2026, 1, 5, tzinfo=UTC),
+    )
+
+
+class _RecordingEmbedder:
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    def embed(self, texts: Any) -> list[list[float]]:
+        self.texts.extend(texts)
+        return [[0.0] * 384 for _ in list(texts)]
+
+
+def test_off_arm_retrieves_nothing_at_all(frames: Any) -> None:
+    """'off' means no journal hits AND no prior-case lines — not 'vector
+    without the embedder'. Nothing may be queried."""
+    from dynamo.replay.committee import replay_journal_hits
+
+    sessions, bars, scores = frames
+    calls: list[str] = []
+
+    class Gw(CommitteeGateway):
+        def journal_search(self, **kwargs: Any) -> list[tuple[Any, float]]:
+            calls.append("journal")
+            return []
+
+        def similar_experiences(self, **kwargs: Any) -> list[DecisionExperience]:
+            calls.append("experiences")
+            return []
+
+    hits = replay_journal_hits(
+        Gw(sessions[-1], bars, scores), ["LIQ"], embedder=_RecordingEmbedder(), mode="off"
+    )
+    assert hits == {"LIQ": []} and calls == []
+
+
+def test_hybrid_arm_fuses_bm25_and_vector_without_a_ticker_filter(frames: Any) -> None:
+    from dynamo.replay.committee import replay_journal_hits
+
+    sessions, bars, scores = frames
+    pool = [
+        _entry("lex", "semiconductor margin compression after inventory build"),
+        _entry("vec", "unrelated words entirely"),
+        _entry("none", "nothing in common here"),
+    ]
+    seen: list[dict[str, Any]] = []
+
+    class Gw(CommitteeGateway):
+        def journal_search(self, **kwargs: Any) -> list[tuple[Any, float]]:
+            seen.append(kwargs)
+            if kwargs.get("embedding") is not None:
+                return [(pool[1], 0.9), (pool[0], 0.5)]  # vector prefers "vec"
+            return [(e, 0.0) for e in pool]
+
+    embedder = _RecordingEmbedder()
+    query = "LIQ dossier: semiconductor margin compression, inventory build"
+    hits = replay_journal_hits(
+        Gw(sessions[-1], bars, scores),
+        ["LIQ"],
+        embedder=embedder,
+        mode="hybrid",
+        query_texts={"LIQ": query},
+    )
+    ids = [eid for eid, _ in hits["LIQ"]]
+    # "lex" is ranked by BOTH (BM25 first, vector second) -> fused first;
+    # "vec" only by vector; "none" by neither.
+    assert ids[:2] == ["lex", "vec"] and "none" not in ids
+    assert all(not kw.get("symbols") for kw in seen)  # no ticker filter anywhere
+    assert embedder.texts == [BGE_PREFIX + query]  # the dossier text, not the template
+
+
+BGE_PREFIX = "Represent this sentence for searching relevant passages: "
+
+
+def test_hybrid_query_is_the_dossier_without_its_journal_section(frames: Any) -> None:
+    """The query must be the dossier the committee reads, minus the section
+    the query is about to fill — otherwise it would contain its own answers
+    (the contamination found in the Phase 2 queries)."""
+    sessions, bars, scores = frames
+    day = sessions[-1]
+    hit_text = "UNIQUE-LESSON-TEXT from a prior trade"
+
+    class Gw(CommitteeGateway):
+        def journal_search(self, **kwargs: Any) -> list[tuple[Any, float]]:
+            return [(_entry("j1", hit_text), 0.9)]
+
+    gw = Gw(day, bars, scores)
+    all_scores, _ = committee_shortlist(gw, _config(frames), day)
+    embedder = _RecordingEmbedder()
+    contexts, hits = build_replay_contexts(
+        gw, ["LIQ"], all_scores, embedder=embedder, journal_retrieval="hybrid"
+    )
+    assert [eid for eid, _ in hits["LIQ"]] == ["j1"]
+    assert hit_text in contexts["LIQ"]  # the committee sees the hit ...
+    assert embedder.texts and hit_text not in embedder.texts[0]  # ... the query did not
+
+
+def test_each_day_writes_one_validation_record(frames: Any) -> None:
+    records: list[dict[str, Any]] = []
+    replay, _model, _runs, _exps, config = _replay(frames, validation_log=records.append)
+    result = replay.run()
+    assert len(records) == len(result.sessions)
+    for rec in records:
+        assert rec["run_id"] == config.run_id
+        assert {"dossier", "bull", "bear", "arbiter", "assembled", "key_repairs"} <= set(rec)
+        sent, parsed = rec["dossier"]
+        assert 0 <= parsed <= sent == rec["shortlist"]
+    assert sum(r["assembled"] for r in records) == len(result.deep_dives)

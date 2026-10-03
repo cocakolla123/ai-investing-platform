@@ -11,6 +11,7 @@ import difflib
 import json
 import math
 import re
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import date
 from hashlib import sha256
@@ -177,6 +178,12 @@ def _normalized_keys(value: Any) -> Any:
     return value
 
 
+# Process-wide tally of model outputs that only validated after extra keys
+# were stripped (by domain model name). Read as a before/after delta by the
+# replay's per-day validation log; never reset, never consulted for logic.
+VALIDATION_REPAIRS: Counter[str] = Counter()
+
+
 def _validated(model_cls: type, payload: Any) -> Any:
     """Validate an LLM-output payload, tolerating (and logging) sloppy keys.
 
@@ -191,13 +198,18 @@ def _validated(model_cls: type, payload: Any) -> Any:
     from pydantic import ValidationError
 
     payload = _normalized_keys(payload)
+    repaired = False
     for _attempt in range(3):
         try:
-            return model_cls.model_validate(payload)
+            result = model_cls.model_validate(payload)
+            if repaired:
+                VALIDATION_REPAIRS[model_cls.__name__] += 1
+            return result
         except ValidationError as exc:
             extras = [e["loc"] for e in exc.errors() if e["type"] == "extra_forbidden"]
             if not extras or not isinstance(payload, dict):
                 raise
+            repaired = True
             log.warning(
                 "committee_payload_extra_keys_dropped",
                 model=model_cls.__name__,
@@ -215,7 +227,10 @@ def _validated(model_cls: type, payload: Any) -> Any:
                         break
                 if isinstance(parent, dict):
                     parent.pop(loc[-1], None)
-    return model_cls.model_validate(payload)
+    result = model_cls.model_validate(payload)
+    if repaired:
+        VALIDATION_REPAIRS[model_cls.__name__] += 1
+    return result
 
 
 # stage -> (prompt name, schema key, model tier)
