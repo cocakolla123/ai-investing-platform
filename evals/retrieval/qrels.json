@@ -1,0 +1,390 @@
+{
+ "S01": {
+  "lesson:SOL/USD-2026-03-06:0": 2,
+  "lesson:SOL/USD-2026-03-06:1": 2,
+  "lesson:SOL/USD-2026-03-06:2": 2,
+  "review:SOL/USD-2026-03-06": 2
+ },
+ "S02": {
+  "lesson:SOL/USD-2026-03-06:0": 2,
+  "lesson:SOL/USD-2026-03-06:1": 2,
+  "lesson:SOL/USD-2026-03-06:2": 2,
+  "review:SOL/USD-2026-03-06": 2
+ },
+ "S03": {
+  "lesson:ETH/USD-2026-04-17:0": 2,
+  "lesson:ETH/USD-2026-04-17:1": 2,
+  "lesson:ETH/USD-2026-04-17:2": 2,
+  "review:ETH/USD-2026-04-17": 2
+ },
+ "S04": {
+  "lesson:AVAX/USD-2026-04-01:0": 2,
+  "lesson:AVAX/USD-2026-04-01:1": 2,
+  "review:AVAX/USD-2026-04-01": 2
+ },
+ "S05": {
+  "lesson:LINK/USD-2026-03-09:0": 2,
+  "lesson:LINK/USD-2026-03-09:1": 2,
+  "review:LINK/USD-2026-03-09": 2
+ },
+ "S06": {
+  "lesson:AVAX/USD-2026-04-01:0": 2,
+  "lesson:AVAX/USD-2026-04-01:1": 2,
+  "review:AVAX/USD-2026-04-01": 2
+ },
+ "S07": {
+  "lesson:ETH/USD-2026-04-17:0": 2,
+  "lesson:ETH/USD-2026-04-17:1": 2,
+  "lesson:ETH/USD-2026-04-17:2": 2,
+  "review:ETH/USD-2026-04-17": 2
+ },
+ "S08": {
+  "lesson:LINK/USD-2026-03-09:0": 2,
+  "lesson:LINK/USD-2026-03-09:1": 2,
+  "review:LINK/USD-2026-03-09": 2
+ },
+ "S09": {
+  "lesson:KO-2026-02-03:0": 2,
+  "lesson:KO-2026-02-03:1": 2,
+  "lesson:KO-2026-02-06:0": 2,
+  "lesson:KO-2026-02-06:1": 2,
+  "lesson:WMT-2026-02-03:0": 1,
+  "lesson:WMT-2026-02-03:1": 1,
+  "review:KO-2026-02-03": 2,
+  "review:KO-2026-02-06": 2,
+  "review:WMT-2026-02-03": 1
+ },
+ "S10": {
+  "lesson:KO-2026-02-03:0": 2,
+  "lesson:KO-2026-02-03:1": 2,
+  "lesson:KO-2026-02-06:0": 2,
+  "lesson:KO-2026-02-06:1": 2,
+  "lesson:WMT-2026-02-03:0": 1,
+  "lesson:WMT-2026-02-03:1": 1,
+  "review:KO-2026-02-03": 2,
+  "review:KO-2026-02-06": 2,
+  "review:WMT-2026-02-03": 1
+ },
+ "S11": {
+  "lesson:WMT-2026-02-03:0": 2,
+  "lesson:WMT-2026-02-03:1": 2,
+  "review:WMT-2026-02-03": 2
+ },
+ "X01": {
+  "lesson:ACN-2026-06-02:0": 1,
+  "lesson:ACN-2026-06-02:1": 1,
+  "lesson:AVGO-2026-03-03:0": 1,
+  "lesson:AVGO-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:0": 1,
+  "lesson:MSFT-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:2": 1,
+  "review:ACN-2026-06-02": 1,
+  "review:AVGO-2026-03-03": 1,
+  "review:MSFT-2026-03-03": 1
+ },
+ "X02": {
+  "lesson:ACN-2026-06-02:0": 1,
+  "lesson:ACN-2026-06-02:1": 1,
+  "lesson:AVGO-2026-03-03:0": 1,
+  "lesson:AVGO-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:0": 1,
+  "lesson:MSFT-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:2": 1,
+  "review:ACN-2026-06-02": 1,
+  "review:AVGO-2026-03-03": 1,
+  "review:MSFT-2026-03-03": 1
+ },
+ "X03": {
+  "lesson:BAC-2026-02-03:0": 1,
+  "lesson:BAC-2026-02-03:1": 1,
+  "lesson:BAC-2026-02-03:2": 1,
+  "lesson:BAC-2026-03-03:0": 1,
+  "lesson:BAC-2026-03-03:1": 1,
+  "lesson:BAC-2026-03-06:0": 1,
+  "lesson:BAC-2026-03-06:1": 1,
+  "lesson:BAC-2026-03-06:2": 1,
+  "lesson:JPM-2026-03-03:0": 1,
+  "lesson:JPM-2026-03-03:1": 1,
+  "lesson:JPM-2026-05-04:0": 1,
+  "lesson:JPM-2026-05-04:1": 1,
+  "lesson:JPM-2026-05-04:2": 1,
+  "review:BAC-2026-02-03": 1,
+  "review:BAC-2026-03-03": 1,
+  "review:BAC-2026-03-06": 1,
+  "review:JPM-2026-03-03": 1,
+  "review:JPM-2026-05-04": 1
+ },
+ "X04": {
+  "lesson:ABBV-2026-05-04:0": 1,
+  "lesson:ABBV-2026-05-04:1": 1,
+  "lesson:ABBV-2026-07-02:0": 1,
+  "lesson:ABBV-2026-07-02:1": 1,
+  "lesson:ABBV-2026-07-02:2": 1,
+  "review:ABBV-2026-05-04": 1,
+  "review:ABBV-2026-07-02": 1
+ },
+ "X05": {
+  "lesson:BAC-2026-02-03:0": 1,
+  "lesson:BAC-2026-02-03:1": 1,
+  "lesson:BAC-2026-02-03:2": 1,
+  "lesson:BAC-2026-03-03:0": 1,
+  "lesson:BAC-2026-03-03:1": 1,
+  "lesson:BAC-2026-03-06:0": 1,
+  "lesson:BAC-2026-03-06:1": 1,
+  "lesson:BAC-2026-03-06:2": 1,
+  "lesson:JPM-2026-03-03:0": 1,
+  "lesson:JPM-2026-03-03:1": 1,
+  "review:BAC-2026-02-03": 1,
+  "review:BAC-2026-03-03": 1,
+  "review:BAC-2026-03-06": 1,
+  "review:JPM-2026-03-03": 1
+ },
+ "X06": {
+  "lesson:DIS-2026-02-03:0": 1,
+  "lesson:DIS-2026-02-03:1": 1,
+  "lesson:DIS-2026-02-03:2": 1,
+  "lesson:DIS-2026-06-02:0": 1,
+  "lesson:DIS-2026-06-02:1": 1,
+  "lesson:DIS-2026-06-02:2": 1,
+  "review:DIS-2026-02-03": 1,
+  "review:DIS-2026-06-02": 1
+ },
+ "X07": {
+  "lesson:AVGO-2026-03-03:0": 1,
+  "lesson:AVGO-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:0": 1,
+  "lesson:MSFT-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:2": 1,
+  "review:AVGO-2026-03-03": 1,
+  "review:MSFT-2026-03-03": 1
+ },
+ "X08": {
+  "lesson:DIS-2026-02-03:0": 1,
+  "lesson:DIS-2026-02-03:1": 1,
+  "lesson:DIS-2026-02-03:2": 1,
+  "review:DIS-2026-02-03": 1
+ },
+ "X09": {
+  "lesson:DIS-2026-02-03:0": 1,
+  "lesson:DIS-2026-02-03:1": 1,
+  "lesson:DIS-2026-02-03:2": 1,
+  "lesson:DIS-2026-06-02:0": 1,
+  "lesson:DIS-2026-06-02:1": 1,
+  "lesson:DIS-2026-06-02:2": 1,
+  "review:DIS-2026-02-03": 1,
+  "review:DIS-2026-06-02": 1
+ },
+ "X10": {
+  "lesson:TSLA-2026-05-04:0": 1,
+  "lesson:TSLA-2026-05-04:1": 1,
+  "review:TSLA-2026-05-04": 1
+ },
+ "X11": {
+  "lesson:DIS-2026-02-03:0": 1,
+  "lesson:DIS-2026-02-03:1": 1,
+  "lesson:DIS-2026-02-03:2": 1,
+  "review:DIS-2026-02-03": 1
+ },
+ "X12": {
+  "lesson:AVGO-2026-03-03:0": 1,
+  "lesson:AVGO-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:0": 1,
+  "lesson:MSFT-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:2": 1,
+  "review:AVGO-2026-03-03": 1,
+  "review:MSFT-2026-03-03": 1
+ },
+ "X13": {
+  "lesson:ABBV-2026-05-04:0": 1,
+  "lesson:ABBV-2026-05-04:1": 1,
+  "lesson:ABBV-2026-07-02:0": 1,
+  "lesson:ABBV-2026-07-02:1": 1,
+  "lesson:ABBV-2026-07-02:2": 1,
+  "review:ABBV-2026-05-04": 1,
+  "review:ABBV-2026-07-02": 1
+ },
+ "X14": {
+  "lesson:DIS-2026-02-03:0": 1,
+  "lesson:DIS-2026-02-03:1": 1,
+  "lesson:DIS-2026-02-03:2": 1,
+  "lesson:DIS-2026-06-02:0": 1,
+  "lesson:DIS-2026-06-02:1": 1,
+  "lesson:DIS-2026-06-02:2": 1,
+  "review:DIS-2026-02-03": 1,
+  "review:DIS-2026-06-02": 1
+ },
+ "X15": {
+  "lesson:TSLA-2026-05-04:0": 1,
+  "lesson:TSLA-2026-05-04:1": 1,
+  "review:TSLA-2026-05-04": 1
+ },
+ "X16": {
+  "lesson:ABBV-2026-05-04:0": 1,
+  "lesson:ABBV-2026-05-04:1": 1,
+  "review:ABBV-2026-05-04": 1
+ },
+ "X17": {
+  "lesson:ACN-2026-06-02:0": 1,
+  "lesson:ACN-2026-06-02:1": 1,
+  "lesson:AVGO-2026-03-03:0": 1,
+  "lesson:AVGO-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:0": 1,
+  "lesson:MSFT-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:2": 1,
+  "review:ACN-2026-06-02": 1,
+  "review:AVGO-2026-03-03": 1,
+  "review:MSFT-2026-03-03": 1
+ },
+ "X18": {
+  "lesson:BAC-2026-02-03:0": 1,
+  "lesson:BAC-2026-02-03:1": 1,
+  "lesson:BAC-2026-02-03:2": 1,
+  "lesson:BAC-2026-03-03:0": 1,
+  "lesson:BAC-2026-03-03:1": 1,
+  "lesson:BAC-2026-03-06:0": 1,
+  "lesson:BAC-2026-03-06:1": 1,
+  "lesson:BAC-2026-03-06:2": 1,
+  "lesson:JPM-2026-03-03:0": 1,
+  "lesson:JPM-2026-03-03:1": 1,
+  "review:BAC-2026-02-03": 1,
+  "review:BAC-2026-03-03": 1,
+  "review:BAC-2026-03-06": 1,
+  "review:JPM-2026-03-03": 1
+ },
+ "X19": {
+  "lesson:DIS-2026-02-03:0": 1,
+  "lesson:DIS-2026-02-03:1": 1,
+  "lesson:DIS-2026-02-03:2": 1,
+  "lesson:DIS-2026-06-02:0": 1,
+  "lesson:DIS-2026-06-02:1": 1,
+  "lesson:DIS-2026-06-02:2": 1,
+  "review:DIS-2026-02-03": 1,
+  "review:DIS-2026-06-02": 1
+ },
+ "X20": {
+  "lesson:BAC-2026-02-03:0": 1,
+  "lesson:BAC-2026-02-03:1": 1,
+  "lesson:BAC-2026-02-03:2": 1,
+  "lesson:BAC-2026-03-03:0": 1,
+  "lesson:BAC-2026-03-03:1": 1,
+  "lesson:BAC-2026-03-06:0": 1,
+  "lesson:BAC-2026-03-06:1": 1,
+  "lesson:BAC-2026-03-06:2": 1,
+  "lesson:JPM-2026-03-03:0": 1,
+  "lesson:JPM-2026-03-03:1": 1,
+  "lesson:JPM-2026-05-04:0": 1,
+  "lesson:JPM-2026-05-04:1": 1,
+  "lesson:JPM-2026-05-04:2": 1,
+  "lesson:JPM-2026-07-02:0": 1,
+  "lesson:JPM-2026-07-02:1": 1,
+  "lesson:MA-2026-06-02:0": 1,
+  "lesson:MA-2026-06-02:1": 1,
+  "review:BAC-2026-02-03": 1,
+  "review:BAC-2026-03-03": 1,
+  "review:BAC-2026-03-06": 1,
+  "review:JPM-2026-03-03": 1,
+  "review:JPM-2026-05-04": 1,
+  "review:JPM-2026-07-02": 1,
+  "review:MA-2026-06-02": 1
+ },
+ "X21": {
+  "lesson:AVGO-2026-03-03:0": 1,
+  "lesson:AVGO-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:0": 1,
+  "lesson:MSFT-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:2": 1,
+  "review:AVGO-2026-03-03": 1,
+  "review:MSFT-2026-03-03": 1
+ },
+ "X22": {
+  "lesson:ABBV-2026-05-04:0": 1,
+  "lesson:ABBV-2026-05-04:1": 1,
+  "review:ABBV-2026-05-04": 1
+ },
+ "X23": {
+  "lesson:AVGO-2026-03-03:0": 1,
+  "lesson:AVGO-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:0": 1,
+  "lesson:MSFT-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:2": 1,
+  "review:AVGO-2026-03-03": 1,
+  "review:MSFT-2026-03-03": 1
+ },
+ "X24": {
+  "lesson:TSLA-2026-05-04:0": 1,
+  "lesson:TSLA-2026-05-04:1": 1,
+  "review:TSLA-2026-05-04": 1
+ },
+ "X25": {
+  "lesson:BAC-2026-02-03:0": 1,
+  "lesson:BAC-2026-02-03:1": 1,
+  "lesson:BAC-2026-02-03:2": 1,
+  "lesson:BAC-2026-03-03:0": 1,
+  "lesson:BAC-2026-03-03:1": 1,
+  "lesson:BAC-2026-03-06:0": 1,
+  "lesson:BAC-2026-03-06:1": 1,
+  "lesson:BAC-2026-03-06:2": 1,
+  "lesson:JPM-2026-03-03:0": 1,
+  "lesson:JPM-2026-03-03:1": 1,
+  "review:BAC-2026-02-03": 1,
+  "review:BAC-2026-03-03": 1,
+  "review:BAC-2026-03-06": 1,
+  "review:JPM-2026-03-03": 1
+ },
+ "X26": {
+  "lesson:AVGO-2026-03-03:0": 1,
+  "lesson:AVGO-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:0": 1,
+  "lesson:MSFT-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:2": 1,
+  "review:AVGO-2026-03-03": 1,
+  "review:MSFT-2026-03-03": 1
+ },
+ "X27": {
+  "lesson:BAC-2026-02-03:0": 1,
+  "lesson:BAC-2026-02-03:1": 1,
+  "lesson:BAC-2026-02-03:2": 1,
+  "lesson:BAC-2026-03-03:0": 1,
+  "lesson:BAC-2026-03-03:1": 1,
+  "lesson:BAC-2026-03-06:0": 1,
+  "lesson:BAC-2026-03-06:1": 1,
+  "lesson:BAC-2026-03-06:2": 1,
+  "lesson:JPM-2026-03-03:0": 1,
+  "lesson:JPM-2026-03-03:1": 1,
+  "lesson:JPM-2026-05-04:0": 1,
+  "lesson:JPM-2026-05-04:1": 1,
+  "lesson:JPM-2026-05-04:2": 1,
+  "review:BAC-2026-02-03": 1,
+  "review:BAC-2026-03-03": 1,
+  "review:BAC-2026-03-06": 1,
+  "review:JPM-2026-03-03": 1,
+  "review:JPM-2026-05-04": 1
+ },
+ "X28": {
+  "lesson:BAC-2026-02-03:0": 1,
+  "lesson:BAC-2026-02-03:1": 1,
+  "lesson:BAC-2026-02-03:2": 1,
+  "lesson:BAC-2026-03-03:0": 1,
+  "lesson:BAC-2026-03-03:1": 1,
+  "lesson:BAC-2026-03-06:0": 1,
+  "lesson:BAC-2026-03-06:1": 1,
+  "lesson:BAC-2026-03-06:2": 1,
+  "review:BAC-2026-02-03": 1,
+  "review:BAC-2026-03-03": 1,
+  "review:BAC-2026-03-06": 1
+ },
+ "X29": {
+  "lesson:AVGO-2026-03-03:0": 1,
+  "lesson:AVGO-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:0": 1,
+  "lesson:MSFT-2026-03-03:1": 1,
+  "lesson:MSFT-2026-03-03:2": 1,
+  "review:AVGO-2026-03-03": 1,
+  "review:MSFT-2026-03-03": 1
+ },
+ "X30": {
+  "lesson:ABBV-2026-05-04:0": 1,
+  "lesson:ABBV-2026-05-04:1": 1,
+  "review:ABBV-2026-05-04": 1
+ }
+}
