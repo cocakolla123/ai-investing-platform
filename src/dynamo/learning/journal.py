@@ -10,8 +10,12 @@ THE HASH-FALLBACK ABSTENTION
 seeded from sha256(text)** when the optional ``embeddings`` extra is absent.
 Those vectors are deterministic, correctly normalized, the right dimension —
 and carry zero semantic signal. Cosine similarity over them is a random
-ordering of the journal. All 113 rows in ``journal_entries`` were written
-that way.
+ordering of the journal. All 113 rows in ``journal_entries`` were once
+written that way; they have since been re-embedded (verified 2026-10-03:
+166 rows, 0 fallback-stamped, every stored vector reproduced by bge-small at
+cosine 1.000000 — see ``evals/retrieval/phase1_embeddings.json``). The guards
+below stay, because the fallback is still what an install without the
+``embeddings`` extra gets.
 
 That is a tolerable degradation for an offline search box. It is not one
 here: journal retrieval is ON by default and injects its hits into live
