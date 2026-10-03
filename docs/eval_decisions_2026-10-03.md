@@ -89,6 +89,8 @@ analysis output).
 ## Deviations
 
 None from the protocol. No arm hit a plan-usage limit; each ran its 15 days
-in one pass. Two single-call schema failures (one bear rebuttal in **off**,
-one advocate brief in **vector-rep**) were quarantined, as designed, and
-account for the missing verdicts.
+in one pass. Of 60 shortlisted dives, **off** produced 57 verdicts and the
+other arms 59. The gaps are stage failures (two logged schema errors: a
+bear rebuttal in **off**, an advocate brief in **vector-rep**; the rest are
+the parse-rate shortfalls above), handled as designed. Paired comparisons
+use only dives present in both arms.
