@@ -45,6 +45,7 @@ import hashlib
 import json
 import time as _time
 from collections.abc import Callable, Collection, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
@@ -844,6 +845,7 @@ class CommitteeReplay:
         shortlist: Sequence[str],
         scores: Mapping[str, QuantScore],
     ) -> list[ReplayDeepDive]:
+        day_started = _time.perf_counter()
         macro_text: str | None = None
         if self.config.generate_macro_digest and gw.macro_digest() is None:
             macro_text = self._generate_macro_digest(gw, day)
@@ -870,9 +872,29 @@ class CommitteeReplay:
             "journal_hits": {
                 sym: [eid for eid, _ in journal_hits.get(sym, [])] for sym in shortlist
             },
+            "parallel_advocates": self.config.parallel_advocates,
         }
+        # Wall-clock seconds per stage (eval Phase 4): what a decision costs in
+        # elapsed time, which per-call latencies alone can't show once stages
+        # overlap.
+        seconds: dict[str, float] = {"contexts": _time.perf_counter() - day_started}
+        stats["seconds"] = seconds
+
+        def traced(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            """Tag each request with the journal ids retrieved into its context."""
+            for req in requests:
+                _, sym, _ = split_custom_id(str(req["custom_id"]))
+                req["retrieved_ids"] = [eid for eid, _ in journal_hits.get(sym, [])]
+            return requests
+
+        def timed(stage: str, requests: list[dict[str, Any]]) -> Any:
+            started = _time.perf_counter()
+            out = self._submit_and_collect(requests)
+            seconds[stage] = _time.perf_counter() - started
+            return out
 
         def emit(dives: list[ReplayDeepDive]) -> list[ReplayDeepDive]:
+            seconds["total"] = _time.perf_counter() - day_started
             stats["assembled"] = len(dives)
             stats["key_repairs"] = VALIDATION_REPAIRS.total() - repairs_before
             if self._validation_log is not None:
@@ -880,21 +902,30 @@ class CommitteeReplay:
             return dives
 
         # Stage 1: dossier.
-        dossier_requests = self._engine.build_batch_requests("dossier", contexts, day)
+        dossier_requests = traced(self._engine.build_batch_requests("dossier", contexts, day))
         dossiers, _ = CommitteeEngine.parse_stage_results(
-            self._submit_and_collect(dossier_requests), "dossier"
+            timed("dossier", dossier_requests), "dossier"
         )
         stats["dossier"] = [len(dossier_requests), len(dossiers)]
         if not dossiers:
             return emit([])
 
-        # Stage 2+3: bull & bear in ONE batch (live pipeline parity).
+        # Stage 2+3: bull & bear in ONE batch (live pipeline parity), or as two
+        # concurrent batches with --parallel-advocates (neither reads the other).
         adv_items = {
             sym: advocate_context_for(contexts[sym], dossiers[sym]) for sym in sorted(dossiers)
         }
-        adv_requests = self._engine.build_batch_requests("bull", adv_items, day)
-        adv_requests += self._engine.build_batch_requests("bear", adv_items, day)
-        adv_results = self._submit_and_collect(adv_requests)
+        bull_requests = traced(self._engine.build_batch_requests("bull", adv_items, day))
+        bear_requests = traced(self._engine.build_batch_requests("bear", adv_items, day))
+        adv_started = _time.perf_counter()
+        if self.config.parallel_advocates:
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="advocate") as pool:
+                bull_future = pool.submit(self._submit_and_collect, bull_requests)
+                bear_future = pool.submit(self._submit_and_collect, bear_requests)
+                adv_results = bull_future.result() + bear_future.result()
+        else:
+            adv_results = self._submit_and_collect(bull_requests + bear_requests)
+        seconds["advocates"] = _time.perf_counter() - adv_started
         bulls, _ = CommitteeEngine.parse_stage_results(adv_results, "bull")
         bears, _ = CommitteeEngine.parse_stage_results(adv_results, "bear")
         stats["bull"] = [len(adv_items), len(bulls)]
@@ -910,10 +941,8 @@ class CommitteeReplay:
             )
             for sym in ready
         }
-        arb_requests = self._engine.build_batch_requests("arbiter", arb_items, day)
-        arbiters, _ = CommitteeEngine.parse_stage_results(
-            self._submit_and_collect(arb_requests), "arbiter"
-        )
+        arb_requests = traced(self._engine.build_batch_requests("arbiter", arb_items, day))
+        arbiters, _ = CommitteeEngine.parse_stage_results(timed("arbiter", arb_requests), "arbiter")
         stats["arbiter"] = [len(arb_requests), len(arbiters)]
 
         sectors = gw.sectors(list(shortlist))

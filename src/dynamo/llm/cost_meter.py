@@ -3,12 +3,20 @@
 Every Claude call is recorded to the cost_ledger via a pluggable writer.
 `check_budget()` refuses new submissions once month-to-date spend reaches
 `CLAUDE_MONTHLY_BUDGET_USD`; alert (log) at 70% utilization.
+
+A row may also carry a :class:`CallTrace` (eval Phase 4): which committee
+role made the call, the request it served, the prompt version, the journal
+entries retrieved into its context, wall-clock latency, which attempt it was
+and whether its output passed the client's schema check. Rows written
+without one keep NULL trace columns.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -35,6 +43,30 @@ class BudgetExceededError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class CallTrace:
+    """Per-call tracing fields; every one optional (NULL when unknown)."""
+
+    role: str | None = None  # dossier | bull | bear | arbiter | triage | ...
+    request_id: str | None = None  # batch custom_id, when the call served one
+    prompt_hash: str | None = None  # sha256[:16] of the system prompt (its version)
+    retrieved_ids: tuple[str, ...] | None = None  # journal/experience ids in context
+    latency_ms: float | None = None  # wall clock of the call, retries excluded
+    attempt: int | None = None  # 1 = first try; >1 = a retry
+    validation_ok: bool | None = None  # output parsed with its required keys
+    equiv_cost_usd: float | None = None  # API-equivalent cost reported by the CLI
+
+    @staticmethod
+    def ids(values: Sequence[str] | None) -> tuple[str, ...] | None:
+        return None if values is None else tuple(str(v) for v in values)
+
+    @staticmethod
+    def hash_prompt(system: str) -> str:
+        """The prompt's version id: the system prompt is the versioned part
+        (contexts and per-symbol instructions are hashed in replay_contexts)."""
+        return hashlib.sha256(system.encode("utf-8")).hexdigest()[:16]
+
+
+@dataclass(frozen=True)
 class LedgerEntry:
     ts: datetime
     model_id: str
@@ -44,6 +76,7 @@ class LedgerEntry:
     cache_read_tokens: int
     cost_usd: float
     batch: bool
+    trace: CallTrace | None = None
 
 
 class LedgerWriter(Protocol):
@@ -71,9 +104,12 @@ class SqlAlchemyLedgerWriter:
     _INSERT = text(
         "INSERT INTO cost_ledger "
         "(ts, model_id, call_kind, input_tokens, output_tokens, cache_read_tokens, "
-        "cost_usd, batch) "
+        "cost_usd, batch, role, request_id, prompt_hash, retrieved_ids, latency_ms, "
+        "attempt, validation_ok, equiv_cost_usd) "
         "VALUES (:ts, :model_id, :call_kind, :input_tokens, :output_tokens, "
-        ":cache_read_tokens, :cost_usd, :batch)"
+        ":cache_read_tokens, :cost_usd, :batch, :role, :request_id, :prompt_hash, "
+        "CAST(:retrieved_ids AS JSONB), :latency_ms, :attempt, :validation_ok, "
+        ":equiv_cost_usd)"
     )
     _MTD = text("SELECT COALESCE(SUM(cost_usd), 0) FROM cost_ledger WHERE ts >= :month_start")
 
@@ -81,6 +117,7 @@ class SqlAlchemyLedgerWriter:
         self._engine = engine
 
     def write(self, entry: LedgerEntry) -> None:
+        tr = entry.trace or CallTrace()
         with self._engine.begin() as conn:
             conn.execute(
                 self._INSERT,
@@ -93,6 +130,16 @@ class SqlAlchemyLedgerWriter:
                     "cache_read_tokens": entry.cache_read_tokens,
                     "cost_usd": entry.cost_usd,
                     "batch": entry.batch,
+                    "role": tr.role,
+                    "request_id": tr.request_id,
+                    "prompt_hash": tr.prompt_hash,
+                    "retrieved_ids": (
+                        None if tr.retrieved_ids is None else json.dumps(list(tr.retrieved_ids))
+                    ),
+                    "latency_ms": tr.latency_ms,
+                    "attempt": tr.attempt,
+                    "validation_ok": tr.validation_ok,
+                    "equiv_cost_usd": tr.equiv_cost_usd,
                 },
             )
 
@@ -135,6 +182,7 @@ class CostMeter:
         cache_read_tokens: int = 0,
         cost_usd: float,
         batch: bool = False,
+        trace: CallTrace | None = None,
     ) -> LedgerEntry:
         entry = LedgerEntry(
             ts=self._now(),
@@ -145,6 +193,7 @@ class CostMeter:
             cache_read_tokens=cache_read_tokens,
             cost_usd=cost_usd,
             batch=batch,
+            trace=trace,
         )
         self._writer.write(entry)
         CLAUDE_COST_USD.inc(cost_usd)
@@ -152,7 +201,13 @@ class CostMeter:
         return entry
 
     def record_usage(
-        self, *, model_id: str, call_kind: str, usage: Any, batch: bool = False
+        self,
+        *,
+        model_id: str,
+        call_kind: str,
+        usage: Any,
+        batch: bool = False,
+        trace: CallTrace | None = None,
     ) -> LedgerEntry:
         """Convenience: compute dollars from a response.usage object, then record."""
         uc = cost_from_usage(model_id, usage, batch=batch)
@@ -164,6 +219,7 @@ class CostMeter:
             cache_read_tokens=uc.cache_read_tokens,
             cost_usd=uc.cost_usd,
             batch=batch,
+            trace=trace,
         )
 
     def month_to_date_usd(self) -> float:

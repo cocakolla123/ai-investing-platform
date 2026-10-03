@@ -557,6 +557,15 @@ cost_ledger = Table(
     Column("cache_read_tokens", BigInteger, nullable=False, default=0),
     Column("cost_usd", Float, nullable=False, default=0.0),
     Column("batch", Boolean, nullable=False, default=False),
+    # Per-call tracing (migration 0023, eval Phase 4); NULL on older rows.
+    Column("role", Text),
+    Column("request_id", Text),
+    Column("prompt_hash", Text),
+    Column("retrieved_ids", JSONB),
+    Column("latency_ms", Float),
+    Column("attempt", Integer),
+    Column("validation_ok", Boolean),
+    Column("equiv_cost_usd", Float),
 )
 
 # --- Quant & strategies (docs 04, 05) ---

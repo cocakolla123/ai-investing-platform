@@ -176,7 +176,9 @@ class DynamoResource(ConfigurableResource):
             name: load_prompt(name)
             for name in ("dossier_analyst", "bull_advocate", "bear_advocate", "arbiter")
         }
-        return CommitteeEngine(model, prompts, SCHEMAS)
+        return CommitteeEngine(
+            model, prompts, SCHEMAS, parallel_advocates=self.settings().committee_parallel_advocates
+        )
 
     # --- data providers (each None when unconfigured) ---
 

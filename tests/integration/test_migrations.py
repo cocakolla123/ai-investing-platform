@@ -343,7 +343,77 @@ def test_alembic_upgrade_head_creates_table(
         assert inspector.has_table("failure_clusters")
         # 0015: bankroll context on decision_experience (campaign Phase 3).
         assert {"equity_at_decision", "position_notional"} <= experience_columns
+        # 0023: per-call tracing on cost_ledger (eval Phase 4).
+        ledger_columns = {c["name"] for c in inspector.get_columns("cost_ledger")}
+        assert {"role", "request_id", "prompt_hash", "retrieved_ids", "latency_ms"} <= (
+            ledger_columns
+        )
+        assert {"attempt", "validation_ok", "equiv_cost_usd"} <= ledger_columns
     finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_ledger_writer_round_trips_a_call_trace(integration_db_url: str) -> None:
+    """A traced row lands in every 0023 column; an untraced one leaves them NULL."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import create_engine, text
+
+    from dynamo.llm.cost_meter import CallTrace, LedgerEntry, SqlAlchemyLedgerWriter
+    from dynamo.persistence import schema
+
+    engine = create_engine(integration_db_url, future=True)
+    schema.metadata.create_all(engine, tables=[schema.cost_ledger], checkfirst=True)
+    ts = datetime(2026, 10, 3, 12, 0, tzinfo=UTC)
+    base = dict(
+        model_id="claude-sonnet-5",
+        input_tokens=10,
+        output_tokens=5,
+        cache_read_tokens=0,
+        cost_usd=0.0,
+        batch=False,
+    )
+    try:
+        writer = SqlAlchemyLedgerWriter(engine)
+        writer.write(
+            LedgerEntry(
+                ts=ts,
+                call_kind="it-trace:traced",
+                trace=CallTrace(
+                    role="bull",
+                    request_id="run:2026-08-03-MRK-bull",
+                    prompt_hash="abcd1234abcd1234",
+                    retrieved_ids=("journal-1", "exp-2"),
+                    latency_ms=1234.5,
+                    attempt=2,
+                    validation_ok=False,
+                    equiv_cost_usd=0.0123,
+                ),
+                **base,  # type: ignore[arg-type]
+            )
+        )
+        writer.write(LedgerEntry(ts=ts, call_kind="it-trace:plain", **base))  # type: ignore[arg-type]
+        with engine.connect() as cx:
+            rows = {
+                r.call_kind: r
+                for r in cx.execute(
+                    text(
+                        "select call_kind, role, request_id, prompt_hash, retrieved_ids, "
+                        "latency_ms, attempt, validation_ok, equiv_cost_usd from cost_ledger "
+                        "where call_kind like 'it-trace:%'"
+                    )
+                )
+            }
+        traced, plain = rows["it-trace:traced"], rows["it-trace:plain"]
+        assert traced.role == "bull" and traced.request_id == "run:2026-08-03-MRK-bull"
+        assert traced.retrieved_ids == ["journal-1", "exp-2"]
+        assert traced.latency_ms == 1234.5 and traced.attempt == 2
+        assert traced.validation_ok is False and traced.equiv_cost_usd == 0.0123
+        assert plain.role is None and plain.retrieved_ids is None and plain.latency_ms is None
+    finally:
+        with engine.begin() as cx:
+            cx.execute(text("delete from cost_ledger where call_kind like 'it-trace:%'"))
         engine.dispose()
 
 

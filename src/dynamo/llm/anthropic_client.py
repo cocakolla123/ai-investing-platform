@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterable, Iterator, Sequence
 from typing import Any
 
@@ -19,7 +20,7 @@ import anthropic
 
 from dynamo.config.settings import Settings
 from dynamo.domain.ports import CONTEXT_CACHE_BOUNDARY
-from dynamo.llm.cost_meter import CostMeter
+from dynamo.llm.cost_meter import CallTrace, CostMeter
 
 _TIERS = ("screen", "analyst", "arbiter")
 
@@ -182,12 +183,20 @@ class AnthropicClient:
             return None
         return parsed
 
-    def _record(self, response: Any, *, call_kind: str, model: str, batch: bool) -> None:
+    def _record(
+        self,
+        response: Any,
+        *,
+        call_kind: str,
+        model: str,
+        batch: bool,
+        trace: CallTrace | None = None,
+    ) -> None:
         model_id = getattr(response, "model", None) or model
         usage = getattr(response, "usage", None)
         if usage is not None:
             self._meter.record_usage(
-                model_id=str(model_id), call_kind=call_kind, usage=usage, batch=batch
+                model_id=str(model_id), call_kind=call_kind, usage=usage, batch=batch, trace=trace
             )
 
     # --- ResearchModel port ---
@@ -204,8 +213,9 @@ class AnthropicClient:
         max_tokens: int = 4096,
     ) -> dict[str, Any]:
         model = self._model_for(model_tier)
-        for _attempt in range(2):  # one retry on invalid output
+        for attempt in range(2):  # one retry on invalid output
             self._meter.check_budget()
+            started = time.perf_counter()
             response = self._create(
                 model=model,
                 system=system,
@@ -214,8 +224,21 @@ class AnthropicClient:
                 schema=schema,
                 max_tokens=max_tokens,
             )
-            self._record(response, call_kind=role, model=model, batch=False)
+            latency_ms = (time.perf_counter() - started) * 1000.0
             parsed = self._parse_response(response, schema)
+            self._record(
+                response,
+                call_kind=role,
+                model=model,
+                batch=False,
+                trace=CallTrace(
+                    role=role,
+                    prompt_hash=CallTrace.hash_prompt(system),
+                    latency_ms=latency_ms,
+                    attempt=attempt + 1,
+                    validation_ok=parsed is not None,
+                ),
+            )
             if parsed is not None:
                 return parsed
         raise SchemaValidationError(

@@ -60,6 +60,28 @@ def make_engine(
     return CommitteeEngine(model, load_all_prompts(), SCHEMAS), model
 
 
+def test_parallel_advocates_same_verdict_and_both_calls() -> None:
+    """Eval Phase 4: with parallel_advocates the bull and bear calls overlap;
+    neither reads the other, so the outcome is unchanged."""
+    results = {}
+    for parallel in (False, True):
+        model = FakeResearchModel(
+            {
+                "dossier": [DOSSIER_PAYLOAD],
+                "bull": [BULL_PAYLOAD],
+                "bear": [BEAR_PAYLOAD],
+                "arbiter": [ARBITER_PAYLOAD],
+            }
+        )
+        engine = CommitteeEngine(model, load_all_prompts(), SCHEMAS, parallel_advocates=parallel)
+        _, bull, bear, verdict = engine.run_deep_dive("ACME", AS_OF, "CONTEXT", make_quant(0.05))
+        roles = [c["role"] for c in model.calls]
+        assert roles[0] == "dossier" and roles[-1] == "arbiter"
+        assert sorted(roles[1:3]) == ["bear", "bull"]
+        results[parallel] = (bull, bear, verdict.action, verdict.conviction)
+    assert results[True] == results[False]
+
+
 def make_quant(eer: float | None) -> QuantScore:
     return QuantScore(symbol="ACME", as_of=AS_OF, model_version="qm-1", expected_excess_return=eer)
 

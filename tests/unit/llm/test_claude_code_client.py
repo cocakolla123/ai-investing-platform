@@ -563,3 +563,60 @@ class TestFailedExitEnvelope:
         client, _ = make_client(FakeRunner([crash, crash]))
         with pytest.raises(ClaudeCodeError, match="ENOSPC"):
             complete(client)
+
+
+class TestCallTrace:
+    """Every ledger row says which role/request it served, how long it took,
+    which attempt it was and whether its output was usable (eval Phase 4)."""
+
+    def test_batch_rows_carry_role_request_retrieval_and_latency(self) -> None:
+        runner = FakeRunner([ok(envelope({"answer": "a"}))])
+        client, writer = make_client(runner)
+        req = batch_request("run:2026-08-03-MRK-bull") | {
+            "role": "bull",
+            "retrieved_ids": ["journal-1", "exp-2"],
+        }
+        client.submit_batch([req])
+        (entry,) = writer.entries
+        assert entry.call_kind == "claude_code:batch"  # unchanged
+        tr = entry.trace
+        assert tr is not None
+        assert tr.role == "bull"
+        assert tr.request_id == "run:2026-08-03-MRK-bull"
+        assert tr.retrieved_ids == ("journal-1", "exp-2")
+        assert tr.attempt == 1 and tr.validation_ok is True
+        assert tr.latency_ms is not None and tr.latency_ms >= 0.0
+        assert tr.equiv_cost_usd == pytest.approx(0.0123)
+        assert tr.prompt_hash is not None and len(tr.prompt_hash) == 16
+
+    def test_retry_after_invalid_output_is_attempt_two(self) -> None:
+        runner = FakeRunner([ok(envelope("junk")), ok(envelope(GOOD))])
+        client, writer = make_client(runner)
+        client.complete_json(
+            role="arbiter",
+            system="SYSTEM",
+            context="c",
+            instruction="i",
+            schema=SCHEMA,
+            model_tier="arbiter",
+        )
+        traces = [e.trace for e in writer.entries]
+        assert [(t.attempt, t.validation_ok, t.role) for t in traces if t] == [
+            (1, False, "arbiter"),
+            (2, True, "arbiter"),
+        ]
+
+    def test_prompt_hash_tracks_the_system_prompt_only(self) -> None:
+        runner = FakeRunner([ok(envelope(GOOD)) for _ in range(3)])
+        client, writer = make_client(runner)
+        for system, ctx in (("S1", "a"), ("S1", "b"), ("S2", "a")):
+            client.complete_json(
+                role="bull",
+                system=system,
+                context=ctx,
+                instruction="i",
+                schema=SCHEMA,
+                model_tier="analyst",
+            )
+        h = [e.trace.prompt_hash for e in writer.entries if e.trace]
+        assert h[0] == h[1] != h[2]

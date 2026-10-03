@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     #: exhausted (Fable has a separate weekly allowance). Empty disables.
     claude_code_arbiter_fallback: str = "claude-opus-5"
     claude_code_timeout_seconds: int = 300
+    #: Run the committee's bull and bear calls concurrently (eval Phase 4,
+    #: docs/eval_tracing_2026-10-03.md). Off until the user opts in.
+    committee_parallel_advocates: bool = False
 
     # --- Broker (paper first; live requires the gate, doc 09 section 7) ---
     alpaca_api_key: str = Field(default="", alias="ALPACA_API_KEY")

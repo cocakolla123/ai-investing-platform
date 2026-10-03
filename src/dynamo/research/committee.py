@@ -13,6 +13,7 @@ import math
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from hashlib import sha256
 from typing import Any
@@ -428,6 +429,7 @@ class CommitteeEngine:
         schemas: Mapping[str, dict[str, Any]],
         *,
         max_tokens: Mapping[str, int] | None = None,
+        parallel_advocates: bool = False,
     ) -> None:
         missing = [name for name, _, _ in STAGES.values() if name not in prompts]
         if missing:
@@ -436,6 +438,7 @@ class CommitteeEngine:
         if missing_schemas:
             raise ValueError(f"missing schemas: {missing_schemas}")
         self._model = research_model
+        self._parallel_advocates = parallel_advocates
         self._prompts = prompts
         self._schemas = schemas
         self._max_tokens = {**_DEFAULT_MAX_TOKENS, **(max_tokens or {})}
@@ -478,12 +481,21 @@ class CommitteeEngine:
         )
 
         advocate_context = advocate_context_for(context, dossier_raw)
-        bull_raw = self._call_stage("bull", symbol, as_of, advocate_context)
+        bear_raw: dict[str, Any] | None = None
+        if self._parallel_advocates:
+            # Neither advocate reads the other's brief, so they can overlap.
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="advocate") as pool:
+                bull_future = pool.submit(self._call_stage, "bull", symbol, as_of, advocate_context)
+                bear_future = pool.submit(self._call_stage, "bear", symbol, as_of, advocate_context)
+                bull_raw, bear_raw = bull_future.result(), bear_future.result()
+        else:
+            bull_raw = self._call_stage("bull", symbol, as_of, advocate_context)
         bull = _validated(
             AdvocateBrief,
             _filtered_payload(AdvocateBrief, bull_raw, {"symbol": symbol, "side": Side.BULL}),
         )
-        bear_raw = self._call_stage("bear", symbol, as_of, advocate_context)
+        if bear_raw is None:
+            bear_raw = self._call_stage("bear", symbol, as_of, advocate_context)
         bear = _validated(
             AdvocateBrief,
             _filtered_payload(AdvocateBrief, bear_raw, {"symbol": symbol, "side": Side.BEAR}),
@@ -598,6 +610,7 @@ class CommitteeEngine:
         return [
             {
                 "custom_id": custom_id_for(as_of, symbol, stage),
+                "role": stage,  # ledger trace only; never sent to the model
                 "model_tier": tier,
                 "system": prompt.system,
                 "context": items[symbol],

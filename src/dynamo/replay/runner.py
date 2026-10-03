@@ -137,7 +137,11 @@ PROMPT_VERSION = "replay-quant-synth-v1"
 
 JOURNAL_RETRIEVAL_MODES = ("vector", "off", "hybrid")
 # ReplayConfig fields excluded from config_hash while at these values.
-_HASH_NEUTRAL_DEFAULTS: dict[str, object] = {"journal_retrieval": "vector", "replicate": 0}
+_HASH_NEUTRAL_DEFAULTS: dict[str, object] = {
+    "journal_retrieval": "vector",
+    "replicate": 0,
+    "parallel_advocates": False,
+}
 
 
 class ReplayConfig(BaseModel):
@@ -249,6 +253,11 @@ class ReplayConfig(BaseModel):
     # Repeat index for measuring run-to-run LLM noise: an identical config
     # with replicate=1 gets its own run id and its own sampled outputs.
     replicate: int = Field(default=0, ge=0)
+    # Latency optimization (eval Phase 4, docs/preregistration_eval_tracing.md):
+    # submit the bull and bear stage-batches concurrently. Neither reads the
+    # other's output (both see context + dossier only), so this changes wall
+    # clock, not inputs.
+    parallel_advocates: bool = False
 
     @field_validator("discovery_mode")
     @classmethod

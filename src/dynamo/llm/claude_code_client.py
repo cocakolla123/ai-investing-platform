@@ -62,8 +62,9 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -75,7 +76,7 @@ from dynamo.llm.anthropic_client import (
     _parse_json,
     _required_keys_present,
 )
-from dynamo.llm.cost_meter import CostMeter
+from dynamo.llm.cost_meter import CallTrace, CostMeter
 
 log = logging.getLogger(__name__)
 
@@ -321,7 +322,9 @@ class ClaudeCodeResearchModel:
             _raise_for_error_envelope(envelope)
         return envelope
 
-    def _record(self, envelope: dict[str, Any], *, role: str, model: str) -> None:
+    def _record(
+        self, envelope: dict[str, Any], *, role: str, model: str, trace: CallTrace | None = None
+    ) -> None:
         """Real token counts, cost 0.0 — subscription is flat-rate, not metered."""
         usage = envelope.get("usage") or {}
         self._meter.record(
@@ -333,6 +336,7 @@ class ClaudeCodeResearchModel:
             cache_read_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
             cost_usd=0.0,
             batch=False,
+            trace=trace,
         )
 
     def _complete_once(
@@ -345,8 +349,14 @@ class ClaudeCodeResearchModel:
         schema: dict[str, Any],
         model_tier: str,
         max_tokens: int,
+        attempt: int = 1,
+        trace: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """One attempt: run the CLI, record usage, parse/validate. None = invalid output.
+
+        The ledger row is written after parsing so it can say whether this
+        attempt's output was usable; ``trace`` supplies what only the caller
+        knows (role, request id, retrieved journal ids).
 
         ``max_tokens`` is accepted for port parity; the CLI exposes no
         per-call output-token ceiling, so it is intentionally unused.
@@ -356,12 +366,29 @@ class ClaudeCodeResearchModel:
         self._meter.check_budget()  # kill-switch parity; $0 entries never trip it
         cmd = self._build_command(model=model, system=system)
         prompt = self._build_prompt(context=context, instruction=instruction, schema=schema)
+        started = time.perf_counter()
         envelope = self._invoke(cmd, prompt)
-        self._record(envelope, role=role, model=model)
+        latency_ms = (time.perf_counter() - started) * 1000.0
         parsed = _parse_json(str(envelope.get("result", "")))
-        if parsed is None or not _required_keys_present(parsed, schema):
-            return None
-        return parsed
+        ok = parsed is not None and _required_keys_present(parsed, schema)
+        extra = trace or {}
+        equiv = envelope.get("total_cost_usd")
+        self._record(
+            envelope,
+            role=role,
+            model=model,
+            trace=CallTrace(
+                role=str(extra.get("role") or role),
+                request_id=extra.get("request_id"),
+                prompt_hash=CallTrace.hash_prompt(system),
+                retrieved_ids=CallTrace.ids(extra.get("retrieved_ids")),
+                latency_ms=latency_ms,
+                attempt=attempt,
+                validation_ok=ok,
+                equiv_cost_usd=float(equiv) if isinstance(equiv, int | float) else None,
+            ),
+        )
+        return parsed if ok else None
 
     # --- ResearchModel port ---
 
@@ -375,9 +402,12 @@ class ClaudeCodeResearchModel:
         schema: dict[str, Any],
         model_tier: str,
         max_tokens: int = 4096,
+        trace: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """``trace`` (optional, this client only) carries ledger-trace fields
+        the caller knows: ``role``, ``request_id``, ``retrieved_ids``."""
         last_error: ClaudeCodeError | None = None
-        for _attempt in range(2):  # one retry on invalid output or CLI failure
+        for attempt in range(2):  # one retry on invalid output or CLI failure
             try:
                 parsed = self._complete_once(
                     role=role,
@@ -387,6 +417,8 @@ class ClaudeCodeResearchModel:
                     schema=schema,
                     model_tier=model_tier,
                     max_tokens=max_tokens,
+                    attempt=attempt + 1,
+                    trace=trace,
                 )
             except PlanLimitExhausted:
                 # Model-specific window fallback (user directive 2026-09-14:
@@ -462,6 +494,11 @@ class ClaudeCodeResearchModel:
                     schema=req["schema"],
                     model_tier=req["model_tier"],
                     max_tokens=int(req.get("max_tokens", 4096)),
+                    trace={
+                        "role": req.get("role"),
+                        "request_id": custom_id,
+                        "retrieved_ids": req.get("retrieved_ids"),
+                    },
                 )
             except PlanLimitExhausted:
                 log.warning(

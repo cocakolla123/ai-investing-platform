@@ -10,6 +10,7 @@ resolving into ``source='replay'`` experiences. ZERO network, ZERO LLM.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -104,13 +105,15 @@ class FakeResearchModel:
         self._budget = budget
         self._cost_per_batch = cost_per_batch
         self._n = 0
+        self._lock = threading.Lock()
 
     def complete_json(self, **kwargs: Any) -> dict[str, Any]:
         raise AssertionError("committee replay must not use the sync path")
 
     def submit_batch(self, requests: Sequence[dict[str, Any]]) -> str:
-        self._n += 1
-        batch_id = f"batch-{self._n}"
+        with self._lock:  # --parallel-advocates submits from two threads
+            self._n += 1
+            batch_id = f"batch-{self._n}"
         self._batches[batch_id] = [dict(r) for r in requests]
         self.submitted.append(self._batches[batch_id])
         # Simulate the metered actual cost flowing through the ledger tee.
@@ -242,10 +245,11 @@ def _replay(
     cap: float = 100.0,
     cost_per_batch: float = 0.0,
     news: list[NewsItem] | None = None,
+    config_overrides: dict[str, Any] | None = None,
     **replay_kwargs: Any,
 ) -> tuple[CommitteeReplay, FakeResearchModel, FakeRunRepo, FakeExperienceRepo, ReplayConfig]:
     _, bars, scores = frames
-    config = _config(frames)
+    config = _config(frames, **(config_overrides or {}))
     run_repo = FakeRunRepo()
     exp_repo = FakeExperienceRepo()
     budget = ReplayBudget(cap_usd=cap, run_repo=run_repo, run_id=config.run_id)
@@ -933,3 +937,45 @@ def test_each_day_writes_one_validation_record(frames: Any) -> None:
         sent, parsed = rec["dossier"]
         assert 0 <= parsed <= sent == rec["shortlist"]
     assert sum(r["assembled"] for r in records) == len(result.deep_dives)
+
+
+def test_parallel_advocates_changes_scheduling_not_verdicts(frames: Any) -> None:
+    """Eval Phase 4: bull and bear go out as two concurrent batches; the
+    verdicts are identical to the single sequential batch."""
+    out: dict[bool, tuple[Any, FakeResearchModel, list[dict[str, Any]]]] = {}
+    for parallel in (False, True):
+        records: list[dict[str, Any]] = []
+        replay, model, runs, _exps, _cfg = _replay(
+            frames,
+            validation_log=records.append,
+            config_overrides={"parallel_advocates": parallel},
+        )
+        replay.run()
+        out[parallel] = (runs.verdicts, model, records)
+
+    def strip(rows: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
+        return sorted((r["as_of"], r["symbol"], r["action"], r["conviction"]) for r in rows)
+
+    assert strip(out[True][0]) == strip(out[False][0]) != []
+    stages = [
+        {split_custom_id(str(r["custom_id"]).split(":", 1)[1])[2] for r in batch}
+        for batch in out[True][1].submitted
+    ]
+    assert {"bull"} in stages and {"bear"} in stages and {"bull", "bear"} not in stages
+    assert {"bull", "bear"} in [
+        {split_custom_id(str(r["custom_id"]).split(":", 1)[1])[2] for r in batch}
+        for batch in out[False][1].submitted
+    ]
+    for rec in out[True][2]:
+        assert rec["parallel_advocates"] is True
+        assert {"contexts", "dossier", "advocates", "arbiter", "total"} <= set(rec["seconds"])
+
+
+def test_every_request_carries_its_retrieved_ids_and_role(frames: Any) -> None:
+    replay, model, _runs, _exps, _cfg = _replay(frames)
+    replay.run()
+    reqs = [r for batch in model.submitted for r in batch]
+    assert reqs
+    for r in reqs:
+        assert isinstance(r["retrieved_ids"], list)
+        assert r["role"] == split_custom_id(str(r["custom_id"]).split(":", 1)[1])[2]

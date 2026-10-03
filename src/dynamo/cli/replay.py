@@ -367,6 +367,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    run.add_argument(
+        "--parallel-advocates",
+        action="store_true",
+        help=(
+            "committee mode: run the bull and bear stages concurrently instead "
+            "of one after the other (eval Phase 4; non-default is part of "
+            "config_hash)"
+        ),
+    )
+
     est = sub.add_parser(
         "estimate",
         help="dry-run committee-mode cost projection — ZERO API calls, no spend",
@@ -885,6 +895,7 @@ def _cmd_run_committee(args: argparse.Namespace) -> int:
         code_version=args.code_version,
         journal_retrieval=args.journal_retrieval,
         replicate=args.replicate,
+        parallel_advocates=args.parallel_advocates,
     )
     extras = _preflight_extras(
         engine,
