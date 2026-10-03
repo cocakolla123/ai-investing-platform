@@ -1,0 +1,196 @@
+{
+  "date": "2026-10-03",
+  "preregistration": "docs/preregistration_eval_retrieval.md",
+  "labels_commit": "5052574",
+  "all": {
+    "n": 41,
+    "keyword": {
+      "ndcg10": 0.388,
+      "recall5": 0.2447,
+      "mrr": 0.5939,
+      "empty_results": 0
+    },
+    "vector": {
+      "ndcg10": 0.2635,
+      "recall5": 0.1765,
+      "mrr": 0.3881,
+      "empty_results": 0
+    },
+    "hybrid": {
+      "ndcg10": 0.3435,
+      "recall5": 0.2045,
+      "mrr": 0.4876,
+      "empty_results": 0
+    },
+    "production": {
+      "ndcg10": 0.2963,
+      "recall5": 0.2024,
+      "mrr": 0.4753,
+      "empty_results": 0
+    },
+    "production_symbol_filter": {
+      "ndcg10": 0.264,
+      "recall5": 0.2466,
+      "mrr": 0.2683,
+      "empty_results": 30
+    },
+    "ndcg10_paired_diff_95ci": {
+      "hybrid-keyword": [
+        -0.0445,
+        -0.0905,
+        0.003
+      ],
+      "hybrid-vector": [
+        0.08,
+        0.047,
+        0.1125
+      ],
+      "vector-keyword": [
+        -0.1245,
+        -0.1851,
+        -0.0612
+      ],
+      "hybrid-production_symbol_filter": [
+        0.0795,
+        -0.0027,
+        0.1613
+      ]
+    }
+  },
+  "S_same_stock": {
+    "n": 11,
+    "keyword": {
+      "ndcg10": 0.569,
+      "recall5": 0.3359,
+      "mrr": 0.7955,
+      "empty_results": 0
+    },
+    "vector": {
+      "ndcg10": 0.6352,
+      "recall5": 0.5076,
+      "mrr": 0.9091,
+      "empty_results": 0
+    },
+    "hybrid": {
+      "ndcg10": 0.6738,
+      "recall5": 0.5152,
+      "mrr": 0.9091,
+      "empty_results": 0
+    },
+    "production": {
+      "ndcg10": 0.6814,
+      "recall5": 0.5,
+      "mrr": 1.0,
+      "empty_results": 0
+    },
+    "production_symbol_filter": {
+      "ndcg10": 0.9841,
+      "recall5": 0.9192,
+      "mrr": 1.0,
+      "empty_results": 0
+    },
+    "ndcg10_paired_diff_95ci": {
+      "hybrid-keyword": [
+        0.1048,
+        0.0155,
+        0.2037
+      ],
+      "hybrid-vector": [
+        0.0386,
+        -0.0231,
+        0.1015
+      ],
+      "vector-keyword": [
+        0.0662,
+        -0.0677,
+        0.2005
+      ],
+      "hybrid-production_symbol_filter": [
+        -0.3103,
+        -0.3886,
+        -0.2337
+      ]
+    }
+  },
+  "X_cross_stock": {
+    "n": 30,
+    "keyword": {
+      "ndcg10": 0.3216,
+      "recall5": 0.2113,
+      "mrr": 0.52,
+      "empty_results": 0
+    },
+    "vector": {
+      "ndcg10": 0.1273,
+      "recall5": 0.0552,
+      "mrr": 0.197,
+      "empty_results": 0
+    },
+    "hybrid": {
+      "ndcg10": 0.2224,
+      "recall5": 0.0907,
+      "mrr": 0.3331,
+      "empty_results": 0
+    },
+    "production": {
+      "ndcg10": 0.1551,
+      "recall5": 0.0933,
+      "mrr": 0.283,
+      "empty_results": 0
+    },
+    "production_symbol_filter": {
+      "ndcg10": 0.0,
+      "recall5": 0.0,
+      "mrr": 0.0,
+      "empty_results": 30
+    },
+    "ndcg10_paired_diff_95ci": {
+      "hybrid-keyword": [
+        -0.0992,
+        -0.1365,
+        -0.0619
+      ],
+      "hybrid-vector": [
+        0.0951,
+        0.0584,
+        0.1314
+      ],
+      "vector-keyword": [
+        -0.1944,
+        -0.2428,
+        -0.1434
+      ],
+      "hybrid-production_symbol_filter": [
+        0.2224,
+        0.1752,
+        0.271
+      ]
+    }
+  },
+  "latency_ms": {
+    "keyword": {
+      "p50": 1.0,
+      "p95": 1.7
+    },
+    "vector": {
+      "p50": 18.5,
+      "p95": 22.5
+    },
+    "hybrid": {
+      "p50": 19.4,
+      "p95": 25.4
+    },
+    "production": {
+      "p50": 11.8,
+      "p95": 20.7
+    },
+    "production_symbol_filter": {
+      "p50": 1.8,
+      "p95": 3.6
+    }
+  },
+  "query_embedding_ms": {
+    "p50": 13.3,
+    "p95": 16.9
+  }
+}
