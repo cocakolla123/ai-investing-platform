@@ -1,0 +1,319 @@
+{
+  "preregistration": "docs/preregistration_eval_decisions.md",
+  "validity": {
+    "run_ids": {
+      "vector": "replay-5181496084db",
+      "vector-rep": "replay-0ca99da87ddd",
+      "off": "replay-3bbdbc9cf162",
+      "hybrid": "replay-8533c2adb458"
+    },
+    "shortlist_identical_to_vector": {
+      "vector": true,
+      "vector-rep": true,
+      "off": true,
+      "hybrid": true
+    },
+    "shortlist_sizes": {
+      "vector": 60,
+      "vector-rep": 60,
+      "off": 60,
+      "hybrid": 60
+    },
+    "off_has_zero_hits": true,
+    "vector_hits_only_same_symbol": true,
+    "hybrid_hits_on_every_dive": true,
+    "arbiter_models": {
+      "claude-fable-5": 234
+    },
+    "hits_dated_after_as_of": 0
+  },
+  "per_arm": {
+    "off": {
+      "verdicts": 57,
+      "directional_scored": 43,
+      "brier": 0.2261395348837209,
+      "ece_5bin": 0.1274418604651163,
+      "decision_quality_mean_signed_excess20": 0.11434064346796294,
+      "hit_rate": 0.6976744186046512,
+      "mean_conviction": 0.5891228070175437,
+      "mean_disagreement": 0.5057006034409158,
+      "actions": {
+        "no_action": 10,
+        "buy": 42,
+        "avoid": 1,
+        "hold": 4
+      },
+      "structured_output": {
+        "dossier_parse_rate": 1.0,
+        "bull_parse_rate": 1.0,
+        "bear_parse_rate": 0.9833333333333333,
+        "arbiter_parse_rate": 0.9830508474576272,
+        "verdicts_assembled_per_dossier_requested": 0.95,
+        "quarantined": 1,
+        "key_repairs": 12
+      }
+    },
+    "vector": {
+      "verdicts": 59,
+      "directional_scored": 48,
+      "brier": 0.22684375,
+      "ece_5bin": 0.10270833333333333,
+      "decision_quality_mean_signed_excess20": 0.10284630752552398,
+      "hit_rate": 0.6875,
+      "mean_conviction": 0.5879661016949153,
+      "mean_disagreement": 0.5051291978577818,
+      "actions": {
+        "no_action": 9,
+        "buy": 48,
+        "hold": 2
+      },
+      "structured_output": {
+        "dossier_parse_rate": 1.0,
+        "bull_parse_rate": 1.0,
+        "bear_parse_rate": 0.9833333333333333,
+        "arbiter_parse_rate": 1.0,
+        "verdicts_assembled_per_dossier_requested": 0.9833333333333333,
+        "quarantined": 0,
+        "key_repairs": 20
+      }
+    },
+    "hybrid": {
+      "verdicts": 59,
+      "directional_scored": 46,
+      "brier": 0.2288282608695652,
+      "ece_5bin": 0.1176086956521739,
+      "decision_quality_mean_signed_excess20": 0.10246973029039498,
+      "hit_rate": 0.6739130434782609,
+      "mean_conviction": 0.59,
+      "mean_disagreement": 0.5120818406418896,
+      "actions": {
+        "no_action": 11,
+        "buy": 46,
+        "hold": 2
+      },
+      "structured_output": {
+        "dossier_parse_rate": 1.0,
+        "bull_parse_rate": 1.0,
+        "bear_parse_rate": 0.9833333333333333,
+        "arbiter_parse_rate": 1.0,
+        "verdicts_assembled_per_dossier_requested": 0.9833333333333333,
+        "quarantined": 0,
+        "key_repairs": 12
+      }
+    },
+    "vector-rep": {
+      "verdicts": 59,
+      "directional_scored": 48,
+      "brier": 0.22550000000000003,
+      "ece_5bin": 0.10458333333333335,
+      "decision_quality_mean_signed_excess20": 0.10286430468004887,
+      "hit_rate": 0.6875,
+      "mean_conviction": 0.5877966101694915,
+      "mean_disagreement": 0.5103512252370683,
+      "actions": {
+        "no_action": 8,
+        "buy": 48,
+        "hold": 3
+      },
+      "structured_output": {
+        "dossier_parse_rate": 1.0,
+        "bull_parse_rate": 1.0,
+        "bear_parse_rate": 1.0,
+        "arbiter_parse_rate": 1.0,
+        "verdicts_assembled_per_dossier_requested": 0.9833333333333333,
+        "quarantined": 1,
+        "key_repairs": 15
+      }
+    }
+  },
+  "paired": {
+    "hybrid - off": {
+      "sq_err": {
+        "n": 37,
+        "diff": -0.006940540540540529,
+        "ci95": [
+          -0.019589256756756754,
+          0.0023217567567567683
+        ]
+      },
+      "signed_excess": {
+        "n": 37,
+        "diff": 0.008908865814695171,
+        "ci95": [
+          0.0,
+          0.02672659744408551
+        ]
+      },
+      "conviction": {
+        "n": 56,
+        "diff": 0.0005357142857142921,
+        "ci95": [
+          -0.006249999999999982,
+          0.0069642857142857145
+        ]
+      },
+      "disagreement_score": {
+        "n": 56,
+        "diff": 0.00852142674549378,
+        "ci95": [
+          -0.002424718557183766,
+          0.019558926469767337
+        ]
+      },
+      "action_flip": {
+        "n": 56,
+        "action_changed": 0.25
+      }
+    },
+    "vector - off": {
+      "sq_err": {
+        "n": 41,
+        "diff": -0.004521951219512193,
+        "ci95": [
+          -0.015668475609756097,
+          0.0039001829268292664
+        ]
+      },
+      "signed_excess": {
+        "n": 41,
+        "diff": 0.008039708174237105,
+        "ci95": [
+          0.0,
+          0.024119124522711314
+        ]
+      },
+      "conviction": {
+        "n": 56,
+        "diff": -0.001428571428571428,
+        "ci95": [
+          -0.007857142857142856,
+          0.004821428571428568
+        ]
+      },
+      "disagreement_score": {
+        "n": 56,
+        "diff": -0.00034590664894272794,
+        "ci95": [
+          -0.009821490117574345,
+          0.009000921052036235
+        ]
+      },
+      "action_flip": {
+        "n": 56,
+        "action_changed": 0.19642857142857142
+      }
+    },
+    "hybrid - vector": {
+      "sq_err": {
+        "n": 43,
+        "diff": -8.372093023255085e-05,
+        "ci95": [
+          -0.004825697674418594,
+          0.004309534883720938
+        ]
+      },
+      "signed_excess": {
+        "n": 43,
+        "diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "conviction": {
+        "n": 58,
+        "diff": 0.002068965517241385,
+        "ci95": [
+          -0.002586206896551715,
+          0.0068965517241379335
+        ]
+      },
+      "disagreement_score": {
+        "n": 58,
+        "diff": 0.006396030606976534,
+        "ci95": [
+          -0.00409874255947088,
+          0.017228781161206803
+        ]
+      },
+      "action_flip": {
+        "n": 58,
+        "action_changed": 0.15517241379310345
+      }
+    },
+    "vector - vector-rep": {
+      "sq_err": {
+        "n": 44,
+        "diff": 7.499999999999868e-05,
+        "ci95": [
+          -0.0034932386363636368,
+          0.003675113636363632
+        ]
+      },
+      "signed_excess": {
+        "n": 44,
+        "diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "conviction": {
+        "n": 58,
+        "diff": -0.00034482758620689875,
+        "ci95": [
+          -0.005172413793103446,
+          0.004482758620689648
+        ]
+      },
+      "disagreement_score": {
+        "n": 58,
+        "diff": -0.006217343048700061,
+        "ci95": [
+          -0.01679764881092217,
+          0.003806206085819906
+        ]
+      },
+      "action_flip": {
+        "n": 58,
+        "action_changed": 0.13793103448275862
+      }
+    },
+    "treated: vector - off": {
+      "sq_err": {
+        "n": 19,
+        "diff": -0.013189473684210523,
+        "ci95": [
+          -0.03556486842105262,
+          0.002368421052631584
+        ]
+      },
+      "signed_excess": {
+        "n": 19,
+        "diff": 0.0173488439549327,
+        "ci95": [
+          0.0,
+          0.0520465318647981
+        ]
+      },
+      "conviction": {
+        "n": 21,
+        "diff": 0.0009523809523809479,
+        "ci95": [
+          -0.010952380952380946,
+          0.011428571428571418
+        ]
+      },
+      "action_flip": {
+        "n": 21,
+        "action_changed": 0.14285714285714285
+      }
+    },
+    "treated: vector - vector-rep": {
+      "action_flip": {
+        "n": 22,
+        "action_changed": 0.0
+      }
+    }
+  }
+}
