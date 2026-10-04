@@ -1,0 +1,105 @@
+{
+  "preregistration": "docs/preregistration_bankroll_profile.md",
+  "code_version": "bankroll-5dd26dd",
+  "bankrolls": {
+    "1000": {
+      "flat": {
+        "run_id": "replay-2af02d2a749c",
+        "total_return": 0.11226000000000003,
+        "sharpe": 1.884445006330215,
+        "max_drawdown": -0.07057519029828385,
+        "fills": 125,
+        "symbols_traded": 12,
+        "costs_usd": 2.8200000000000003,
+        "avg_positions": 3.591304347826087,
+        "excess_vs_spy": -0.03494130685443686,
+        "beta": 0.8438092505812617,
+        "alpha_annual": -0.021456160072714756,
+        "alpha_t": -0.3378296763843447
+      },
+      "profile": {
+        "run_id": "replay-f9a3f84f94fe",
+        "total_return": 0.12796000000000007,
+        "sharpe": 2.090789935288993,
+        "max_drawdown": -0.07280368898582767,
+        "fills": 63,
+        "symbols_traded": 2,
+        "costs_usd": 1.32,
+        "avg_positions": 1.5478260869565217,
+        "excess_vs_spy": -0.019241306854436813,
+        "beta": 0.8894896631837895,
+        "alpha_annual": -0.004518500652770388,
+        "alpha_t": -0.1113341522039239
+      },
+      "paired_daily_t": 0.4704320783334012,
+      "annualized_diff": 0.03128561046324876,
+      "verdict": "no difference shown"
+    },
+    "10000": {
+      "flat": {
+        "run_id": "replay-118c534e88cc",
+        "total_return": 0.11198299999999994,
+        "sharpe": 1.8802066640749524,
+        "max_drawdown": -0.07060844895961327,
+        "fills": 125,
+        "symbols_traded": 12,
+        "costs_usd": 30.65,
+        "avg_positions": 3.591304347826087,
+        "excess_vs_spy": -0.03521830685443694,
+        "beta": 0.8438503197566823,
+        "alpha_annual": -0.022020380732328045,
+        "alpha_t": -0.3468966534387438
+      },
+      "profile": {
+        "run_id": "replay-ff9e3b5f8536",
+        "total_return": 0.096271,
+        "sharpe": 1.6233650509403703,
+        "max_drawdown": -0.07869701499252624,
+        "fills": 99,
+        "symbols_traded": 11,
+        "costs_usd": 32.06,
+        "avg_positions": 3.226086956521739,
+        "excess_vs_spy": -0.05093030685443689,
+        "beta": 0.8614537716588362,
+        "alpha_annual": -0.05888561610394113,
+        "alpha_t": -1.0249306655892456
+      },
+      "paired_daily_t": -1.370278268919517,
+      "annualized_diff": -0.03133609384911967,
+      "verdict": "no difference shown"
+    },
+    "100000": {
+      "flat": {
+        "run_id": "replay-455fdbcdb27b",
+        "total_return": 0.11122530000000008,
+        "sharpe": 1.8686425134928888,
+        "max_drawdown": -0.07066989873061635,
+        "fills": 126,
+        "symbols_traded": 12,
+        "costs_usd": 377.63,
+        "avg_positions": 3.591304347826087,
+        "excess_vs_spy": -0.035976006854436804,
+        "beta": 0.8438018124532092,
+        "alpha_annual": -0.02351425681369189,
+        "alpha_t": -0.3704585377238538
+      },
+      "profile": {
+        "run_id": "replay-a8bb782ccae2",
+        "total_return": 0.11122530000000008,
+        "sharpe": 1.8686425134928888,
+        "max_drawdown": -0.07066989873061635,
+        "fills": 126,
+        "symbols_traded": 12,
+        "costs_usd": 377.63,
+        "avg_positions": 3.591304347826087,
+        "excess_vs_spy": -0.035976006854436804,
+        "beta": 0.8438018124532092,
+        "alpha_annual": -0.02351425681369189,
+        "alpha_t": -0.3704585377238538
+      },
+      "paired_daily_t": NaN,
+      "annualized_diff": 0.0,
+      "verdict": "no difference shown"
+    }
+  }
+}
