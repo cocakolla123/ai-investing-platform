@@ -43,6 +43,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import hashlib
+import importlib.util
 import inspect
 import json
 import os
@@ -90,6 +91,20 @@ def _semantic_hash(module: Any) -> str:
     return hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
 
 
+def _function_hash(module_name: str, function: str) -> str:
+    """AST hash of one top-level function, read from source WITHOUT importing
+    its module (research code may not import the persistence layer)."""
+    spec = importlib.util.find_spec(module_name)
+    origin = spec.origin if spec is not None else None
+    if origin is None:  # pragma: no cover - module always present in-repo
+        return ""
+    tree = ast.parse(Path(origin).read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function:
+            return hashlib.sha256(ast.dump(node).encode("utf-8")).hexdigest()
+    return ""
+
+
 def catalog_fingerprint() -> str:
     """Version fingerprint of the feature-building code.
 
@@ -106,6 +121,12 @@ def catalog_fingerprint() -> str:
             "feature_names": list(catalog.FEATURE_CATALOG),
             "catalog_src": _semantic_hash(catalog),
             "features_src": _semantic_hash(features),
+            # The bars every feature is built from: a change to how feeds are
+            # merged (2026-10-03: Tiingo open/high/low moved onto the adjusted
+            # scale) changes features without touching the feature code.
+            "canonical_bars_src": _function_hash(
+                "dynamo.persistence.repositories.market", "canonical_bars"
+            ),
         }
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

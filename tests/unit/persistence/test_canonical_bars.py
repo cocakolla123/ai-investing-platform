@@ -217,3 +217,35 @@ def test_distinct_sessions_are_still_distinct() -> None:
     out = canonical_bars(frame)
     assert len(out) == 2
     assert list(out["close"]) == [61.0, 62.0]
+
+
+def test_open_high_low_share_the_adjusted_close_scale() -> None:
+    """NFLX 2025-03-04 as stored: Tiingo raw OHLC beside a split-adjusted
+    close. Replay fills at the open and marks at the close, so a raw open
+    against an adjusted close bought 10x the intended stock."""
+    row = {
+        "symbol": "NFLX",
+        "ts": DAY,
+        "source": "tiingo",
+        "open": 971.61,
+        "high": 986.3135,
+        "low": 948.21,
+        "close": 972.58,
+        "volume": 4_392_814,
+        "adj_close": 97.258,
+        "fetched_at": DAY,
+    }
+    out = canonical_bars(pd.DataFrame([row])).iloc[0]
+    factor = 97.258 / 972.58
+    assert out["close"] == 97.258
+    assert abs(out["open"] - 971.61 * factor) < 1e-9
+    assert abs(out["high"] - 986.3135 * factor) < 1e-9
+    assert abs(out["low"] - 948.21 * factor) < 1e-9
+    assert out["low"] <= out["open"] <= out["high"]
+
+
+def test_rows_without_adj_close_keep_their_prices() -> None:
+    out = canonical_bars(
+        pd.DataFrame([raw_row("XLE", "alpaca", close=61.02, volume=ALPACA_VOLUME)])
+    ).iloc[0]
+    assert (out["open"], out["high"], out["low"], out["close"]) == (61.02, 61.02, 61.02, 61.02)

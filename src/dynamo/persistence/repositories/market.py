@@ -213,9 +213,21 @@ def canonical_bars(frame: pd.DataFrame) -> pd.DataFrame:
     price = price.drop(columns=["volume"])
     merged = price.merge(volume, on=["symbol", "ts"], how="left")
 
-    # The canonical close is the ADJUSTED close wherever one exists.
+    # The canonical close is the ADJUSTED close wherever one exists — and
+    # open/high/low move onto the SAME scale. Tiingo stores raw OHLC beside
+    # its adjusted close, so swapping only the close left a bar's open on the
+    # raw scale: NFLX 2025-03-04 opened at a raw 971.61 against an adjusted
+    # close of 97.26 (10:1 split, 2025-11-17). Replay fills at the open and
+    # marks at the close, so a $8k target bought $80k of stock and the book
+    # "lost" 72% overnight (trend-rule replay, docs/trend_rule_2026-10-03.md).
+    # Dividends cause the same mismatch at the ~1% scale on every Tiingo name.
     adj_close = cast(pd.Series, merged["adj_close"])
-    merged["close"] = adj_close.where(adj_close.notna(), merged["close"])
+    raw_close = cast(pd.Series, merged["close"])
+    adjusted = adj_close.notna() & raw_close.notna() & (raw_close > 0)
+    factor = (adj_close / raw_close).where(adjusted, 1.0)
+    for col in ("open", "high", "low"):
+        merged[col] = cast(pd.Series, merged[col]) * factor
+    merged["close"] = adj_close.where(adj_close.notna(), raw_close)
     return cast(pd.DataFrame, merged[list(CANONICAL_BAR_COLUMNS)]).reset_index(drop=True)
 
 
