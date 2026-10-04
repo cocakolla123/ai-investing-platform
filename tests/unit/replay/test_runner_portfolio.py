@@ -301,3 +301,46 @@ def test_small_bankroll_profile_skips_the_risk_sleeve(fixture_frames: Any) -> No
     small, _, _ = _run(fixture_frames, verdicts, initial_equity=1_000.0, bankroll_profile="v1")
     assert {f.symbol for f in off.fills if f.side == "buy"} >= {"LIQ", "TLT"}
     assert {f.symbol for f in small.fills if f.side == "buy"} == {"LIQ"}
+
+
+def test_debated_name_fills_next_day_after_leaving_the_universe(
+    fixture_frames: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LIQ is debated on day 0 but is NOT in the tier universe (and isn't a
+    benchmark). Its order fills at day 1's open, when it is no longer in the
+    day's universe, so day 1 must still load its bars."""
+    monkeypatch.setattr(
+        FakeGateway, "universe", lambda self, tiers=None: ["AAA", "BBB", "CCC", "ILLQ"]
+    )
+    window = _window(fixture_frames)
+    result, _, _ = _run(fixture_frames, [_verdict("LIQ", window[0], Action.BUY, 0.9)])
+    buys = [f for f in result.fills if f.symbol == "LIQ" and f.side == "buy"]
+    assert buys and buys[0].session == window[1]
+
+
+def test_ballast_trades_do_not_spend_the_turnover_budget(
+    fixture_frames: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The constructor exempts the ballast from the monthly budget; the
+    runner's month-to-date tally it receives must exclude ballast fills."""
+    from dynamo.portfolio.constructor import RuleBasedConstructor
+
+    seen: list[float] = []
+    original = RuleBasedConstructor.construct
+
+    def spy(self: Any, *args: Any, **kwargs: Any) -> Any:
+        seen.append(float(kwargs.get("turnover_used_mtd", 0.0)))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(RuleBasedConstructor, "construct", spy)
+    window = _window(fixture_frames)
+    result, _, _ = _run(
+        fixture_frames, [_verdict("LIQ", window[0], Action.BUY, 0.9)], ballast_symbol="SPY"
+    )
+    spy_fills = [f for f in result.fills if f.symbol == "SPY"]
+    other = sum(f.trade_value for f in result.fills if f.symbol != "SPY")
+    assert spy_fills, "ballast should trade in this fixture"
+    # Every tally the constructor saw is at most the non-ballast turnover.
+    assert max(seen) <= other / 100_000.0 / 2.0 + 1e-9

@@ -931,8 +931,15 @@ class ReplayRunner:
                 # never to all of tier 2, which would cost ~50 hours.
                 universe = self._discovery.universe_for(gw, day, universe)
             ballast = self._construction_config.ballast_symbol
+            # Yesterday's target fills at today's open, so every name in it needs
+            # today's bars, including a debated name that has left today's
+            # universe (it would otherwise never fill: CPB, wide campaign).
+            pending_symbols = (
+                {w.symbol for w in pending_target.weights} if pending_target is not None else set()
+            )
             panel_symbols = sorted(
-                {*universe, *shares, *BENCHMARK_SYMBOLS} | ({ballast} if ballast else set())
+                {*universe, *shares, *pending_symbols, *BENCHMARK_SYMBOLS}
+                | ({ballast} if ballast else set())
             )
             bars = gw.bars(panel_symbols, RETURNS_LOOKBACK_DAYS)
             opens_today, closes_today = _day_prices(bars, day)
@@ -969,7 +976,17 @@ class ReplayRunner:
                     for f in day_fills
                 )
                 turnover_increment = traded / pending_equity / 2.0 if pending_equity > 0 else 0.0
-                turnover_mtd += turnover_increment
+                # The monthly budget is for DISCRETIONARY trades. The constructor
+                # exempts the ballast symbol from it, so this tally must too:
+                # counting daily SPY top-ups used up the budget and deferred the
+                # committee's buys ("turnover budget exhausted", 32 of them in
+                # the wide campaign's first ten weeks).
+                ballast_traded = sum(
+                    f.trade_value for f in day_fills if ballast and f.symbol == ballast
+                )
+                turnover_mtd += (
+                    (traded - ballast_traded) / pending_equity / 2.0 if pending_equity > 0 else 0.0
+                )
                 turnover_total += turnover_increment
                 # Entry bookkeeping + resolution of full exits.
                 # pending_equity is still YESTERDAY's decision equity here
