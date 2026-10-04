@@ -584,6 +584,26 @@ quant_scores = Table(
     Column("feature_coverage", Float, nullable=False, default=1.0),
 )
 
+# Forward SHADOW scores (docs/preregistration_trend_shadow.md): candidate
+# bundles scored nightly beside production and NEVER read by anything that
+# trades. Deliberately a separate table: latest_quant_scores returns one row
+# per (symbol, model_version), so a shadow row in quant_scores would sit
+# beside the production row and could be picked by a consumer keyed on
+# symbol — and replay reads stored quant_scores of ANY model version.
+shadow_quant_scores = Table(
+    "shadow_quant_scores",
+    metadata,
+    Column("symbol", Text, primary_key=True),
+    Column("as_of", Date, primary_key=True),
+    Column("model_version", Text, primary_key=True),
+    Column("expected_excess_return", Float),
+    Column("downside_prob", Float),
+    Column("vol_forecast", Float),
+    Column("rank", Integer),
+    Column("confidence", Float, nullable=False, default=0.0),
+    Column("feature_coverage", Float, nullable=False, default=1.0),
+)
+
 quality_scores = Table(
     "quality_scores",
     metadata,

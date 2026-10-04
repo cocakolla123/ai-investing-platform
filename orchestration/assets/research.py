@@ -588,6 +588,41 @@ def quant_features_scores(
     )
 
 
+@dagster_asset(group_name=RESEARCH_GROUP, deps=["quant_features_scores"])
+def shadow_quant_scores(
+    context: AssetExecutionContext, dynamo: DynamoResource
+) -> MaterializeResult:
+    """Candidate bundles scored beside production into shadow_quant_scores.
+
+    Forward test, never traded (docs/preregistration_trend_shadow.md).
+    Nothing that trades reads that table. A bundle that fails is logged and
+    reported, never raised: the shadow can't break the nightly scores job.
+    """
+    from dynamo.research.quant.bundle import bundle_from_version
+    from dynamo.research.quant.features import build_features
+    from dynamo.research.quant.shadow import score_shadow_bundles, shadow_bundle_names
+
+    names = shadow_bundle_names(dynamo.settings().shadow_quant_bundles)
+    if not names:
+        return MaterializeResult(metadata={"scores": 0, "skipped": "no shadow bundles"})
+    as_of = utcnow().date()
+    universe = dynamo.universe_symbols(as_of, tiers=(1, 3))
+    if not universe:
+        return MaterializeResult(metadata={"scores": 0, "skipped": "empty universe"})
+    features = build_features(_feature_inputs(dynamo, universe, as_of), as_of, universe)
+    if features.empty:
+        return MaterializeResult(metadata={"scores": 0, "skipped": "no features"})
+    rows, errors = score_shadow_bundles(
+        features, as_of, names, lambda name: bundle_from_version(name)
+    )
+    for name, error in errors.items():
+        context.log.error("shadow_quant_scores: bundle %s failed: %s", name, error)
+    written = dynamo.market_repo().upsert_rows(schema.shadow_quant_scores, rows) if rows else 0
+    return MaterializeResult(
+        metadata={"scores": written, "bundles": ",".join(names), "errors": len(errors)}
+    )
+
+
 @dagster_asset(group_name=RESEARCH_GROUP, deps=["data_quality"])
 def quality_scores(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Durability/quality composites (doc 05) for the active universe."""
@@ -1894,6 +1929,7 @@ RESEARCH_ASSETS = [
     data_quality,
     tier2_scan,
     quant_features_scores,
+    shadow_quant_scores,
     quality_scores,
     strategy_signals,
     regime_state,

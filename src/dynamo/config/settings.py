@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     #: Run the committee's bull and bear calls concurrently (eval Phase 4,
     #: docs/eval_tracing_2026-10-03.md). Off until the user opts in.
     committee_parallel_advocates: bool = False
+    #: Candidate quant bundles scored nightly into shadow_quant_scores, beside
+    #: production and never traded (comma-separated; empty disables).
+    #: docs/preregistration_trend_shadow.md.
+    shadow_quant_bundles: str = "trend-rule-v1"
 
     # --- Broker (paper first; live requires the gate, doc 09 section 7) ---
     alpaca_api_key: str = Field(default="", alias="ALPACA_API_KEY")

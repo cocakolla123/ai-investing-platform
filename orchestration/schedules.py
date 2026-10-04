@@ -111,6 +111,7 @@ scores_job = define_asset_job(
     "scores_job",
     selection=AssetSelection.assets(
         "quant_features_scores",
+        "shadow_quant_scores",
         "quality_scores",
         "strategy_signals",
         "regime_state",
