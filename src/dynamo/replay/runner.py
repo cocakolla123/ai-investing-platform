@@ -91,6 +91,7 @@ from dynamo.domain.models.research import (
     WatchlistRow,
 )
 from dynamo.domain.models.risk import RegimeState, RiskConfig
+from dynamo.domain.symbols import is_crypto_symbol
 from dynamo.learning.experience import PathInputs, TradeFacts, build_experience
 from dynamo.portfolio.config import ConstructionConfig
 from dynamo.portfolio.constructor import AdvisoryInputs, RuleBasedConstructor
@@ -141,6 +142,7 @@ _HASH_NEUTRAL_DEFAULTS: dict[str, object] = {
     "journal_retrieval": "vector",
     "replicate": 0,
     "parallel_advocates": False,
+    "bankroll_profile": "",
 }
 
 
@@ -258,6 +260,9 @@ class ReplayConfig(BaseModel):
     # other's output (both see context + dossier only), so this changes wall
     # clock, not inputs.
     parallel_advocates: bool = False
+    # Bankroll risk profile (dynamo.portfolio.bankroll; "" = off, today's flat
+    # sizing). The tier is chosen from initial_equity.
+    bankroll_profile: str = ""
 
     @field_validator("discovery_mode")
     @classmethod
@@ -756,6 +761,16 @@ class ReplayRunner:
             # with the residual riding SPY instead of cash.
             ballast_symbol=config.ballast_symbol,
         )
+        # Bankroll profile: the tier's limits replace the shared RiskConfig
+        # (engine, sizing and compliance all read it) and ConstructionConfig.
+        self._bankroll_tier = None
+        if config.bankroll_profile:
+            from dynamo.portfolio.bankroll import apply_tier, tier_for
+
+            self._bankroll_tier = tier_for(config.bankroll_profile, config.initial_equity)
+            self._risk_config, self._construction_config = apply_tier(
+                self._bankroll_tier, self._risk_config, self._construction_config
+            )
         self._engine = RiskEngine()
         self._constructor = RuleBasedConstructor()
         # Trained-bundle seam (backtest-campaign Phase 2): the composition
@@ -899,6 +914,7 @@ class ReplayRunner:
 
             gw = self._gateway_factory(day)
             universe = gw.universe(cfg.universe_tiers)
+            core_universe = set(universe)
             if cfg.mode == "portfolio":
                 # The source committee run debated names its discovery layer
                 # promoted, not only the tier universe. Those names were
@@ -1056,6 +1072,13 @@ class ReplayRunner:
                     sigma_annual=sigma_annual,
                     adv_dollar_20d=adv,
                     sector_by_symbol=sectors,
+                    # Bankroll risk sleeve: crypto + names beyond the core
+                    # tier universe (discovery promotions, debated names).
+                    risk_sleeve_symbols=frozenset(
+                        s for s in universe if is_crypto_symbol(s) or s not in core_universe
+                    )
+                    if self._bankroll_tier is not None
+                    else frozenset(),
                 ),
                 verdict,
                 state,

@@ -79,6 +79,10 @@ class ConstructionConfig(BaseModel):
     # (any non-crypto symbol validates) but is not the default.
     ballast_symbol: str = ""
     ballast_cash_floor: float = Field(default=0.05, ge=0.0, le=1.0)
+    # Bankroll risk sleeve (dynamo.portfolio.bankroll): the most that
+    # AdvisoryInputs.risk_sleeve_symbols may hold together. None = off
+    # (construction identical to before the field existed).
+    risk_sleeve_cap: float | None = Field(default=None, ge=0.0, le=1.0)
     # Per-rung multipliers on the ballast residual, overriding
     # ``dynamo.risk.ladder.BALLAST_RUNG_MULTIPLIERS`` (empty = that
     # documented default schedule). Ballast deliberately does NOT follow the

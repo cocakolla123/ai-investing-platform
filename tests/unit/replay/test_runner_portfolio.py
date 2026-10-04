@@ -286,3 +286,18 @@ def test_debated_name_outside_tier_universe_is_tradable(fixture_frames: Any) -> 
     assert result.status == "completed"
     buys = [f for f in result.fills if f.symbol == "TLT" and f.side == "buy"]
     assert buys and buys[0].session == window[1]
+
+
+def test_small_bankroll_profile_skips_the_risk_sleeve(fixture_frames: Any) -> None:  # noqa: F811
+    """Profile v1 at $1k: TLT (debated, outside the core universe) is in the
+    risk sleeve, whose small-tier cap is 0, so only the core name trades.
+    Profile off: both trade."""
+    window = _window(fixture_frames)
+    verdicts = [
+        _verdict("LIQ", window[0], Action.BUY, 0.9),
+        _verdict("TLT", window[0], Action.BUY, 0.9),
+    ]
+    off, _, _ = _run(fixture_frames, verdicts, initial_equity=1_000.0)
+    small, _, _ = _run(fixture_frames, verdicts, initial_equity=1_000.0, bankroll_profile="v1")
+    assert {f.symbol for f in off.fills if f.side == "buy"} >= {"LIQ", "TLT"}
+    assert {f.symbol for f in small.fills if f.side == "buy"} == {"LIQ"}

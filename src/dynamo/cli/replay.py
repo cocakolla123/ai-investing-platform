@@ -227,6 +227,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument("--initial-equity", type=float, default=100_000.0)
+    run.add_argument(
+        "--bankroll-profile",
+        choices=("v1",),
+        default="",
+        help=(
+            "quant/portfolio mode: size by account size (dynamo.portfolio.bankroll): "
+            "the tier for --initial-equity sets max positions, the per-position "
+            "cap, a risk sleeve for crypto + non-core names, and the cash floor. "
+            "Default off = flat sizing (non-default is part of config_hash)"
+        ),
+    )
     run.add_argument("--horizon-sessions", type=int, default=20)
     run.add_argument(
         "--ballast",
@@ -703,6 +714,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         label=args.run_label,
         universe_tiers=tuple(args.universe_tier or (1, 3)),
         initial_equity=args.initial_equity,
+        bankroll_profile=args.bankroll_profile,
         horizon_sessions=args.horizon_sessions,
         quant_score_max_age_days=args.quant_score_max_age_days,
         quant_model_version=args.quant_model_version,

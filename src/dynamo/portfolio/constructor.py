@@ -78,6 +78,9 @@ class AdvisoryInputs:
     # default: empty unless meta_sizing_enabled is True post-promotion; an
     # empty mapping leaves construction bit-identical to the pre-meta path.
     effective_probability: Mapping[str, float] = field(default_factory=dict)
+    # Higher-risk names (crypto, names beyond the core universe) that share
+    # ConstructionConfig.risk_sleeve_cap. Empty, or a None cap, = no sleeve.
+    risk_sleeve_symbols: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -271,7 +274,14 @@ class RuleBasedConstructor:
         )
 
         # ------------------- step 4 + hard guarantee: verdict compliance pass
-        final_lots = self._clamp_to_verdict(ordered, verdict, rcfg, candidates.sector_by_symbol)
+        final_lots = self._clamp_to_verdict(
+            ordered,
+            verdict,
+            rcfg,
+            candidates.sector_by_symbol,
+            risk_sleeve_symbols=candidates.risk_sleeve_symbols,
+            risk_sleeve_cap=config.risk_sleeve_cap,
+        )
 
         # ------------------------------ step 5: idle-cash ballast overlay
         if config.ballast_symbol:
@@ -784,6 +794,9 @@ class RuleBasedConstructor:
         verdict: RiskVerdict,
         rcfg: RiskConfig,
         sector_by_symbol: Mapping[str, str],
+        *,
+        risk_sleeve_symbols: frozenset[str] = frozenset(),
+        risk_sleeve_cap: float | None = None,
     ) -> list[_Lot]:
         """Greedy, priority-ordered allocation under every verdict constraint.
 
@@ -795,6 +808,7 @@ class RuleBasedConstructor:
         sector_alloc: dict[str, float] = {}
         cluster_alloc: dict[str, float] = {}
         crypto_alloc = 0.0  # crypto sleeve total (ADR-0013)
+        risk_alloc = 0.0  # bankroll risk sleeve total (dynamo.portfolio.bankroll)
         total = 0.0
         out: list[_Lot] = []
         investable = max(0.0, min(verdict.gross_exposure_cap, 1.0 - verdict.cash_floor))
@@ -830,6 +844,14 @@ class RuleBasedConstructor:
                     w = max(avail, 0.0)
                     verdict_clamped = True
                     clamps.append("crypto_sleeve_cap")
+
+            lot_in_risk_sleeve = risk_sleeve_cap is not None and lot.symbol in risk_sleeve_symbols
+            if lot_in_risk_sleeve:
+                avail = (risk_sleeve_cap or 0.0) - risk_alloc
+                if w > avail:
+                    w = max(avail, 0.0)
+                    verdict_clamped = True
+                    clamps.append("risk_sleeve_cap")
 
             sector = sector_by_symbol.get(lot.symbol)
             if sector is not None and sector in verdict.sector_caps:
@@ -869,6 +891,8 @@ class RuleBasedConstructor:
                     cluster_alloc[cluster] = cluster_alloc.get(cluster, 0.0) + w
                 if lot_is_crypto:
                     crypto_alloc += w
+                if lot_in_risk_sleeve:
+                    risk_alloc += w
                 total += w
             out.append(
                 _Lot(
