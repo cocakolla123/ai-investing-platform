@@ -1,24 +1,43 @@
 #!/usr/bin/env bash
-# Sequenced re-runs on the fixed bars (1c6c04d), one heavy job at a time so
-# Postgres (2.5 GiB container) isn't overloaded: wait for the panel-cache
-# shards, then Phase 5 / v10 from cache, then true discovery, then wide.
+# Re-run results made before the replay fixes — bar scale (1c6c04d), live-parity
+# ADV and debated-name trading (8cc854a) — one heavy job at a time so Postgres
+# (2.5 GiB container) isn't overloaded. Settings copied from each original
+# run's stored config_json. No model calls anywhere.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
-while pgrep -f "[w]arm_panel_cache" >/dev/null; do sleep 60; done
-echo "=== phase5 $(date)" && PYTHONPATH=. .venv/bin/python scripts/eval/ml_baselines.py --tag barfix \
-  > artifacts/logs/phase5_barfix.log 2>&1 < /dev/null
-CV=(--code-version rerun-52c1be7 --no-require-shipping-bundle)
+R=".venv/bin/python -m dynamo.cli.replay run"
+CV=(--code-version rerun-8cc854a --no-require-shipping-bundle)
 W=(--start 2026-03-03 --end 2026-08-14 --ballast SPY --min-feature-coverage 0.35)
-echo "=== disc-true $(date)" && .venv/bin/python -m dynamo.cli.replay run --mode quant \
-  --universe-tier 1 --universe-tier 3 --discovery code \
+
+# 1. light: committee portfolio passes (verdicts of replay-63220a3a5e9a) + core control
+for EQ in 1000 10000 100000; do
+  echo "=== portfolio $EQ $(date)"
+  $R --mode portfolio --source-run-id replay-63220a3a5e9a --universe-tier 1 --universe-tier 3 \
+    "${W[@]}" --initial-equity "$EQ" "${CV[@]}" --run-label "rerun2-committee-portfolio-$EQ" \
+    >> artifacts/logs/rerun2_portfolio.log 2>&1 < /dev/null
+done
+echo "=== control $(date)"
+$R --mode quant --universe-tier 1 --universe-tier 3 --discovery off --quant-model-version campaign-v8 \
+  --initial-equity 100000 "${W[@]}" "${CV[@]}" --run-label rerun2-core-quant-100k-control \
+  >> artifacts/logs/rerun2_control.log 2>&1 < /dev/null
+
+# 2. heavy, after the panel-cache shards: Phase 5 / v10 from cache
+while pgrep -f "[w]arm_panel_cache" >/dev/null; do sleep 60; done
+echo "=== phase5 $(date)"
+PYTHONPATH=. .venv/bin/python scripts/eval/ml_baselines.py --tag barfix \
+  > artifacts/logs/phase5_barfix.log 2>&1 < /dev/null
+
+# 3. true discovery, then wide-traded
+echo "=== disc-true $(date)"
+$R --mode quant --universe-tier 1 --universe-tier 3 --discovery code \
   --discovery-min-dollar-volume 2000000 --discovery-min-price 5 \
   --discovery-promotions-per-day 15 --discovery-promotion-days 30 \
   --quant-model-version campaign-v8 --initial-equity 100000 "${W[@]}" "${CV[@]}" \
-  --run-label rerun-disc-quant-100k-true >> artifacts/logs/rerun_disc_true.log 2>&1 < /dev/null
-echo "=== wide $(date)" && .venv/bin/python -m dynamo.cli.replay run --mode quant \
-  --universe-tier 1 --universe-tier 2 --universe-tier 3 --discovery code \
+  --run-label rerun2-disc-quant-100k-true >> artifacts/logs/rerun2_disc_true.log 2>&1 < /dev/null
+echo "=== wide $(date)"
+$R --mode quant --universe-tier 1 --universe-tier 2 --universe-tier 3 --discovery code \
   --discovery-min-dollar-volume 2000000 --discovery-min-price 5 \
   --discovery-promotions-per-day 60 --discovery-promotion-days 30 \
   --quant-model-version campaign-v8 --initial-equity 100000 "${W[@]}" "${CV[@]}" \
-  --run-label rerun-wide-quant-100k >> artifacts/logs/rerun_wide.log 2>&1 < /dev/null
+  --run-label rerun2-wide-quant-100k >> artifacts/logs/rerun2_wide.log 2>&1 < /dev/null
 echo "=== all done $(date)"
