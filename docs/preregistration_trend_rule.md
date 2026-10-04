@@ -111,3 +111,42 @@ and its t-stat.
   contaminate the arm.
 - Zero model calls: no `cost_ledger` rows reference these run ids.
 - The bundle loads with the sha256s its manifest records.
+
+---
+
+## Amendment (2026-10-03, after the first runs, before any re-run)
+
+**The first runs (`--code-version trend-5970f24`) are invalid because of an
+engine bug they exposed.**
+
+- **What happened.** **trend-long** showed a −74% drawdown, beta 1.84 and
+  "alpha" of +329%/yr.
+- **Cause.** On 2025-02-04, 03-04 and 09-03 the replay bought NFLX at
+  Tiingo's *raw* open (971.61) while valuing it at the split-adjusted close
+  (97.26; 10:1 split on 2025-11-17). A ~$8k target became an $80k
+  position, the book showed a fake −72% day, and the drawdown ladder then
+  liquidated it.
+- **Fix: 1c6c04d.** `canonical_bars` now moves open, high and low onto the
+  adjusted-close scale. The panel-cache fingerprint covers `canonical_bars`.
+- **Scope of the bug.** It hits every Tiingo-priced name at about the 1%
+  scale through dividends, and pre-split dates hard. The camp runs were
+  affected only mildly, but all three runs are redone for consistency.
+
+**Re-run plan.** The same three runs, the same settings and the same
+decision rule, with `--code-version trend-1c6c04d`. Nothing else changes:
+no IC, σ, feature, window, universe or threshold. The invalid first results
+are reported beside the valid ones.
+
+**Preflight deviation, for trend-long only.**
+
+- Preflight requires HY OAS (`BAMLH0A0HYM2`) back to start − 900 days.
+- FRED serves only about 3 years of that ICE index, so it starts on
+  2023-08-15 and can't be backfilled.
+- The regime model reads OAS only as its current level and its 20-session
+  change. The 900 days exist for the SPY volatility percentile, which is
+  complete.
+- Every session in the window (2025-01-02 onward) therefore has real OAS
+  data, and the run uses `--skip-preflight`.
+- Every other check passed on the first attempt (logged in
+  `artifacts/logs/trend_long.log`).
+- T10Y3M was backfilled to 2022-01-03.
