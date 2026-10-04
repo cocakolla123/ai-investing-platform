@@ -89,8 +89,8 @@ def build_v10_panel() -> Any:
 
 def dataset_hash(features: pd.DataFrame, labels: pd.DataFrame) -> str:
     h = hashlib.sha256()
-    h.update(pd.util.hash_pandas_object(features, index=True).to_numpy().tobytes())
-    h.update(pd.util.hash_pandas_object(labels[[TARGET]], index=True).to_numpy().tobytes())
+    h.update(pd.util.hash_pandas_object(features, index=True).to_numpy().tobytes())  # pyright: ignore[reportAttributeAccessIssue]
+    h.update(pd.util.hash_pandas_object(labels[[TARGET]], index=True).to_numpy().tobytes())  # pyright: ignore[reportAttributeAccessIssue]
     return h.hexdigest()
 
 
@@ -120,7 +120,19 @@ def paired_t(a: list[float], b: list[float]) -> dict[str, float]:
 
 
 def main() -> None:
+    import argparse
+
     import mlflow
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--tag",
+        default="",
+        help="re-run label: results_phase5_<tag>.json + its own MLflow experiment",
+    )
+    tag = ap.parse_args().tag
+    out_name = f"results_phase5_{tag}.json" if tag else "results_phase5.json"
+    experiment = f"quant-phase5-v10-folds-{tag}" if tag else "quant-phase5-v10-folds"
 
     from dynamo.cli.quant_train import walkforward_for
     from dynamo.research.quant.catalog import FEATURE_CATALOG, GROUP_TARGETS
@@ -133,11 +145,9 @@ def main() -> None:
     root = Path("artifacts/mlruns").resolve()
     root.mkdir(parents=True, exist_ok=True)
     mlflow.set_tracking_uri(f"sqlite:///{root / 'mlflow.db'}")
-    if mlflow.get_experiment_by_name("quant-phase5-v10-folds") is None:
-        mlflow.create_experiment(
-            "quant-phase5-v10-folds", artifact_location=(root / "artifacts").as_uri()
-        )
-    mlflow.set_experiment("quant-phase5-v10-folds")
+    if mlflow.get_experiment_by_name(experiment) is None:
+        mlflow.create_experiment(experiment, artifact_location=(root / "artifacts").as_uri())
+    mlflow.set_experiment(experiment)
 
     panel = build_v10_panel()
     features, labels = panel.features, panel.labels
@@ -229,9 +239,9 @@ def main() -> None:
         "ablations": ablations,
         "thresholds": {"t_call": 2.0, "t_bonferroni_17": 3.4},
     }
-    (OUT / "results_phase5.json").write_text(json.dumps(result, indent=2, default=float))
+    (OUT / out_name).write_text(json.dumps(result, indent=2, default=float))
     with mlflow.start_run(run_name="summary"):
-        mlflow.log_artifact(str(OUT / "results_phase5.json"))
+        mlflow.log_artifact(str(OUT / out_name))
     print(json.dumps({k: v for k, v in result.items() if k != "models"}, indent=2, default=float))
     for m, s in models_summary.items():
         print(f"{m:28s} pooled IC {s['pooled_rank_ic']:+.4f}  fold t {s['fold_t_stat']:+.2f}")
