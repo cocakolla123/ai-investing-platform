@@ -1,0 +1,77 @@
+{
+  "preregistration": "docs/preregistration_trend_rule.md",
+  "code_version": "trend-1c6c04d",
+  "validity": {
+    "run_ids": {
+      "trend-camp": "replay-936db5f38f3a",
+      "v8-camp": "replay-55190c690c30",
+      "trend-long": "replay-89e06ed54d22"
+    },
+    "stored_quant_scores_in_windows": 0,
+    "model_calls": 0
+  },
+  "runs": {
+    "trend-camp": {
+      "sessions": 115,
+      "total_return": 0.15113139999999992,
+      "sharpe": 2.3555143125852283,
+      "deflated_sharpe": 0.942193632124745,
+      "max_drawdown": -0.07075533944446488,
+      "turnover_one_way": 3.3643939013965807,
+      "costs_usd": 222.22,
+      "benchmark": {
+        "excess_total_return": 0.0039300931455630295,
+        "beta": 0.9091234659105495,
+        "alpha_annual": 0.034925929310078915,
+        "tracking_error_annual": 0.035137320158190107,
+        "information_ratio": 0.9939838653841699,
+        "alpha_t_stat": 0.66854630085477,
+        "years_to_significance": 3.888243663995564
+      }
+    },
+    "v8-camp": {
+      "sessions": 115,
+      "total_return": 0.11174109999999993,
+      "sharpe": 1.8993532733318645,
+      "deflated_sharpe": 0.8997245354002494,
+      "max_drawdown": -0.07327653244580068,
+      "turnover_one_way": 2.757247342262317,
+      "costs_usd": 229.82,
+      "benchmark": {
+        "excess_total_return": -0.03546020685443696,
+        "beta": 0.8505055652460084,
+        "alpha_annual": -0.024819596592989254,
+        "tracking_error_annual": 0.034009639777442605,
+        "information_ratio": -0.7297812254233642,
+        "alpha_t_stat": -0.4908455314830317,
+        "years_to_significance": null
+      }
+    },
+    "trend-long": {
+      "sessions": 405,
+      "total_return": 0.23711820000000006,
+      "sharpe": 1.0995690549334654,
+      "deflated_sharpe": 0.9163085559718169,
+      "max_drawdown": -0.13925701955287306,
+      "turnover_one_way": 9.587641281106603,
+      "costs_usd": 773.91,
+      "benchmark": {
+        "excess_total_return": -0.11348012548156317,
+        "beta": 0.6485870674733198,
+        "alpha_annual": 0.009480379440206979,
+        "tracking_error_annual": 0.0593213036137205,
+        "information_ratio": 0.15981407795654462,
+        "alpha_t_stat": 0.2023510422478229,
+        "years_to_significance": 150.41185790259152
+      }
+    }
+  },
+  "head_to_head_trend_minus_v8": {
+    "sessions": 114,
+    "mean_daily_diff": 0.0003101470891015569,
+    "annualized_diff": 0.07815706645359234,
+    "t": 0.9959404446199388,
+    "trend_beats_v8": false
+  },
+  "decision": "INCONCLUSIVE"
+}
