@@ -1,0 +1,106 @@
+{
+  "preregistration": "docs/preregistration_trend_committee.md",
+  "code_version": "trend-committee-6f6d039",
+  "runs": {
+    "trend": "replay-c958db4a4a55",
+    "v8": "replay-5181496084db",
+    "v8-rep": "replay-0ca99da87ddd"
+  },
+  "per_arm": {
+    "trend": {
+      "verdicts": 59,
+      "buys": 46,
+      "buy_quality": [
+        -0.0007252472856414394,
+        -0.01393849477722212,
+        0.011553127923758176
+      ],
+      "decision_quality": [
+        -0.0025667431997424355,
+        -0.015239508257491138,
+        0.009578141743247523
+      ],
+      "shortlist_quality": [
+        0.00022517047986828816,
+        -0.017663722653410638,
+        0.01517502970462721
+      ],
+      "committee_lift": -0.0009504177655097275,
+      "brier": 0.2731723404255319,
+      "actions": {
+        "no_action": 12,
+        "buy": 46,
+        "avoid": 1
+      },
+      "assembled_share": 0.9833333333333333
+    },
+    "v8": {
+      "verdicts": 59,
+      "buys": 48,
+      "buy_quality": [
+        0.10288297659853197,
+        0.07082967724532117,
+        0.13473319193970354
+      ],
+      "decision_quality": [
+        0.10288297659853197,
+        0.07082967724532117,
+        0.13473319193970354
+      ],
+      "shortlist_quality": [
+        0.08223645435354311,
+        0.051111906057424945,
+        0.11326838332171865
+      ],
+      "committee_lift": 0.020646522244988863,
+      "brier": 0.22684375,
+      "actions": {
+        "no_action": 9,
+        "buy": 48,
+        "hold": 2
+      },
+      "assembled_share": 0.9833333333333333
+    },
+    "v8-rep": {
+      "verdicts": 59,
+      "buys": 48,
+      "buy_quality": [
+        0.10290097375305686,
+        0.0691907913556499,
+        0.13595071469304879
+      ],
+      "decision_quality": [
+        0.10290097375305686,
+        0.0691907913556499,
+        0.13595071469304879
+      ],
+      "shortlist_quality": [
+        0.08223645435354311,
+        0.051111906057424945,
+        0.11326838332171865
+      ],
+      "committee_lift": 0.020664519399513748,
+      "brier": 0.22550000000000003,
+      "actions": {
+        "no_action": 8,
+        "buy": 48,
+        "hold": 3
+      },
+      "assembled_share": 0.9833333333333333
+    }
+  },
+  "buy_quality_trend_minus_v8": [
+    -0.10360822388417341,
+    -0.14122229667291852,
+    -0.06848314935794507
+  ],
+  "buy_quality_trend_minus_v8rep": [
+    -0.1036262210386983,
+    -0.14206253952023312,
+    -0.06712125514696694
+  ],
+  "replicate_noise_abs": 1.7997154524884706e-05,
+  "shortlist_jaccard_trend_v8": 0.061946902654867256,
+  "shortlist_jaccard_v8_v8rep": 1.0,
+  "verdict": "trend worse"
+}
