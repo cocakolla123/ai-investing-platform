@@ -70,3 +70,22 @@ liquidity-vetoed, and names the committee debated are tradable.
   discovery-added names entirely, so its result depends largely on how
   crypto and those names did in March–August 2026.
 - **Expected outcome:** no difference shown at any bankroll.
+
+---
+
+## Amendment (2026-10-04, before any result was looked at)
+
+The first launch (`--code-version bankroll-8f59aba`) was stopped after 2
+completed runs and 1 partial run. While diagnosing why so few committee
+buys trade, two more replay bugs were found and fixed in 5dd26dd:
+
+- SPY ballast trades were spending the monthly turnover budget.
+- Debated names couldn't fill at the next open.
+
+Arms launched before and after the fix would have run on different code.
+The stopped runs (`replay-9990807c7961`, `replay-9a15ebc94cce`,
+`replay-ce12d4567c20`) are discarded **unread**: no metric from them was
+computed or viewed.
+
+The re-launch uses `--code-version bankroll-5dd26dd`. Arms, settings, tier
+numbers and the decision rule are unchanged.
