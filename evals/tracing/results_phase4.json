@@ -1,0 +1,254 @@
+{
+  "preregistration": "docs/preregistration_eval_tracing.md",
+  "code_version": "phase4-ec9b97e",
+  "runs": {
+    "seq": "replay-44b04a0f2c2e",
+    "par": "replay-b5888959bef6"
+  },
+  "per_call": {
+    "seq": {
+      "calls": 80,
+      "retries": 0,
+      "validation_failures": 0,
+      "p50_ms": 52783.684125490254,
+      "p95_ms": 97181.44950207788,
+      "by_role": {
+        "arbiter": {
+          "n": 20,
+          "p50_ms": 87111.87347897794,
+          "p95_ms": 105552.28349935496
+        },
+        "bear": {
+          "n": 20,
+          "p50_ms": 48150.08591700462,
+          "p95_ms": 57359.10856492701
+        },
+        "bull": {
+          "n": 20,
+          "p50_ms": 41636.37360400753,
+          "p95_ms": 53744.464739222894
+        },
+        "dossier": {
+          "n": 20,
+          "p50_ms": 58996.14170897985,
+          "p95_ms": 77198.02016222093
+        }
+      },
+      "models": {
+        "claude-sonnet-5": 60,
+        "claude-fable-5": 20
+      },
+      "prompt_hashes": {
+        "dossier:875802df6f5318ff": 20,
+        "bull:c5f854704b4f3a0d": 20,
+        "bear:07f3974875ce1b7c": 20,
+        "arbiter:581949521ae6e44d": 20
+      }
+    },
+    "par": {
+      "calls": 82,
+      "retries": 2,
+      "validation_failures": 2,
+      "p50_ms": 52663.4308124776,
+      "p95_ms": 96525.83921041514,
+      "by_role": {
+        "arbiter": {
+          "n": 21,
+          "p50_ms": 89731.63320799358,
+          "p95_ms": 108783.67912501562
+        },
+        "bear": {
+          "n": 21,
+          "p50_ms": 50723.378084017895,
+          "p95_ms": 64330.06900001783
+        },
+        "bull": {
+          "n": 20,
+          "p50_ms": 41431.44972898881,
+          "p95_ms": 50403.64389411989
+        },
+        "dossier": {
+          "n": 20,
+          "p50_ms": 64157.03812500578,
+          "p95_ms": 79332.66974195723
+        }
+      },
+      "models": {
+        "claude-sonnet-5": 61,
+        "claude-fable-5": 21
+      },
+      "prompt_hashes": {
+        "dossier:875802df6f5318ff": 20,
+        "bull:c5f854704b4f3a0d": 20,
+        "bear:07f3974875ce1b7c": 21,
+        "arbiter:581949521ae6e44d": 21
+      }
+    }
+  },
+  "per_decision": {
+    "seq": {
+      "decisions": 20,
+      "compute_s_p50": 244.47899302197038,
+      "compute_s_p95": 275.9393944937154,
+      "metered_usd_per_decision": 0.0,
+      "equiv_usd_per_decision": 0.8906216499999999,
+      "input_tokens_per_decision": 43717.55,
+      "output_tokens_per_decision": 20673.85
+    },
+    "par": {
+      "decisions": 20,
+      "compute_s_p50": 246.16238529150723,
+      "compute_s_p95": 287.7139597530128,
+      "metered_usd_per_decision": 0.0,
+      "equiv_usd_per_decision": 0.9314598500000001,
+      "input_tokens_per_decision": 44944.1,
+      "output_tokens_per_decision": 21612.6
+    }
+  },
+  "wall_clock": {
+    "seq": {
+      "p50_s": 269.8599642812478,
+      "p95_s": 273.2355146812508,
+      "per_day": {
+        "2026-08-03": {
+          "wall_s_per_decision": 259.689136791756,
+          "advocates_s": 338.34353133296827,
+          "total_s": 1038.756547167024,
+          "assembled": 4
+        },
+        "2026-08-04": {
+          "wall_s_per_decision": 273.42065509375243,
+          "advocates_s": 343.9301900420105,
+          "total_s": 1093.6826203750097,
+          "assembled": 4
+        },
+        "2026-08-05": {
+          "wall_s_per_decision": 269.8599642812478,
+          "advocates_s": 361.5392984159989,
+          "total_s": 1079.4398571249912,
+          "assembled": 4
+        },
+        "2026-08-06": {
+          "wall_s_per_decision": 272.4949530312442,
+          "advocates_s": 375.85341612499906,
+          "total_s": 1089.979812124977,
+          "assembled": 4
+        },
+        "2026-08-07": {
+          "wall_s_per_decision": 269.03288684375,
+          "advocates_s": 365.35152441699756,
+          "total_s": 1076.131547375,
+          "assembled": 4
+        }
+      }
+    },
+    "par": {
+      "p50_s": 232.31148061450222,
+      "p95_s": 264.22177224155746,
+      "per_day": {
+        "2026-08-03": {
+          "wall_s_per_decision": 231.6851684792491,
+          "advocates_s": 184.5723079580348,
+          "total_s": 926.7406739169965,
+          "assembled": 4
+        },
+        "2026-08-04": {
+          "wall_s_per_decision": 248.27884404174984,
+          "advocates_s": 207.35630304197548,
+          "total_s": 993.1153761669993,
+          "assembled": 4
+        },
+        "2026-08-05": {
+          "wall_s_per_decision": 268.2075042915094,
+          "advocates_s": 199.59857341699535,
+          "total_s": 1072.8300171660376,
+          "assembled": 4
+        },
+        "2026-08-06": {
+          "wall_s_per_decision": 232.31148061450222,
+          "advocates_s": 244.28170691704145,
+          "total_s": 929.2459224580089,
+          "assembled": 4
+        },
+        "2026-08-07": {
+          "wall_s_per_decision": 218.14439455200045,
+          "advocates_s": 191.31043424998643,
+          "total_s": 872.5775782080018,
+          "assembled": 4
+        }
+      }
+    }
+  },
+  "optimization": {
+    "days_compared": 5,
+    "days_par_faster": 5,
+    "mean_pct_change_wall_per_decision": [
+      -0.10850624033263338,
+      -0.16137563062306853,
+      -0.0515576137907763
+    ],
+    "works": true
+  },
+  "quality_held": {
+    "par_vs_seq": {
+      "n": 20,
+      "flips": 6,
+      "rate": 0.3,
+      "p_at_noise_rate": 0.04770318578408652
+    },
+    "seq_vs_phase3_vector": {
+      "n": 20,
+      "flips": 3,
+      "rate": 0.15,
+      "p_at_noise_rate": 0.5346020733098809
+    },
+    "par_vs_phase3_vector": {
+      "n": 20,
+      "flips": 5,
+      "rate": 0.25,
+      "p_at_noise_rate": 0.13134976388135303
+    },
+    "assembled_share": {
+      "seq": 1.0,
+      "par": 1.0
+    },
+    "validation_failure_rate": {
+      "seq": 0.0,
+      "par": 0.024390243902439025
+    },
+    "held": false
+  },
+  "quality_descriptive": {
+    "seq": {
+      "verdicts": 20,
+      "directional": 15,
+      "brier": 0.19812666666666667,
+      "decision_quality": 0.14623902674051942,
+      "actions": {
+        "no_action": 5,
+        "buy": 15
+      }
+    },
+    "par": {
+      "verdicts": 20,
+      "directional": 16,
+      "brier": 0.20334375000000002,
+      "decision_quality": 0.13358514969548074,
+      "actions": {
+        "no_action": 3,
+        "buy": 16,
+        "hold": 1
+      }
+    },
+    "phase3-vector": {
+      "verdicts": 20,
+      "directional": 14,
+      "brier": 0.18216428571428575,
+      "decision_quality": 0.16589608032999723,
+      "actions": {
+        "no_action": 6,
+        "buy": 14
+      }
+    }
+  }
+}
