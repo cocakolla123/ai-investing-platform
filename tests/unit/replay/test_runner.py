@@ -303,3 +303,26 @@ def test_aligned_macro_handles_tz_aware_session_index() -> None:
     # naive index keeps working identically
     naive_idx = pd.DatetimeIndex(pd.to_datetime(["2026-02-02", "2026-02-04"]))
     assert np.allclose(_aligned_macro(macro, "BAMLH0A0HYM2", naive_idx, default=4.0), [3.0, 4.5])
+
+
+def test_adv_is_consolidated_equivalent_like_live() -> None:
+    """Replay's ADV uses portfolio_exec's units contract: a crypto venue's raw
+    dollar volume is scaled up to the market, not read as-is (every crypto buy
+    was liquidity-vetoed on "$4k/day" before)."""
+    from dynamo.domain.volume_source import volume_source_share
+    from dynamo.replay.runner import _sigma_and_adv
+
+    days = pd.date_range("2026-01-01", periods=30, freq="D", tz="UTC")
+    rows = [
+        {
+            "symbol": "AVAX/USD",
+            "ts": t,
+            "close": 20.0,
+            "volume": 200.0,
+            "volume_source": "alpaca_crypto",
+        }
+        for t in days
+    ] + [{"symbol": "RAW", "ts": t, "close": 20.0, "volume": 200.0} for t in days]
+    _, adv = _sigma_and_adv(pd.DataFrame(rows))
+    assert adv["RAW"] == pytest.approx(4_000.0)  # no label -> assume consolidated
+    assert adv["AVAX/USD"] == pytest.approx(4_000.0 / volume_source_share("alpaca_crypto"))

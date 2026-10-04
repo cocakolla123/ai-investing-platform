@@ -899,6 +899,13 @@ class ReplayRunner:
 
             gw = self._gateway_factory(day)
             universe = gw.universe(cfg.universe_tiers)
+            if cfg.mode == "portfolio":
+                # The source committee run debated names its discovery layer
+                # promoted, not only the tier universe. Those names were
+                # silently dropped here (28 of the wide campaign's 72 buys),
+                # so they join the universe on the day they were debated:
+                # point-in-time, because a verdict exists only from its as_of.
+                universe = sorted({*universe, *self._source_verdicts.get(day, {})})
             if self._discovery is not None:
                 # Steps 1-4 of the discovery layer: panel slice -> detectors
                 # -> promotion gate -> universe_D. Everything below this line
@@ -1018,9 +1025,9 @@ class ReplayRunner:
             # way, quant scores flow to the constructor (production parity).
             quant_scores = self._quant_scores(gw, universe, day)
             if cfg.mode == "portfolio":
-                # Days without persisted verdicts open no new risk; verdicts
-                # for symbols outside today's universe (and not held) are
-                # ignored gracefully.
+                # Days without persisted verdicts open no new risk. Today's
+                # source verdicts are already in the universe (above), so this
+                # filter only drops nothing-to-trade cases.
                 tradable = {*universe, *(s for s in shares if shares[s])}
                 synth = {
                     sym: v
@@ -1414,7 +1421,18 @@ def _day_prices(bars: pd.DataFrame, day: date) -> tuple[dict[str, float], dict[s
 
 def _sigma_and_adv(bars: pd.DataFrame) -> tuple[dict[str, float], dict[str, float]]:
     """Annualized close-to-close sigma (last ~120 sessions) + 20d median
-    dollar volume per symbol (asset parity with portfolio_exec)."""
+    dollar volume per symbol in CONSOLIDATED-EQUIVALENT dollars.
+
+    Asset parity with ``portfolio_exec._consolidated_adv``, which the docstring
+    always claimed but the code didn't have: replay fed the risk engine raw
+    feed dollars. For Alpaca's crypto venue that is ~1000x under the market
+    (BTC "traded $4k/day"), so the liquidity veto blocked every crypto buy in
+    every replay (36 of the wide committee campaign's 72 buys). IEX-only
+    equity volume was ~15x low the same way.
+    """
+    from dynamo.domain.volume_source import dominant_source
+    from dynamo.risk.liquidity import consolidated_equivalent_adv
+
     sigma: dict[str, float] = {}
     adv: dict[str, float] = {}
     if bars.empty:
@@ -1424,9 +1442,10 @@ def _sigma_and_adv(bars: pd.DataFrame) -> tuple[dict[str, float], dict[str, floa
         closes = grp["close"].astype(float).tail(SIGMA_SESSIONS + 1)
         if len(closes) > 21:
             sigma[str(sym)] = float(closes.pct_change().std() * _ANNUALIZE)
-        adv[str(sym)] = float(
-            (grp["close"].astype(float) * grp["volume"].astype(float)).tail(20).median()
-        )
+        tail = grp.tail(20)
+        observed = float((tail["close"].astype(float) * tail["volume"].astype(float)).median())
+        source = dominant_source(tail["volume_source"]) if "volume_source" in tail.columns else None
+        adv[str(sym)] = consolidated_equivalent_adv(observed, source)
     return sigma, adv
 
 

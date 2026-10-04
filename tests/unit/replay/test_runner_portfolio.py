@@ -4,7 +4,7 @@ The runner replays a committee run's PERSISTED verdicts keyed (as_of, symbol)
 with ZERO LLM anything: the token firewall is structural (no LLM import, no
 client seam) and asserted here by making every LLM/synthesis path explode.
 Days without verdicts open no new risk but existing holdings are still
-managed (horizon exits); verdicts for unknown symbols are ignored gracefully;
+managed (horizon exits); verdicts for names with no price data never trade;
 three bankroll configs over one source run get three deterministic run ids.
 """
 
@@ -219,16 +219,18 @@ def test_missing_days_manage_holdings_only(fixture_frames: Any) -> None:  # noqa
     )
 
 
-def test_unknown_symbol_verdict_ignored_gracefully(fixture_frames: Any) -> None:  # noqa: F811
+def test_verdict_without_price_data_never_trades(fixture_frames: Any) -> None:  # noqa: F811
+    """A debated name with no bars can't be priced: it may be recorded as a
+    decision, but it never gets weight or a fill, and the run completes."""
     window = _window(fixture_frames)
     verdicts = [
         _verdict("LIQ", window[0], Action.BUY, 0.9),
-        _verdict("ZZZ", window[0], Action.BUY, 0.95),  # not in universe, no bars
+        _verdict("ZZZ", window[0], Action.BUY, 0.95),  # no bars at all
     ]
     result, _, _ = _run(fixture_frames, verdicts)
     assert result.status == "completed"
     assert not any(f.symbol == "ZZZ" for f in result.fills)
-    assert not any(d["symbol"] == "ZZZ" for d in result.decisions)
+    assert all(d["target_weight"] == 0.0 for d in result.decisions if d["symbol"] == "ZZZ")
     assert any(f.symbol == "LIQ" and f.side == "buy" for f in result.fills)
 
 
@@ -272,3 +274,15 @@ def test_three_bankrolls_same_source_three_distinct_run_ids() -> None:
     with_commission = ReplayConfig(**base, initial_equity=1_000.0, commission_per_order=1.0)
     with_min = ReplayConfig(**base, initial_equity=1_000.0, min_order_notional=25.0)
     assert len({configs[0].run_id, with_commission.run_id, with_min.run_id}) == 3
+
+
+def test_debated_name_outside_tier_universe_is_tradable(fixture_frames: Any) -> None:  # noqa: F811
+    """A source verdict for a name the committee run's discovery layer
+    promoted (here TLT: it has bars but is not in the tier universe) trades.
+    It used to be silently dropped: 28 of the wide campaign's 72 buys."""
+    window = _window(fixture_frames)
+    verdicts = [_verdict("TLT", window[0], Action.BUY, 0.9)]
+    result, _, _ = _run(fixture_frames, verdicts)
+    assert result.status == "completed"
+    buys = [f for f in result.fills if f.symbol == "TLT" and f.side == "buy"]
+    assert buys and buys[0].session == window[1]
