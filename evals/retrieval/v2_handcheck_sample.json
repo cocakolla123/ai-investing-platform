@@ -1,0 +1,210 @@
+[
+  {
+    "query_id": "X04",
+    "query_text": "## Instrument profile\nsymbol: CDNA\nname: CareDx, Inc. Common Stock\nexchange: NASDAQ\nsector: Health Care\nindustry: Health Services\nis_etf: false\nstatus: active\n\n## Fundamentals\nbasis: point-in-time XBRL facts filed <= 2026-08-03; source_ref format xbrl:<symbol>:<tag>:<period_end>:filed-<date>\n### Income statement (TTM)\nrevenue_ttm: n/a\nrevenue_growth_yoy: n/a\nrevenue_cagr_3y: n/a\ngross_profit_ttm: n/a\ngross_margin_ttm: n/a\noperating_income_ttm: n/a\noperating_margin_ttm: n/a\nnet_income_ttm: n/a\nnet_margin_ttm: n/a\neps_diluted_ttm: n/a\ngross_margin_trend_4q: n/a\noperating_margin_trend_4q: n/a\nnet_margin_trend_4q: n/a\n### Balance sheet (latest filed)\ntotal_assets: n/a\ntotal_liabilities: n/a\nshareholders_equity: n/a\nlong_term_debt: n/a\ncash_and_equivalents: n/a\ndebt_to_equity: n/a\n### Cash flow (TTM)\ncfo_ttm: n/a\ncapex_ttm: n/a\nfcf_ttm: n/a\nfcf_margin_ttm: n/a\n### Valuation\nclose: 47.80 USD [derived:close@2026-08-03]\nshares_outstanding: n/a\nmarket_cap: n/a\npe_ttm: n/a\npe_ttm_sector_pctile: n/a (vs 1019 Health Care peers, ascending)\nps_ttm: n/a\nps_ttm_sector_pctile: n/a (vs 1019 Health Care peers, ascending)\npb: n/a\npb_sector_pctile: n/a (vs 1019 Health Care peers, ascending)\nfcf_yield: n/a\nfcf_yield_sector_pctile: n/a (vs 1019 Health Care peers, ascending)\n\n## Quant score\nmodel_version: campaign-v8\nas_of: 2026-08-03\nexpected_excess_return: 0.0403\ndownside_prob: 0.3877\nvol_forecast: 0.5978\nrank: 8\nconfidence: 0.2000\nfeature_coverage: 0.6667\n\n## Price/volume stats\nadv_trend_20_60_pct: 82.5456\nclose: 47.8000\ndist_from_52w_high_pct: 0.0000\ndist_from_52w_low_pct: 313.4948\ndollar_volume: 1720450.7275\nhigh_52w: 47.8000\nlow_52w: 11.5600\nmax_drawdown_52w_pct: -23.6679\nret_120d_pct: 136.5166\nret_20d_pct: 64.3176\nret_250d_pct: 279.6664\nret_60d_pct: 128.3803\nvol_20d_ann_pct: 143.4663\n\n## Peer / relative strength\nsector: Health Care | sector_etf: XLV | benchmark: SPY\nbenchmark_SPY_ret_120d_pct: 9.7638\nbenchmark_SPY_ret_20d_pct: 0.8505\nbenchmark_SPY_ret_60d_pct: 3.5119\nbeta_120d_vs_SPY: 1.2833\nbeta_120d_vs_XLV: 0.7590\nexcess_vs_SPY_120d_pct: 126.7528\nexcess_vs_SPY_20d_pct: 63.4671\nexcess_vs_SPY_60d_pct: 124.8684\nexcess_vs_XLV_120d_pct: 131.8474\nexcess_vs_XLV_20d_pct: 64.1448\nexcess_vs_XLV_60d_pct: 116.3105\nret_120d_pct: 136.5166\nret_20d_pct: 64.3176\nret_60d_pct: 128.3803\nsector_XLV_ret_120d_pct: 4.6692\nsector_XLV_ret_20d_pct: 0.1729\nsector_XLV_ret_60d_pct: 12.0698\n\n## Filing excerpts\nnone\n\n## News digest\nnone\n\n## Macro digest\nAs of 2026-08-03, cross-asset risk indicators point to a sharp de-risking reversal: implied equity volatility collapsed (VIXCLS 15.86 vs 24.17 over the window) and high-yield credit spreads tightened materially (BAMLH0A0HYM2 2.78% vs 3.05%). Simultaneously, the Treasury curve backed up and steepened \u2014 10Y yields rose to 4.75% (from 4.34%) and 2Y yields rose to 4.28% (from 3.84%), while T10Y2Y compressed slightly to 0.45 and T10Y3M steepened to 0.79, both remaining positively sloped (non-inverted). The effective fed funds rate held near 3.63%, essentially flat versus 3.64%, consistent with a policy rate well below prior cycle peaks and no new easing action in the window. Labor conditions firmed modestly (UNRATE 4.20% vs 4.30%) and the Chicago Fed National Financial Conditions Index eased further into looser territory (-0.554 vs -0.471).\n\n",
+    "candidates": [
+      {
+        "entry_id": "lesson:ABBV-2026-05-04:0",
+        "text": "ABBV: buy at conviction 0.98 in unknown-regime/Health Care resolved win (+4.42% over 30 days)."
+      },
+      {
+        "entry_id": "lesson:ABBV-2026-07-02:0",
+        "text": "ABBV: buy at conviction 0.96 in unknown-regime/Health Care resolved normal_uncertainty (-0.54% over 29 days)."
+      },
+      {
+        "entry_id": "lesson:ABBV-2026-07-02:1",
+        "text": "ABBV: a sound decision losing inside its expected downside is not a failure \u2014 do not over-correct on this case."
+      },
+      {
+        "entry_id": "lesson:SOL/USD-2026-03-06:0",
+        "text": "SOL/USD: buy at conviction 0.98 in unknown-regime/unknown-sector resolved normal_uncertainty (-9.70% over 32 days)."
+      },
+      {
+        "entry_id": "review:KO-2026-02-03",
+        "text": "Post-trade review KO: pnl +7.94% over 27d. Worked: the position returned +7.94%; it beat the benchmark by +8.40%; the decision was sound on what was knowable at the time"
+      }
+    ]
+  },
+  {
+    "query_id": "X05",
+    "query_text": "## Instrument profile\nsymbol: LIFE\nname: Ethos Technologies Inc. Class A Common Stock\nexchange: NASDAQ\nsector: Financials\nindustry: Insurance Agents, Brokers and Service\nis_etf: false\nstatus: active\n\n## Fundamentals\nbasis: point-in-time XBRL facts filed <= 2026-06-02; source_ref format xbrl:<symbol>:<tag>:<period_end>:filed-<date>\n### Income statement (TTM)\nrevenue_ttm: n/a\nrevenue_growth_yoy: n/a\nrevenue_cagr_3y: n/a\ngross_profit_ttm: n/a\ngross_margin_ttm: n/a\noperating_income_ttm: n/a\noperating_margin_ttm: n/a\nnet_income_ttm: n/a\nnet_margin_ttm: n/a\neps_diluted_ttm: n/a\ngross_margin_trend_4q: n/a\noperating_margin_trend_4q: n/a\nnet_margin_trend_4q: n/a\n### Balance sheet (latest filed)\ntotal_assets: n/a\ntotal_liabilities: n/a\nshareholders_equity: n/a\nlong_term_debt: n/a\ncash_and_equivalents: n/a\ndebt_to_equity: n/a\n### Cash flow (TTM)\ncfo_ttm: n/a\ncapex_ttm: n/a\nfcf_ttm: n/a\nfcf_margin_ttm: n/a\n### Valuation\nclose: 17.19 USD [derived:close@2026-06-02]\nshares_outstanding: n/a\nmarket_cap: n/a\npe_ttm: n/a\npe_ttm_sector_pctile: n/a (vs 1130 Financials peers, ascending)\nps_ttm: n/a\nps_ttm_sector_pctile: n/a (vs 1130 Financials peers, ascending)\npb: n/a\npb_sector_pctile: n/a (vs 1130 Financials peers, ascending)\nfcf_yield: n/a\nfcf_yield_sector_pctile: n/a (vs 1130 Financials peers, ascending)\n\n## Quant score\nmodel_version: campaign-v8\nas_of: 2026-06-02\nexpected_excess_return: 0.0769\ndownside_prob: 0.4610\nvol_forecast: 0.8758\nrank: 13\nconfidence: 0.2000\nfeature_coverage: 0.5507\n\n## Price/volume stats\nadv_trend_20_60_pct: 67.2523\nclose: 17.1900\ndist_from_52w_high_pct: -43.8327\ndist_from_52w_low_pct: 74.6064\ndollar_volume: 508815.1500\nhigh_52w: 30.6050\nlow_52w: 9.8450\nmax_drawdown_52w_pct: -43.8327\nret_20d_pct: -11.7103\nret_60d_pct: 32.1799\nvol_20d_ann_pct: 167.7414\n\n## Peer / relative strength\nsector: Financials | sector_etf: XLF | benchmark: SPY\nbenchmark_SPY_ret_20d_pct: 5.7882\nbenchmark_SPY_ret_60d_pct: 13.2804\nbeta_120d_vs_SPY: 2.0970\nbeta_120d_vs_XLF: 1.2461\nexcess_vs_SPY_20d_pct: -17.4985\nexcess_vs_SPY_60d_pct: 18.8996\nexcess_vs_XLF_20d_pct: -11.4777\nexcess_vs_XLF_60d_pct: 29.9006\nret_20d_pct: -11.7103\nret_60d_pct: 32.1799\nsector_XLF_ret_20d_pct: -0.2326\nsector_XLF_ret_60d_pct: 2.2794\n\n## Filing excerpts\nnone\n\n## News digest\nnone\n\n## Macro digest\nFront-end Treasury yields rose sharply over the window (2Y +48bp to 4.050%, 3M bill +9bp to 3.780%) while the 10Y rose less (+18bp to 4.470%), compressing the 10Y-2Y spread from 0.720 to 0.410 and steepening 10Y-3M modestly from 0.600 to 0.690. Effective fed funds ticked down 2bp to 3.620%. Credit and volatility measures eased: high-yield OAS tightened 10bp to 2.710% and VIX fell to 15.770 from 16.340. NFCI moved from -0.551 to -0.510, marginally less accommodative but still net-loose. Unemployment held flat at 4.300%. Headline CPI index rose to 332.407 from 330.293 and core PCE price index rose to 129.630 from 129.321 over the window.\n\n",
+    "candidates": [
+      {
+        "entry_id": "lesson:LINK/USD-2026-03-09:0",
+        "text": "LINK/USD: buy at conviction 0.93 in unknown-regime/unknown-sector resolved win (+4.17% over 1 days)."
+      },
+      {
+        "entry_id": "review:BAC-2026-03-03",
+        "text": "Post-trade review BAC: pnl +2.17% over 2d. Worked: the position returned +2.17%; it beat the benchmark by +2.03%; the decision was sound on what was knowable at the time"
+      },
+      {
+        "entry_id": "review:BAC-2026-04-13",
+        "text": "Post-trade review BAC: pnl +1.76% over 1d. Worked: the position returned +1.76%; it beat the benchmark by +0.54%; the decision was sound on what was knowable at the time"
+      },
+      {
+        "entry_id": "review:GOOGL-2026-04-09",
+        "text": "Post-trade review GOOGL: pnl +22.07% over 25d. Worked: the position returned +22.07%; it beat the benchmark by +16.47%; the decision was sound on what was knowable at the time"
+      },
+      {
+        "entry_id": "review:LIN-2026-04-02",
+        "text": "Post-trade review LIN: pnl +0.72% over 32d. Worked: the position returned +0.72%; the decision was sound on what was knowable at the time Failed: it lagged the benchmark by -8.77%"
+      }
+    ]
+  },
+  {
+    "query_id": "X09",
+    "query_text": "## Instrument profile\nsymbol: IBTA\nname: Ibotta, Inc.\nexchange: NYSE\nsector: Communication Services\nindustry: Business Services\nis_etf: false\nstatus: active\n\n## Fundamentals\nbasis: point-in-time XBRL facts filed <= 2026-08-04; source_ref format xbrl:<symbol>:<tag>:<period_end>:filed-<date>\n### Income statement (TTM)\nrevenue_ttm: n/a\nrevenue_growth_yoy: n/a\nrevenue_cagr_3y: n/a\ngross_profit_ttm: n/a\ngross_margin_ttm: n/a\noperating_income_ttm: n/a\noperating_margin_ttm: n/a\nnet_income_ttm: n/a\nnet_margin_ttm: n/a\neps_diluted_ttm: n/a\ngross_margin_trend_4q: n/a\noperating_margin_trend_4q: n/a\nnet_margin_trend_4q: n/a\n### Balance sheet (latest filed)\ntotal_assets: n/a\ntotal_liabilities: n/a\nshareholders_equity: n/a\nlong_term_debt: n/a\ncash_and_equivalents: n/a\ndebt_to_equity: n/a\n### Cash flow (TTM)\ncfo_ttm: n/a\ncapex_ttm: n/a\nfcf_ttm: n/a\nfcf_margin_ttm: n/a\n### Valuation\nclose: 36.43 USD [derived:close@2026-08-04]\nshares_outstanding: n/a\nmarket_cap: n/a\npe_ttm: n/a\npe_ttm_sector_pctile: n/a (vs 166 Communication Services peers, ascending)\nps_ttm: n/a\nps_ttm_sector_pctile: n/a (vs 166 Communication Services peers, ascending)\npb: n/a\npb_sector_pctile: n/a (vs 166 Communication Services peers, ascending)\nfcf_yield: n/a\nfcf_yield_sector_pctile: n/a (vs 166 Communication Services peers, ascending)\n\n## Quant score\nmodel_version: campaign-v8\nas_of: 2026-08-04\nexpected_excess_return: 0.0179\ndownside_prob: 0.3881\nvol_forecast: 0.5674\nrank: 11\nconfidence: 0.2000\nfeature_coverage: 0.6522\n\n## Price/volume stats\nadv_trend_20_60_pct: 12.5661\nclose: 36.4300\ndist_from_52w_high_pct: -2.0040\ndist_from_52w_low_pct: 88.6099\ndollar_volume: 226387.5650\nhigh_52w: 37.1750\nlow_52w: 19.3150\nmax_drawdown_52w_pct: -46.4810\nret_120d_pct: 71.4756\nret_20d_pct: 9.3666\nret_250d_pct: 2.6486\nret_60d_pct: -0.3556\nvol_20d_ann_pct: 190.3994\n\n## Peer / relative strength\nsector: Communication Services | sector_etf: XLC | benchmark: SPY\nbenchmark_SPY_ret_120d_pct: 12.0382\nbenchmark_SPY_ret_20d_pct: 3.1590\nbenchmark_SPY_ret_60d_pct: 5.7022\nbeta_120d_vs_SPY: 0.9816\nbeta_120d_vs_XLC: 1.1266\nexcess_vs_SPY_120d_pct: 59.4374\nexcess_vs_SPY_20d_pct: 6.2076\nexcess_vs_SPY_60d_pct: -6.0578\nexcess_vs_XLC_120d_pct: 75.6316\nexcess_vs_XLC_20d_pct: 8.4478\nexcess_vs_XLC_60d_pct: 3.9403\nret_120d_pct: 71.4756\nret_20d_pct: 9.3666\nret_60d_pct: -0.3556\nsector_XLC_ret_120d_pct: -4.1560\nsector_XLC_ret_20d_pct: 0.9188\nsector_XLC_ret_60d_pct: -4.2959\n\n## Filing excerpts\nnone\n\n## News digest\nnone\n\n## Macro digest\nTreasury yields moved higher across the curve (10Y 4.70%, 2Y 4.25%, 3M 3.91%) while the policy rate held steady (DFF 3.63%, essentially flat vs. prior window). Risk-market indicators eased sharply: high-yield OAS compressed 32bp to 2.73% and VIX fell from 24.17 to 16.50, alongside a further loosening in the Chicago Fed NFCI (-0.554 from -0.471). Headline CPI index level edged down (332.568 from 333.979) while core PCE price index ticked up modestly (130.266 from 130.094). Unemployment declined to 4.20% from 4.30%. Net effect: higher nominal yields and tighter labor market coexist with improving risk sentiment and looser market-based financial conditions.\n\n",
+    "candidates": [
+      {
+        "entry_id": "lesson:SOL/USD-2026-03-06:0",
+        "text": "SOL/USD: buy at conviction 0.98 in unknown-regime/unknown-sector resolved normal_uncertainty (-9.70% over 32 days)."
+      },
+      {
+        "entry_id": "review:AVGO-2026-03-03",
+        "text": "Post-trade review AVGO: pnl +0.12% over 29d. Worked: the position returned +0.12%; it beat the benchmark by +3.54%; the decision was sound on what was knowable at the time"
+      },
+      {
+        "entry_id": "review:BAC-2026-02-03",
+        "text": "Post-trade review BAC: pnl -8.08% over 30d. Worked: the decision was sound on what was knowable at the time Failed: the position returned -8.08%; it lagged the benchmark by -6.89%"
+      },
+      {
+        "entry_id": "review:DIS-2026-06-02",
+        "text": "Post-trade review DIS: pnl -0.32% over 21d. Worked: it beat the benchmark by +2.86%; the decision was sound on what was knowable at the time Failed: the position returned -0.32%"
+      },
+      {
+        "entry_id": "review:KO-2026-07-02",
+        "text": "Post-trade review KO: pnl +7.30% over 29d. Worked: the position returned +7.30%; it beat the benchmark by +7.00%; the decision was sound on what was knowable at the time"
+      }
+    ]
+  },
+  {
+    "query_id": "X10",
+    "query_text": "## Instrument profile\nsymbol: BRCB\nname: Black Rock Coffee Bar, Inc. Class A Common Stock\nexchange: NASDAQ\nsector: Consumer Discretionary\nindustry: Eating and Drinking Places\nis_etf: false\nstatus: active\n\n## Fundamentals\nbasis: point-in-time XBRL facts filed <= 2026-06-11; source_ref format xbrl:<symbol>:<tag>:<period_end>:filed-<date>\n### Income statement (TTM)\nrevenue_ttm: n/a\nrevenue_growth_yoy: n/a\nrevenue_cagr_3y: n/a\ngross_profit_ttm: n/a\ngross_margin_ttm: n/a\noperating_income_ttm: n/a\noperating_margin_ttm: n/a\nnet_income_ttm: n/a\nnet_margin_ttm: n/a\neps_diluted_ttm: n/a\ngross_margin_trend_4q: n/a\noperating_margin_trend_4q: n/a\nnet_margin_trend_4q: n/a\n### Balance sheet (latest filed)\ntotal_assets: n/a\ntotal_liabilities: n/a\nshareholders_equity: n/a\nlong_term_debt: n/a\ncash_and_equivalents: n/a\ndebt_to_equity: n/a\n### Cash flow (TTM)\ncfo_ttm: n/a\ncapex_ttm: n/a\nfcf_ttm: n/a\nfcf_margin_ttm: n/a\n### Valuation\nclose: 7.02 USD [derived:close@2026-06-11]\nshares_outstanding: n/a\nmarket_cap: n/a\npe_ttm: n/a\npe_ttm_sector_pctile: n/a (vs 528 Consumer Discretionary peers, ascending)\nps_ttm: n/a\nps_ttm_sector_pctile: n/a (vs 528 Consumer Discretionary peers, ascending)\npb: n/a\npb_sector_pctile: n/a (vs 528 Consumer Discretionary peers, ascending)\nfcf_yield: n/a\nfcf_yield_sector_pctile: n/a (vs 528 Consumer Discretionary peers, ascending)\n\n## Quant score\nmodel_version: campaign-v8\nas_of: 2026-06-11\nexpected_excess_return: 0.0343\ndownside_prob: 0.4515\nvol_forecast: 0.6853\nrank: 37\nconfidence: 0.2000\nfeature_coverage: 0.6232\n\n## Price/volume stats\nadv_trend_20_60_pct: 19.0633\nclose: 7.0200\ndist_from_52w_high_pct: -75.2119\ndist_from_52w_low_pct: 13.5922\ndollar_volume: 296794.6875\nhigh_52w: 28.3200\nlow_52w: 6.1800\nmax_drawdown_52w_pct: -78.1780\nret_120d_pct: -67.2727\nret_20d_pct: -8.1753\nret_60d_pct: -59.0432\nvol_20d_ann_pct: 90.8022\n\n## Peer / relative strength\nsector: Consumer Discretionary | sector_etf: XLY | benchmark: SPY\nbenchmark_SPY_ret_120d_pct: 10.5110\nbenchmark_SPY_ret_20d_pct: -0.6130\nbenchmark_SPY_ret_60d_pct: 10.2885\nbeta_120d_vs_SPY: 2.0619\nbeta_120d_vs_XLY: 1.6643\nexcess_vs_SPY_120d_pct: -77.7837\nexcess_vs_SPY_20d_pct: -7.5623\nexcess_vs_SPY_60d_pct: -69.3317\nexcess_vs_XLY_120d_pct: -64.1505\nexcess_vs_XLY_20d_pct: -6.1369\nexcess_vs_XLY_60d_pct: -62.0010\nret_120d_pct: -67.2727\nret_20d_pct: -8.1753\nret_60d_pct: -59.0432\nsector_XLY_ret_120d_pct: -3.1222\nsector_XLY_ret_20d_pct: -2.0384\nsector_XLY_ret_60d_pct: 2.9579\n\n## Filing excerpts\nnone\n\n## News digest\nnone\n\n## Macro digest\nFront-to-belly Treasury yields moved sharply higher over the window (DGS2 +61bp to 4.130, DGS10 +37bp to 4.550), while short bills rose only modestly (DGS3MO +9bp to 3.790) and the effective fed funds rate eased slightly (DFF -2bp to 3.620). The 2s10s spread compressed to 0.400 from 0.660 but remains positive, and 10y-3m steepened to 0.670 from 0.480 \u2014 a mixed curve signal reflecting a bear-flattener in the belly against a bull-steepener at the short end. NFCI tightened modestly (-0.506 from -0.568), consistent with the rise in intermediate yields, even as high-yield credit spreads compressed 6bp (BAMLH0A0HYM2 2.780 from 2.840), signaling credit markets remain unconcerned. Equity vol ticked up (VIXCLS 19.440 from 17.650) but stays in a moderate range. Labor market conditions were unchanged (UNRATE flat at 4.300).\n\n",
+    "candidates": [
+      {
+        "entry_id": "lesson:AVAX/USD-2026-04-01:0",
+        "text": "AVAX/USD: buy at conviction 0.82 in unknown-regime/unknown-sector resolved win (+2.46% over 1 days)."
+      },
+      {
+        "entry_id": "lesson:BAC-2026-04-13:0",
+        "text": "BAC: buy at conviction 0.82 in unknown-regime/Financials resolved win (+1.76% over 1 days)."
+      },
+      {
+        "entry_id": "lesson:KO-2026-05-04:0",
+        "text": "KO: buy at conviction 0.87 in unknown-regime/Consumer Staples resolved win (+0.29% over 30 days)."
+      },
+      {
+        "entry_id": "lesson:LINK/USD-2026-03-09:0",
+        "text": "LINK/USD: buy at conviction 0.93 in unknown-regime/unknown-sector resolved win (+4.17% over 1 days)."
+      },
+      {
+        "entry_id": "review:WMT-2026-02-03",
+        "text": "Post-trade review WMT: pnl +1.40% over 30d. Worked: the position returned +1.40%; it beat the benchmark by +2.59%; the decision was sound on what was knowable at the time"
+      }
+    ]
+  },
+  {
+    "query_id": "X13",
+    "query_text": "## Instrument profile\nsymbol: OMER\nname: Omeros Corporation Common Stock\nexchange: NASDAQ\nsector: Health Care\nindustry: Chemicals and Allied Products\nis_etf: false\nstatus: active\n\n## Fundamentals\nbasis: point-in-time XBRL facts filed <= 2026-08-13; source_ref format xbrl:<symbol>:<tag>:<period_end>:filed-<date>\n### Income statement (TTM)\nrevenue_ttm: n/a\nrevenue_growth_yoy: n/a\nrevenue_cagr_3y: n/a\ngross_profit_ttm: n/a\ngross_margin_ttm: n/a\noperating_income_ttm: n/a\noperating_margin_ttm: n/a\nnet_income_ttm: n/a\nnet_margin_ttm: n/a\neps_diluted_ttm: n/a\ngross_margin_trend_4q: n/a\noperating_margin_trend_4q: n/a\nnet_margin_trend_4q: n/a\n### Balance sheet (latest filed)\ntotal_assets: n/a\ntotal_liabilities: n/a\nshareholders_equity: n/a\nlong_term_debt: n/a\ncash_and_equivalents: n/a\ndebt_to_equity: n/a\n### Cash flow (TTM)\ncfo_ttm: n/a\ncapex_ttm: n/a\nfcf_ttm: n/a\nfcf_margin_ttm: n/a\n### Valuation\nclose: 17.33 USD [derived:close@2026-08-13]\nshares_outstanding: n/a\nmarket_cap: n/a\npe_ttm: n/a\npe_ttm_sector_pctile: n/a (vs 1019 Health Care peers, ascending)\nps_ttm: n/a\nps_ttm_sector_pctile: n/a (vs 1019 Health Care peers, ascending)\npb: n/a\npb_sector_pctile: n/a (vs 1019 Health Care peers, ascending)\nfcf_yield: n/a\nfcf_yield_sector_pctile: n/a (vs 1019 Health Care peers, ascending)\n\n## Quant score\nmodel_version: campaign-v8\nas_of: 2026-08-13\nexpected_excess_return: 0.0181\ndownside_prob: 0.3877\nvol_forecast: 0.5688\nrank: 21\nconfidence: 0.2000\nfeature_coverage: 0.6667\n\n## Price/volume stats\nadv_trend_20_60_pct: 30.6825\nclose: 17.3300\ndist_from_52w_high_pct: 0.0000\ndist_from_52w_low_pct: 328.9604\ndollar_volume: 955137.6200\nhigh_52w: 17.3300\nlow_52w: 4.0400\nmax_drawdown_52w_pct: -49.5634\nret_120d_pct: 43.8174\nret_20d_pct: 87.9610\nret_250d_pct: 322.6829\nret_60d_pct: 48.2464\nvol_20d_ann_pct: 110.0602\n\n## Peer / relative strength\nsector: Health Care | sector_etf: XLV | benchmark: SPY\nbenchmark_SPY_ret_120d_pct: 13.4305\nbenchmark_SPY_ret_20d_pct: 3.6179\nbenchmark_SPY_ret_60d_pct: 5.5795\nbeta_120d_vs_SPY: 1.7339\nbeta_120d_vs_XLV: -0.1489\nexcess_vs_SPY_120d_pct: 30.3870\nexcess_vs_SPY_20d_pct: 84.3431\nexcess_vs_SPY_60d_pct: 42.6669\nexcess_vs_XLV_120d_pct: 35.5334\nexcess_vs_XLV_20d_pct: 83.8942\nexcess_vs_XLV_60d_pct: 32.1907\nret_120d_pct: 43.8174\nret_20d_pct: 87.9610\nret_60d_pct: 48.2464\nsector_XLV_ret_120d_pct: 8.2841\nsector_XLV_ret_20d_pct: 4.0667\nsector_XLV_ret_60d_pct: 16.0557\n\n## Filing excerpts\nnone\n\n## News digest\nnone\n\n## Macro digest\nThe curve continued to normalize: 2Y and 10Y Treasury yields rose 44bp and 39bp respectively over the window, pushing the 3M and long end further into positive slope territory (10Y3M at 76bp, up from 58bp) while 2Y10Y stayed positive but flattened modestly to 48bp. Effective fed funds held near 3.63%, essentially flat, even as front-end yields backed up \u2014 a gap between policy rate and bill/note yields worth monitoring. Risk sentiment improved sharply: high-yield OAS compressed 14bp to 2.71% and VIX fell from 18.17 to 14.63, alongside a further loosening in the Chicago Fed National Financial Conditions Index (NFCI -0.549, more negative = looser). Unemployment ticked down to 4.10% from 4.30%. Inflation signals were mixed: the headline CPI index level declined slightly over the window (332.813 from 333.979) while core PCE price index inched up (130.266 from 130.094), consistent with continued but slowing core price pressure.\n\n",
+    "candidates": [
+      {
+        "entry_id": "lesson:ABBV-2026-07-02:2",
+        "text": "ABBV: the path ran +6.01% in favour and -3.66% against before resolving \u2014 size stops to that range."
+      },
+      {
+        "entry_id": "lesson:JPM-2026-03-03:0",
+        "text": "JPM: buy at conviction 0.95 in unknown-regime/Financials resolved win (+1.06% over 29 days)."
+      },
+      {
+        "entry_id": "lesson:JPM-2026-05-04:0",
+        "text": "JPM: buy at conviction 0.95 in unknown-regime/Financials resolved normal_uncertainty (-3.44% over 30 days)."
+      },
+      {
+        "entry_id": "lesson:LINK/USD-2026-03-09:0",
+        "text": "LINK/USD: buy at conviction 0.93 in unknown-regime/unknown-sector resolved win (+4.17% over 1 days)."
+      },
+      {
+        "entry_id": "lesson:LINK/USD-2026-06-05:0",
+        "text": "LINK/USD: buy at conviction 0.98 in unknown-regime/unknown-sector resolved win (+3.62% over 11 days)."
+      }
+    ]
+  },
+  {
+    "query_id": "X17",
+    "query_text": "## Instrument profile\nsymbol: PENG\nname: Penguin Solutions, Inc. Common Stock\nexchange: NASDAQ\nsector: Information Technology\nindustry: Electronic and Other Electrical Equipment\nis_etf: false\nstatus: active\n\n## Fundamentals\nbasis: point-in-time XBRL facts filed <= 2026-07-24; source_ref format xbrl:<symbol>:<tag>:<period_end>:filed-<date>\n### Income statement (TTM)\nrevenue_ttm: n/a\nrevenue_growth_yoy: n/a\nrevenue_cagr_3y: n/a\ngross_profit_ttm: n/a\ngross_margin_ttm: n/a\noperating_income_ttm: n/a\noperating_margin_ttm: n/a\nnet_income_ttm: n/a\nnet_margin_ttm: n/a\neps_diluted_ttm: n/a\ngross_margin_trend_4q: n/a\noperating_margin_trend_4q: n/a\nnet_margin_trend_4q: n/a\n### Balance sheet (latest filed)\ntotal_assets: n/a\ntotal_liabilities: n/a\nshareholders_equity: n/a\nlong_term_debt: n/a\ncash_and_equivalents: n/a\ndebt_to_equity: n/a\n### Cash flow (TTM)\ncfo_ttm: n/a\ncapex_ttm: n/a\nfcf_ttm: n/a\nfcf_margin_ttm: n/a\n### Valuation\nclose: 53.79 USD [derived:close@2026-07-24]\nshares_outstanding: n/a\nmarket_cap: n/a\npe_ttm: n/a\npe_ttm_sector_pctile: n/a (vs 763 Information Technology peers, ascending)\nps_ttm: n/a\nps_ttm_sector_pctile: n/a (vs 763 Information Technology peers, ascending)\npb: n/a\npb_sector_pctile: n/a (vs 763 Information Technology peers, ascending)\nfcf_yield: n/a\nfcf_yield_sector_pctile: n/a (vs 763 Information Technology peers, ascending)\n\n## Quant score\nmodel_version: campaign-v8\nas_of: 2026-07-24\nexpected_excess_return: 0.0360\ndownside_prob: 0.4610\nvol_forecast: 0.9427\nrank: 17\nconfidence: 0.2000\nfeature_coverage: 0.6667\n\n## Price/volume stats\nadv_trend_20_60_pct: 42.3702\nclose: 53.7900\ndist_from_52w_high_pct: -33.8376\ndist_from_52w_low_pct: 231.4233\ndollar_volume: 9494317.7875\nhigh_52w: 81.3000\nlow_52w: 16.2300\nmax_drawdown_52w_pct: -44.5697\nret_120d_pct: 180.2292\nret_20d_pct: -19.2282\nret_250d_pct: 113.7493\nret_60d_pct: 91.3894\nvol_20d_ann_pct: 154.3584\n\n## Peer / relative strength\nsector: Information Technology | sector_etf: XLK | benchmark: SPY\nbenchmark_SPY_ret_120d_pct: 7.3553\nbenchmark_SPY_ret_20d_pct: 0.6305\nbenchmark_SPY_ret_60d_pct: 4.0922\nbeta_120d_vs_SPY: 3.6284\nbeta_120d_vs_XLK: 2.2418\nexcess_vs_SPY_120d_pct: 172.8740\nexcess_vs_SPY_20d_pct: -19.8587\nexcess_vs_SPY_60d_pct: 87.2973\nexcess_vs_XLK_120d_pct: 157.6938\nexcess_vs_XLK_20d_pct: -14.5199\nexcess_vs_XLK_60d_pct: 79.8350\nret_120d_pct: 180.2292\nret_20d_pct: -19.2282\nret_60d_pct: 91.3894\nsector_XLK_ret_120d_pct: 22.5354\nsector_XLK_ret_20d_pct: -4.7082\nsector_XLK_ret_60d_pct: 11.5544\n\n## Filing excerpts\nnone\n\n## News digest\nnone\n\n## Macro digest\nRisk-sentiment indicators improved sharply while the rates complex moved higher and flatter. High-yield OAS compressed ~42bp to 2.79% and VIX fell from 27.44 to 18.58, consistent with a broad de-risking unwind. Simultaneously, yields rose across the curve (2y +41bp to 4.37%, 10y +29bp to 4.71%, 3m +22bp to 3.95%), and the 2s10s spread compressed to 0.36% from 0.46%, a flattening move even as the curve stays positively sloped. The Fed funds effective rate was essentially flat near 3.63%. NFCI fell to -0.552 (looser financial conditions) despite higher yields, an internally inconsistent signal worth flagging. Unemployment ticked down to 4.2% from 4.3%.\n\n",
+    "candidates": [
+      {
+        "entry_id": "lesson:AVAX/USD-2026-04-01:0",
+        "text": "AVAX/USD: buy at conviction 0.82 in unknown-regime/unknown-sector resolved win (+2.46% over 1 days)."
+      },
+      {
+        "entry_id": "lesson:LINK/USD-2026-03-09:0",
+        "text": "LINK/USD: buy at conviction 0.93 in unknown-regime/unknown-sector resolved win (+4.17% over 1 days)."
+      },
+      {
+        "entry_id": "lesson:LINK/USD-2026-06-05:0",
+        "text": "LINK/USD: buy at conviction 0.98 in unknown-regime/unknown-sector resolved win (+3.62% over 11 days)."
+      },
+      {
+        "entry_id": "lesson:MSFT-2026-03-03:1",
+        "text": "MSFT: a sound decision losing inside its expected downside is not a failure \u2014 do not over-correct on this case."
+      },
+      {
+        "entry_id": "review:LINK/USD-2026-03-09",
+        "text": "Post-trade review LINK/USD: pnl +4.17% over 1d. Worked: the position returned +4.17%; it beat the benchmark by +4.33%; the decision was sound on what was knowable at the time"
+      }
+    ]
+  },
+  {
+    "query_id": "X18",
+    "query_text": "## Instrument profile\nsymbol: DGXX\nname: Digi Power X Inc. Subordinate Voting Shares\nexchange: NASDAQ\nsector: Financials\nindustry: Nondepository Credit Institutions\nis_etf: false\nstatus: active\n\n## Fundamentals\nbasis: point-in-time XBRL facts filed <= 2026-05-07; source_ref format xbrl:<symbol>:<tag>:<period_end>:filed-<date>\n### Income statement (TTM)\nrevenue_ttm: n/a\nrevenue_growth_yoy: n/a\nrevenue_cagr_3y: n/a\ngross_profit_ttm: n/a\ngross_margin_ttm: n/a\noperating_income_ttm: n/a\noperating_margin_ttm: n/a\nnet_income_ttm: n/a\nnet_margin_ttm: n/a\neps_diluted_ttm: n/a\ngross_margin_trend_4q: n/a\noperating_margin_trend_4q: n/a\nnet_margin_trend_4q: n/a\n### Balance sheet (latest filed)\ntotal_assets: n/a\ntotal_liabilities: n/a\nshareholders_equity: n/a\nlong_term_debt: n/a\ncash_and_equivalents: n/a\ndebt_to_equity: n/a\n### Cash flow (TTM)\ncfo_ttm: n/a\ncapex_ttm: n/a\nfcf_ttm: n/a\nfcf_margin_ttm: n/a\n### Valuation\nclose: 6.19 USD [derived:close@2026-05-07]\nshares_outstanding: n/a\nmarket_cap: n/a\npe_ttm: n/a\npe_ttm_sector_pctile: n/a (vs 1112 Financials peers, ascending)\nps_ttm: n/a\nps_ttm_sector_pctile: n/a (vs 1112 Financials peers, ascending)\npb: n/a\npb_sector_pctile: n/a (vs 1112 Financials peers, ascending)\nfcf_yield: n/a\nfcf_yield_sector_pctile: n/a (vs 1112 Financials peers, ascending)\n\n## Quant score\nmodel_version: campaign-v8\nas_of: 2026-05-07\nexpected_excess_return: 0.0667\ndownside_prob: 0.4610\nvol_forecast: 0.9519\nrank: 12\nconfidence: 0.2000\nfeature_coverage: 0.6667\n\n## Price/volume stats\nadv_trend_20_60_pct: 133.2499\nclose: 6.1900\ndist_from_52w_high_pct: -1.3546\ndist_from_52w_low_pct: 379.8450\ndollar_volume: 314305.2450\nhigh_52w: 6.2750\nlow_52w: 1.2900\nmax_drawdown_52w_pct: -69.7211\nret_120d_pct: 50.7917\nret_20d_pct: 161.1814\nret_250d_pct: 319.6610\nret_60d_pct: 162.2881\nvol_20d_ann_pct: 151.4552\n\n## Peer / relative strength\nsector: Financials | sector_etf: XLF | benchmark: SPY\nbenchmark_SPY_ret_120d_pct: 7.6642\nbenchmark_SPY_ret_20d_pct: 7.5995\nbenchmark_SPY_ret_60d_pct: 5.9942\nbeta_120d_vs_SPY: 4.0895\nbeta_120d_vs_XLF: 1.0571\nexcess_vs_SPY_120d_pct: 43.1275\nexcess_vs_SPY_20d_pct: 153.5819\nexcess_vs_SPY_60d_pct: 156.2939\nexcess_vs_XLF_120d_pct: 53.9186\nexcess_vs_XLF_20d_pct: 160.7528\nexcess_vs_XLF_60d_pct: 165.5316\nret_120d_pct: 50.7917\nret_20d_pct: 161.1814\nret_60d_pct: 162.2881\nsector_XLF_ret_120d_pct: -3.1269\nsector_XLF_ret_20d_pct: 0.4286\nsector_XLF_ret_60d_pct: -3.2435\n\n## Filing excerpts\nnone\n\n## News digest\nnone\n\n## Macro digest\nSince the prior window, the Treasury curve has moved with the 2yr (3.47%\u21923.87%) rising more than the 10yr (4.15%\u21924.36%), narrowing 2s10s by 19bp to 0.49, while the 3-month bill barely moved (3.62%\u21923.69%), pushing 10y-3m out to 0.72 from 0.53. Fed funds (effective, DFF) is unchanged at 3.64%. The 2yr note now trades above the current effective fed funds rate, a reversal from the prior window when it sat below it, consistent with the market pricing in fewer near-term cuts than before. Financial conditions (NFCI) tightened modestly, moving from -0.573 to -0.510, while high-yield credit spreads (HY OAS) were flat at 2.79, showing no credit-market stress despite the rates repricing. VIX rose from 15.38 to 17.08, a modest but not dramatic increase in equity volatility. Headline CPI index level rose from 327.460 to 330.293 and core PCE price index rose from 128.901 to 129.279 over the window. Unemployment ticked down to 4.30% from 4.40%.\n\n",
+    "candidates": [
+      {
+        "entry_id": "lesson:JPM-2026-03-03:1",
+        "text": "JPM: the path ran +3.46% in favour and -4.51% against before resolving \u2014 size stops to that range."
+      },
+      {
+        "entry_id": "review:BAC-2026-03-03",
+        "text": "Post-trade review BAC: pnl +2.17% over 2d. Worked: the position returned +2.17%; it beat the benchmark by +2.03%; the decision was sound on what was knowable at the time"
+      },
+      {
+        "entry_id": "review:BAC-2026-04-13",
+        "text": "Post-trade review BAC: pnl +1.76% over 1d. Worked: the position returned +1.76%; it beat the benchmark by +0.54%; the decision was sound on what was knowable at the time"
+      },
+      {
+        "entry_id": "review:JPM-2026-03-03",
+        "text": "Post-trade review JPM: pnl +1.06% over 29d. Worked: the position returned +1.06%; it beat the benchmark by +4.48%; the decision was sound on what was knowable at the time"
+      },
+      {
+        "entry_id": "review:LINK/USD-2026-03-09",
+        "text": "Post-trade review LINK/USD: pnl +4.17% over 1d. Worked: the position returned +4.17%; it beat the benchmark by +4.33%; the decision was sound on what was knowable at the time"
+      }
+    ]
+  },
+  {
+    "query_id": "X29",
+    "query_text": "## Instrument profile\nsymbol: FSLY\nname: Fastly, Inc. Class A Common Stock\nexchange: NASDAQ\nsector: Information Technology\nindustry: Business Services\nis_etf: false\nstatus: active\n\n## Fundamentals\nbasis: point-in-time XBRL facts filed <= 2026-04-20; source_ref format xbrl:<symbol>:<tag>:<period_end>:filed-<date>\n### Income statement (TTM)\nrevenue_ttm: n/a\nrevenue_growth_yoy: n/a\nrevenue_cagr_3y: n/a\ngross_profit_ttm: n/a\ngross_margin_ttm: n/a\noperating_income_ttm: n/a\noperating_margin_ttm: n/a\nnet_income_ttm: n/a\nnet_margin_ttm: n/a\neps_diluted_ttm: n/a\ngross_margin_trend_4q: n/a\noperating_margin_trend_4q: n/a\nnet_margin_trend_4q: n/a\n### Balance sheet (latest filed)\ntotal_assets: n/a\ntotal_liabilities: n/a\nshareholders_equity: n/a\nlong_term_debt: n/a\ncash_and_equivalents: n/a\ndebt_to_equity: n/a\n### Cash flow (TTM)\ncfo_ttm: n/a\ncapex_ttm: n/a\nfcf_ttm: n/a\nfcf_margin_ttm: n/a\n### Valuation\nclose: 25.41 USD [derived:close@2026-04-20]\nshares_outstanding: n/a\nmarket_cap: n/a\npe_ttm: n/a\npe_ttm_sector_pctile: n/a (vs 755 Information Technology peers, ascending)\nps_ttm: n/a\nps_ttm_sector_pctile: n/a (vs 755 Information Technology peers, ascending)\npb: n/a\npb_sector_pctile: n/a (vs 755 Information Technology peers, ascending)\nfcf_yield: n/a\nfcf_yield_sector_pctile: n/a (vs 755 Information Technology peers, ascending)\n\n## Quant score\nmodel_version: campaign-v8\nas_of: 2026-04-20\nexpected_excess_return: 0.0206\ndownside_prob: 0.4610\nvol_forecast: 0.8048\nrank: 24\nconfidence: 0.2000\nfeature_coverage: 0.6667\n\n## Price/volume stats\nadv_trend_20_60_pct: 49.3110\nclose: 25.4100\ndist_from_52w_high_pct: -24.1945\ndist_from_52w_low_pct: 388.6538\ndollar_volume: 13088545.6450\nhigh_52w: 33.5200\nlow_52w: 5.2000\nmax_drawdown_52w_pct: -37.4702\nret_120d_pct: 205.2252\nret_20d_pct: 0.5142\nret_250d_pct: 388.6538\nret_60d_pct: 170.7512\nvol_20d_ann_pct: 148.5436\n\n## Peer / relative strength\nsector: Information Technology | sector_etf: XLK | benchmark: SPY\nbenchmark_SPY_ret_120d_pct: 5.2440\nbenchmark_SPY_ret_20d_pct: 9.2742\nbenchmark_SPY_ret_60d_pct: 3.1501\nbeta_120d_vs_SPY: 0.1764\nbeta_120d_vs_XLK: 0.2849\nexcess_vs_SPY_120d_pct: 199.9812\nexcess_vs_SPY_20d_pct: -8.7600\nexcess_vs_SPY_60d_pct: 167.6011\nexcess_vs_XLK_120d_pct: 199.6442\nexcess_vs_XLK_20d_pct: -13.8690\nexcess_vs_XLK_60d_pct: 163.9393\nret_120d_pct: 205.2252\nret_20d_pct: 0.5142\nret_60d_pct: 170.7512\nsector_XLK_ret_120d_pct: 5.5810\nsector_XLK_ret_20d_pct: 14.3832\nsector_XLK_ret_60d_pct: 6.8119\n\n## Filing excerpts\nnone\n\n## News digest\nnone\n\n## Macro digest\nYields rose across the curve over the window while the 2Y outpaced the 10Y, flattening 2s10s from 73bp to 54bp; the 3M-10Y spread held near flat (55bp). Fed funds effective was unchanged at 3.64%, consistent with policy on hold. CPI and core PCE price indices both moved higher over the window. NFCI tightened modestly (from -0.547 to -0.465) but remains net-accommodative. High-yield OAS was essentially unchanged (2.87% vs 2.88%), showing no credit stress, even as VIX jumped from 14.08 to 18.87 (+34%). Unemployment held at 4.3%.\n\n",
+    "candidates": [
+      {
+        "entry_id": "lesson:AVAX/USD-2026-04-01:0",
+        "text": "AVAX/USD: buy at conviction 0.82 in unknown-regime/unknown-sector resolved win (+2.46% over 1 days)."
+      },
+      {
+        "entry_id": "lesson:JPM-2026-03-03:0",
+        "text": "JPM: buy at conviction 0.95 in unknown-regime/Financials resolved win (+1.06% over 29 days)."
+      },
+      {
+        "entry_id": "lesson:LINK/USD-2026-03-09:0",
+        "text": "LINK/USD: buy at conviction 0.93 in unknown-regime/unknown-sector resolved win (+4.17% over 1 days)."
+      },
+      {
+        "entry_id": "review:BAC-2026-04-13",
+        "text": "Post-trade review BAC: pnl +1.76% over 1d. Worked: the position returned +1.76%; it beat the benchmark by +0.54%; the decision was sound on what was knowable at the time"
+      },
+      {
+        "entry_id": "review:WMT-2026-02-03",
+        "text": "Post-trade review WMT: pnl +1.40% over 30d. Worked: the position returned +1.40%; it beat the benchmark by +2.59%; the decision was sound on what was knowable at the time"
+      }
+    ]
+  }
+]
