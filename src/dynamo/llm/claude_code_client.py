@@ -453,6 +453,7 @@ class ClaudeCodeResearchModel:
                         schema=schema,
                         model_tier=model_tier,
                         max_tokens=max_tokens,
+                        trace=trace,
                     )
                 raise
             except ClaudeCodeError as exc:

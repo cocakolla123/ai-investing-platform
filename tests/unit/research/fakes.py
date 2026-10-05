@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 
@@ -27,9 +27,11 @@ class FakeResearchModel:
         schema: dict[str, Any],
         model_tier: str,
         max_tokens: int = 4096,
+        trace: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.calls.append(
             {
+                "trace": dict(trace or {}),
                 "role": role,
                 "system": system,
                 "context": context,

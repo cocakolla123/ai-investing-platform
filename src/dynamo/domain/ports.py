@@ -6,7 +6,7 @@ execution/) provide implementations, injected at the composition root.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -166,7 +166,12 @@ class ResearchModel(Protocol):
         schema: dict[str, Any],
         model_tier: str,  # screen | analyst | arbiter
         max_tokens: int = 4096,
+        trace: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]: ...
+
+    # ``trace``: optional ledger-trace fields the caller knows (``role``,
+    # ``request_id``, ``retrieved_ids``); recorded in cost_ledger, never sent
+    # to the model.
 
     def submit_batch(
         self, requests: Sequence[dict[str, Any]]

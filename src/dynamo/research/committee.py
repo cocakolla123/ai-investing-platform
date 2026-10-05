@@ -445,7 +445,14 @@ class CommitteeEngine:
 
     # --- single deep dive (sequential; batch path uses build_batch_requests) ---
 
-    def _call_stage(self, stage: str, symbol: str, as_of: date, context: str) -> dict[str, Any]:
+    def _call_stage(
+        self,
+        stage: str,
+        symbol: str,
+        as_of: date,
+        context: str,
+        retrieved_ids: Sequence[str] = (),
+    ) -> dict[str, Any]:
         prompt_name, schema_key, tier = STAGES[stage]
         prompt = self._prompts[prompt_name]
         return self._model.complete_json(
@@ -456,6 +463,13 @@ class CommitteeEngine:
             schema=self._schemas[schema_key],
             model_tier=tier,
             max_tokens=self._max_tokens[stage],
+            # Ledger trace (eval Phase 4): the same request id replay uses and
+            # the journal entries retrieved into this dive's context.
+            trace={
+                "role": stage,
+                "request_id": custom_id_for(as_of, symbol, stage),
+                "retrieved_ids": list(retrieved_ids),
+            },
         )
 
     def run_deep_dive(
@@ -466,7 +480,8 @@ class CommitteeEngine:
         quant_score: QuantScore | None = None,
         journal_context_used: Sequence[str] = (),
     ) -> tuple[DossierAnalysis, AdvocateBrief, AdvocateBrief, CommitteeVerdict]:
-        dossier_raw = self._call_stage("dossier", symbol, as_of, context)
+        ids = tuple(journal_context_used)  # retrieved into the context: traced per call
+        dossier_raw = self._call_stage("dossier", symbol, as_of, context, ids)
         dossier = _validated(
             DossierAnalysis,
             _filtered_payload(
@@ -485,24 +500,28 @@ class CommitteeEngine:
         if self._parallel_advocates:
             # Neither advocate reads the other's brief, so they can overlap.
             with ThreadPoolExecutor(max_workers=2, thread_name_prefix="advocate") as pool:
-                bull_future = pool.submit(self._call_stage, "bull", symbol, as_of, advocate_context)
-                bear_future = pool.submit(self._call_stage, "bear", symbol, as_of, advocate_context)
+                bull_future = pool.submit(
+                    self._call_stage, "bull", symbol, as_of, advocate_context, ids
+                )
+                bear_future = pool.submit(
+                    self._call_stage, "bear", symbol, as_of, advocate_context, ids
+                )
                 bull_raw, bear_raw = bull_future.result(), bear_future.result()
         else:
-            bull_raw = self._call_stage("bull", symbol, as_of, advocate_context)
+            bull_raw = self._call_stage("bull", symbol, as_of, advocate_context, ids)
         bull = _validated(
             AdvocateBrief,
             _filtered_payload(AdvocateBrief, bull_raw, {"symbol": symbol, "side": Side.BULL}),
         )
         if bear_raw is None:
-            bear_raw = self._call_stage("bear", symbol, as_of, advocate_context)
+            bear_raw = self._call_stage("bear", symbol, as_of, advocate_context, ids)
         bear = _validated(
             AdvocateBrief,
             _filtered_payload(AdvocateBrief, bear_raw, {"symbol": symbol, "side": Side.BEAR}),
         )
 
         arb_context = arbiter_context_for(context, dossier_raw, bull_raw, bear_raw, quant_score)
-        arbiter_raw = self._call_stage("arbiter", symbol, as_of, arb_context)
+        arbiter_raw = self._call_stage("arbiter", symbol, as_of, arb_context, ids)
         verdict = self.assemble_verdict(
             symbol=symbol,
             as_of=as_of,

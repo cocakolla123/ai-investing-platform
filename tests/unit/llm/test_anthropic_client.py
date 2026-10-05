@@ -315,3 +315,25 @@ def test_wire_params_have_no_tool_keys_on_sync_and_batch_paths() -> None:
     (requests,) = messages.batches.created_with
     for entry in requests:
         assert not BANNED_PARAM_KEYS & set(entry["params"])
+
+
+def test_trace_fields_reach_the_ledger() -> None:
+    """The nightly committee passes its request id and retrieved journal ids;
+    the API client records them (eval follow-up, tracing gap)."""
+    messages = StubMessages([make_response(GOOD)])
+    client, _, writer = make_client(messages)
+    client.complete_json(
+        role="bull",
+        system="SYSTEM",
+        context="CONTEXT",
+        instruction="INSTRUCTION",
+        schema=SCHEMA,
+        model_tier="analyst",
+        trace={"request_id": "2026-10-05-KO-bull", "retrieved_ids": ["lesson:KO:0"]},
+    )
+    (entry,) = writer.entries
+    assert entry.trace is not None
+    assert entry.trace.role == "bull"
+    assert entry.trace.request_id == "2026-10-05-KO-bull"
+    assert entry.trace.retrieved_ids == ("lesson:KO:0",)
+    assert "trace" not in messages.calls[0]  # never sent to the model

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import Any
 
 import anthropic
@@ -211,7 +211,9 @@ class AnthropicClient:
         schema: dict[str, Any],
         model_tier: str,
         max_tokens: int = 4096,
+        trace: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        extra = trace or {}
         model = self._model_for(model_tier)
         for attempt in range(2):  # one retry on invalid output
             self._meter.check_budget()
@@ -232,7 +234,9 @@ class AnthropicClient:
                 model=model,
                 batch=False,
                 trace=CallTrace(
-                    role=role,
+                    role=str(extra.get("role") or role),
+                    request_id=extra.get("request_id"),
+                    retrieved_ids=CallTrace.ids(extra.get("retrieved_ids")),
                     prompt_hash=CallTrace.hash_prompt(system),
                     latency_ms=latency_ms,
                     attempt=attempt + 1,

@@ -125,5 +125,9 @@ Every model call writes one `cost_ledger` row (migration 0023) with:
 - the API-equivalent cost.
 
 Each replay day also records wall-clock seconds per stage in
-`validation.jsonl`. Nightly paper committee calls fill the same columns, except for
-the request id and the retrieved ids: only the replay path passes those through today.
+`validation.jsonl`. Nightly paper committee calls fill the same columns,
+including the request id and the retrieved journal ids (added 2026-10-05:
+`CommitteeEngine._call_stage` passes them on the synchronous path the
+Claude Code backend always uses). The API batch path, used only with the
+metered API backend and not run nightly, still writes its ledger rows
+without trace fields.

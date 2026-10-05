@@ -82,6 +82,21 @@ def test_parallel_advocates_same_verdict_and_both_calls() -> None:
     assert results[True] == results[False]
 
 
+def test_every_stage_traces_its_request_id_and_retrieved_journal_ids() -> None:
+    """Nightly paper path: each stage call carries the request id replay uses
+    (custom_id_for) and the journal ids retrieved into the dive's context."""
+    engine, model = make_engine()
+    engine.run_deep_dive(
+        "ACME", AS_OF, "CONTEXT", make_quant(0.05), journal_context_used=["j-1", "exp-2"]
+    )
+    traces = [c["trace"] for c in model.calls]
+    assert [t["role"] for t in traces] == ["dossier", "bull", "bear", "arbiter"]
+    assert [t["request_id"] for t in traces] == [
+        custom_id_for(AS_OF, "ACME", stage) for stage in ("dossier", "bull", "bear", "arbiter")
+    ]
+    assert all(t["retrieved_ids"] == ["j-1", "exp-2"] for t in traces)
+
+
 def make_quant(eer: float | None) -> QuantScore:
     return QuantScore(symbol="ACME", as_of=AS_OF, model_version="qm-1", expected_excess_return=eer)
 

@@ -293,6 +293,15 @@ class TestApiFallback:
         assert call["model_tier"] == "analyst"
         assert call["schema"] == SCHEMA
 
+    def test_fallback_forwards_the_trace(self) -> None:
+        api = self._FakeApi()
+        settings = make_settings(claude_code_fallback_to_api=True)
+        runner = FakeRunner([CliResult(1, "", "usage limit reached")])
+        client, _ = make_client(runner, settings=settings, api_fallback=api)
+        trace = {"role": "dossier", "request_id": "r1", "retrieved_ids": ["j1"]}
+        complete(client, trace=trace)
+        assert api.calls[0]["trace"] == trace
+
     def test_fallback_flag_without_client_still_raises(self) -> None:
         settings = make_settings(claude_code_fallback_to_api=True)
         runner = FakeRunner([CliResult(1, "", "usage limit reached")])
