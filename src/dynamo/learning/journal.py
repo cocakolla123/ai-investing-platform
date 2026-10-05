@@ -215,6 +215,7 @@ def lesson_entries(
     *,
     strategy: str | None = None,
     regime_at_write: str | None = None,
+    sectors: Sequence[str] = (),
 ) -> list[JournalEntry]:
     """One journal entry per extracted lesson (doc 10 §6)."""
     return [
@@ -224,6 +225,7 @@ def lesson_entries(
             symbols=(review.symbol,),
             strategy=strategy,
             regime_at_write=regime_at_write,
+            sectors=tuple(sectors),
             text=lesson,
             refs={"trade_id": review.trade_id},
             created_at=created_at,

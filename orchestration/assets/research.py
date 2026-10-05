@@ -1565,6 +1565,21 @@ def _persist_opinions(
     )
 
 
+def _journal_meta(
+    dynamo: DynamoResource, symbol: str, written_at: datetime, strategy: str | None = None
+) -> dict[str, Any]:
+    """Metadata for a nightly journal entry (docs/journal_metadata.md): the
+    sleeve if known, the regime on the write date (``regime_states`` on or
+    before it, never later), and today's sectors of the symbol."""
+    from dynamo.learning.journal_meta import entry_sectors
+
+    return {
+        "strategy": strategy,
+        "regime_at_write": _regime_at(dynamo, written_at.date()),
+        "sectors": entry_sectors([symbol], _sectors_for(dynamo, [symbol])),
+    }
+
+
 def _persist_verdict(dynamo: DynamoResource, verdict: Any) -> None:
     from dynamo.learning.journal import thesis_entry
 
@@ -1584,7 +1599,13 @@ def _persist_verdict(dynamo: DynamoResource, verdict: Any) -> None:
     )
     # Journal write path (doc 10 §6): every persisted verdict leaves a thesis
     # entry; the review/lesson entries follow in post_trade_reviews.
-    _write_journal_entries(dynamo, [thesis_entry(verdict, utcnow())])
+    # Metadata per docs/journal_metadata.md: regime on the write date and
+    # today's sectors. No strategy: the sleeve is assigned later, by the
+    # decision context.
+    now = utcnow()
+    _write_journal_entries(
+        dynamo, [thesis_entry(verdict, now, **_journal_meta(dynamo, verdict.symbol, now))]
+    )
 
 
 def _opinion_payloads(

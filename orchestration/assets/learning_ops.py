@@ -24,7 +24,12 @@ from sqlalchemy import func, select
 
 from dynamo.persistence import schema
 from orchestration.assets.portfolio_exec import _latest_prices, _portfolio_state
-from orchestration.assets.research import _read_df, _since, _write_journal_entries
+from orchestration.assets.research import (
+    _journal_meta,
+    _read_df,
+    _since,
+    _write_journal_entries,
+)
 from orchestration.resources import DynamoResource, utcnow
 
 LEARNING_GROUP = "learning"
@@ -139,13 +144,13 @@ def post_trade_reviews(context: AssetExecutionContext, dynamo: DynamoResource) -
         written += 1
         # Journal write path (doc 10 §6): each review leaves a review entry
         # plus one entry per extracted lesson, embedded for retrieval.
+        # Metadata per docs/journal_metadata.md: the trade's sleeve, the
+        # regime on the write date, and today's sectors.
         now = utcnow()
+        meta = _journal_meta(dynamo, review.symbol, now, strategy=dc.sleeve.value)
         journal_written += _write_journal_entries(
             dynamo,
-            [
-                review_entry(review, now, strategy=dc.sleeve.value),
-                *lesson_entries(review, now, strategy=dc.sleeve.value),
-            ],
+            [review_entry(review, now, **meta), *lesson_entries(review, now, **meta)],
         )
     return MaterializeResult(
         metadata={"reviews": written, "skipped": skipped, "journal_entries": journal_written}

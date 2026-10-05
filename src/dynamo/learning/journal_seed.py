@@ -24,8 +24,8 @@ Two honesty constraints shape the mapping:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, date, datetime
 
 from dynamo.domain.models.learning import (
     Assessment,
@@ -38,6 +38,7 @@ from dynamo.domain.models.learning import (
     PostTradeReview,
 )
 from dynamo.learning.journal import lesson_entries, review_entry
+from dynamo.learning.journal_meta import entry_sectors, regime_on_or_before
 
 SEED_PROMPT_VERSION = "experience-seed-1.0.0"
 SEED_MODEL_ID = "deterministic-experience-seed"  # provenance: no LLM ran
@@ -177,25 +178,39 @@ def _knowable_at(exp: DecisionExperience) -> datetime:
     return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=UTC)
 
 
-def entries_for(exp: DecisionExperience) -> list[JournalEntry]:
+def entries_for(
+    exp: DecisionExperience,
+    *,
+    regime_history: Sequence[tuple[date, str]] = (),
+    sector_by_symbol: Mapping[str, str | None] | None = None,
+) -> list[JournalEntry]:
     """Review + lesson entries for one experience, stamped and provenanced.
 
     Provenance rides in ``refs`` so a reader (and any future firewall audit)
     can tell a replay-derived entry from a live one — ``journal_entries`` has
     no source column of its own.
+
+    Metadata follows docs/journal_metadata.md: ``regime_at_write`` is the
+    regime on the entry's write date (the exit), looked up in
+    ``regime_history`` with nothing after that date. It used to be the
+    experience's decision-date regime, a different quantity (always NULL in
+    practice). Sectors: the experience's own, else today's from
+    ``sector_by_symbol``.
     """
     review = experience_review(exp)
     created_at = _knowable_at(exp)
-    sectors = (exp.sector,) if exp.sector else ()
+    if exp.sector and exp.sector.strip().lower() != "unknown":
+        sectors: tuple[str, ...] = (exp.sector,)
+    else:
+        sectors = entry_sectors([exp.symbol], sector_by_symbol or {})
+    meta = {
+        "strategy": exp.sleeve,
+        "regime_at_write": regime_on_or_before(regime_history, created_at.date()),
+        "sectors": sectors,
+    }
     entries = [
-        review_entry(
-            review,
-            created_at,
-            strategy=exp.sleeve,
-            regime_at_write=exp.regime,
-            sectors=sectors,
-        ),
-        *lesson_entries(review, created_at, strategy=exp.sleeve, regime_at_write=exp.regime),
+        review_entry(review, created_at, **meta),
+        *lesson_entries(review, created_at, **meta),
     ]
     refs = {
         "experience_id": exp.id,
@@ -207,11 +222,22 @@ def entries_for(exp: DecisionExperience) -> list[JournalEntry]:
     return [entry.model_copy(update={"refs": {**entry.refs, **refs}}) for entry in entries]
 
 
-def seed_entries(experiences: Sequence[DecisionExperience]) -> list[JournalEntry]:
-    """Deduped, deterministically ordered journal entries for a set of rows."""
+def seed_entries(
+    experiences: Sequence[DecisionExperience],
+    *,
+    live_regimes: Sequence[tuple[date, str]] = (),
+    replay_regimes: Sequence[tuple[date, str]] = (),
+    sector_by_symbol: Mapping[str, str | None] | None = None,
+) -> list[JournalEntry]:
+    """Deduped, deterministically ordered journal entries for a set of rows.
+
+    Replay-derived experiences take their write-date regime from the replay's
+    own per-session regime; nightly ones from ``regime_states``.
+    """
     out: list[JournalEntry] = []
     for exp in dedupe_experiences(experiences):
         if not exp.resolved:
             continue  # an unresolved decision has no lesson yet
-        out.extend(entries_for(exp))
+        history = replay_regimes if exp.source == "replay" else live_regimes
+        out.extend(entries_for(exp, regime_history=history, sector_by_symbol=sector_by_symbol))
     return out

@@ -149,7 +149,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         experiences = [*experiences, *replay]
 
-    entries = seed_entries(experiences)
+    # Metadata per docs/journal_metadata.md (regime on the write date, today's
+    # sectors); the sources are read once, then applied point in time.
+    from dynamo.persistence.repositories.journal_meta import (
+        live_regime_history,
+        replay_regime_history,
+        sector_map,
+    )
+
+    entries = seed_entries(
+        experiences,
+        live_regimes=live_regime_history(engine),
+        replay_regimes=replay_regime_history(engine),
+        sector_by_symbol=sector_map(engine, sorted({e.symbol for e in experiences})),
+    )
     if args.dry_run:
         print(
             f"journal seed (dry run): live={live_count} replay={replay_count} "

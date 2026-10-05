@@ -64,7 +64,46 @@ def test_entries_come_from_the_existing_builders() -> None:
     assert "the position returned +7.30%" in review.text
     assert review.symbols == ("KO",)
     assert review.sectors == ("Consumer Staples",)
-    assert review.regime_at_write == "risk_on"
+
+
+def test_metadata_uses_the_write_date_regime_and_never_a_later_one() -> None:
+    """docs/journal_metadata.md: regime_at_write is the regime on the entry's
+    write date (the exit, 07-31), not the experience's decision-date regime,
+    and a session after the write date is never used."""
+    history = [
+        (date(2026, 7, 1), "neutral"),  # decision date: must NOT be used
+        (date(2026, 7, 30), "risk_off"),  # last session on/before the exit
+        (date(2026, 8, 3), "risk_on"),  # after the write date: never used
+    ]
+    entries = entries_for(experience(regime="neutral", sleeve="long_term"), regime_history=history)
+    assert {e.regime_at_write for e in entries} == {"risk_off"}
+    assert {e.strategy for e in entries} == {"long_term"}
+    # Lessons now carry sectors too (lesson_entries gained the parameter).
+    assert all(e.sectors == ("Consumer Staples",) for e in entries)
+    assert (
+        entries_for(experience(), regime_history=[(date(2026, 8, 3), "risk_on")])[0].regime_at_write
+        is None
+    )
+
+
+def test_unclassified_experience_sector_falls_back_to_instruments() -> None:
+    entries = entries_for(experience(sector="unknown"), sector_by_symbol={"KO": "Beverages"})
+    assert all(e.sectors == ("Beverages",) for e in entries)
+    assert all(e.sectors == () for e in entries_for(experience(sector=None)))
+
+
+def test_seed_entries_picks_the_regime_history_by_source() -> None:
+    live = [(date(2026, 7, 30), "neutral")]
+    replay = [(date(2026, 7, 30), "risk_off")]
+    by_source = {
+        src: seed_entries(
+            [experience(source=src, replay_run_id="replay-abc" if src == "replay" else None)],
+            live_regimes=live,
+            replay_regimes=replay,
+        )[0].regime_at_write
+        for src in ("replay", "live")
+    }
+    assert by_source == {"replay": "risk_off", "live": "neutral"}
 
 
 def test_entries_are_stamped_when_the_outcome_became_knowable() -> None:
