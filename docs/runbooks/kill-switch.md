@@ -132,7 +132,7 @@ changed, when cleared.
 
 ## Notes and known gaps
 
-- The signing key for live approvals, `DYNAMO_APPROVAL_KEY`, is deliberately
+- The signing key for live (real-money) approvals, `DYNAMO_APPROVAL_KEY`, is deliberately
   **not** stored in the repo or in `.env` (see `approvals/README.md`). If you
   are re-enabling LIVE after an incident and it is not exported, the gate
   refuses with `approval_bad_signature` and prints how to fix it.

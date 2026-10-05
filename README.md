@@ -7,7 +7,7 @@ A production-quality, single-user AI investing platform:
 - **Three-tier universe** — ~500–600 core names get full analysis; the rest of the US market is surveilled by near-free code-only anomaly detectors; interesting names are dynamically promoted.
 - **Risk engine first** — hard-constraint veto over all advisory signals: exposure limits, VaR/CVaR, drawdown ladder, volatility targeting, fractional Kelly, regime detection. *Not investing* is a first-class output.
 - **Continuous learning** — immutable decision context on every trade, post-trade reviews, confidence calibration, searchable journal, drift detection. Production logic changes only via backtest → OOS → walk-forward → stress → paper → shadow → human approval.
-- **Paper trading first** (Alpaca), identical code path for live behind an explicit human gate.
+- **Paper trading first** (Alpaca), identical code path for live (real money) behind an explicit human approval gate.
 
 ## Status
 
@@ -15,7 +15,7 @@ A production-quality, single-user AI investing platform:
 tests, integration tests against Timescale, Dagster dry-run green). The complete technical
 design lives in [`docs/design/`](docs/design/); decisions in [`docs/adr/`](docs/adr/).
 Remaining before real money: accumulate clean unattended paper runs, tune from results, then
-M8 hardening + the explicit human live-approval gate (`docs/design/00` §5).
+M8 hardening + the explicit human approval gate for live (real money) (`docs/design/00` §5).
 
 ## Quickstart
 
@@ -40,7 +40,27 @@ make check      # lint + typecheck + unit tests
 make up         # full docker compose stack (dagster, api, dashboard, prometheus, grafana)
 ```
 
-Environments: `DEV | TEST | PAPER | LIVE`, one `.env.<env>` each — see `.env.example`.
+Environments: `DEV | TEST | PAPER | LIVE`, selected by `DYNAMO_ENV` (default `DEV`).
+Settings come from the process environment, then a single `.env` file in the working
+directory; see `.env.example` for the keys.
+
+## Glossary: paper, replay, shadow, LIVE
+
+- **Paper:** the nightly production pipeline (Dagster) trading an Alpaca **paper**
+  account: simulated fills, no real money. Docs call it "the nightly paper
+  configuration" or "production (paper)". This is what runs today.
+- **Replay:** offline re-runs of past dates through the same code (`dynamo.cli.replay`),
+  writing only to replay tables. Used for every backtest and evaluation.
+- **Shadow:** a candidate scored nightly beside production and never traded
+  (for example `shadow_quant_scores`, docs/preregistration_trend_shadow.md).
+- **LIVE:** real money. It requires `DYNAMO_ENV=LIVE`, a signed approval artifact
+  in `approvals/`, no kill-switch file, and the readiness criteria, all checked by
+  `live_orders_permitted()` in `src/dynamo/execution/gate.py` (see
+  [`approvals/README.md`](approvals/README.md)). The broker also refuses to build a
+  real-money client unless `DYNAMO_ENV=LIVE`. LIVE has never been enabled.
+
+In code, `live` often just means "not replay" (for example `source='live'`,
+"live parity"); those identifiers keep their names.
 
 ## Layout
 

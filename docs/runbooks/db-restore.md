@@ -1,7 +1,7 @@
 # Runbook — database restore (and the quarterly drill)
 
 **Use when:** Postgres is lost, corrupt, or you are performing the quarterly
-restore drill that doc 00 §5.4 makes a live-gate dependency.
+restore drill that doc 00 §5.4 makes a dependency of the live (real-money) gate.
 
 **Severity:** page. **Expected time:** drill ~5 minutes; real recovery
 30-90 minutes depending on where the dump lives.
@@ -157,7 +157,7 @@ Once a quarter, on a calm day:
 
 Passing the drill writes `backup_last_success_timestamp{kind=restore_drill}`,
 which is the only thing that sets `Readiness.backup_drill_ok`. It expires
-after 100 days — a stale drill fails the live gate closed, by design.
+after 100 days — a stale drill fails the live (real-money) gate closed, by design.
 
 ## Scheduling the nightly backup
 

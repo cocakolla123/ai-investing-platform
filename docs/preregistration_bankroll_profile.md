@@ -54,9 +54,9 @@ liquidity-vetoed, and names the committee debated are tradable.
 - At each bankroll, the profile is **better** (or **worse**) only if the
   paired daily t ≥ 2.0 (or ≤ −2.0) AND its max drawdown stays within −15%.
   Otherwise: **no difference shown**.
-- A **better** at any bankroll would justify proposing the profile for live
-  paper. Wiring it into live needs the user's approval. Nothing changes in
-  live from this test alone.
+- A **better** at any bankroll would justify proposing the profile for the
+  nightly paper configuration. Wiring it in needs the user's approval. Nothing
+  changes in the nightly paper configuration from this test alone.
 - **No re-tuning:** the tier numbers will not be changed after seeing results.
 
 ## Known limits, stated in advance

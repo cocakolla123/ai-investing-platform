@@ -29,7 +29,7 @@ per stage: contexts, dossier, advocates, arbiter and total.
 reads the other's brief: both receive the base context plus the dossier, and
 only the arbiter sees both. So this changes elapsed time and nothing the
 models see. In replay, the bull and bear stage-batches go out on two
-threads, two CLI calls at a time instead of one. Live has the same switch
+threads, two CLI calls at a time instead of one. The nightly paper configuration has the same switch
 (`COMMITTEE_PARALLEL_ADVOCATES`), off by default. Turning it on in
 production is the user's decision after this result.
 

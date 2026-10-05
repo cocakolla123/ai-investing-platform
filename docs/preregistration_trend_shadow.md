@@ -9,7 +9,7 @@ before the outcomes exist.
 ## What runs
 
 Every market night, the `scores_job` (23:00 ET) gains `shadow_quant_scores`.
-It scores bundle `trend-rule-v1` on the live tier 1 + 3 universe, using the
+It scores bundle `trend-rule-v1` on the production (paper) tier 1 + 3 universe, using the
 same feature path as production, and writes `shadow_quant_scores` (migration
 0024).
 

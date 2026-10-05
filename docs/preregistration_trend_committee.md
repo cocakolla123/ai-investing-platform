@@ -5,7 +5,7 @@ Written and committed before the run. Analysis script
 
 ## Question
 
-The user wants the live system to be "quant mixed with committee": the quant
+The user wants the nightly paper system to be "quant mixed with committee": the quant
 leg picks the shortlist, the LLM committee decides. The trend rule replay
 (`docs/trend_rule_2026-10-03.md`) was inconclusive on its own. This asks
 whether **the committee makes better decisions on a trend-rule shortlist
@@ -47,7 +47,7 @@ All use excess20: return from the next open to the 20th session close, minus
 SPY over the same span, on the fixed canonical bars.
 
 1. **Buy quality (primary):** mean excess20 of BUY/ADD verdicts. This is
-   what the live system would actually buy.
+   what the nightly paper system would actually buy.
 2. **Decision quality:** mean signed excess20 over directional verdicts
    (Phase 3's metric).
 3. **Shortlist quality:** mean excess20 of every shortlisted name,

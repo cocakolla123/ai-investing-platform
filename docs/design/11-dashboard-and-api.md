@@ -147,7 +147,7 @@ Eight screens. Each lists its contents; anything not listed is not on the screen
 - Attribution: per-sleeve, per-strategy, per-sector; turnover; realized slippage vs model
 - Calibration curves per agent and for the committee (reliability diagrams + Brier trend,
   doc 10) — the primary "is the AI trustworthy" view
-- Strategy performance vs backtest expectation bands (doc 08): live path drawn over the
+- Strategy performance vs backtest expectation bands (doc 08): the realized (paper) path drawn over the
   backtest confidence envelope; excursions flagged
 
 ### 3.6 Journal

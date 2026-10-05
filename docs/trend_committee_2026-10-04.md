@@ -70,7 +70,7 @@ replicate noise. By the pre-registered rule: **trend worse**.
 
 ## What this means
 
-- **Do not switch the live quant leg to the trend rule.** The evidence so far
+- **Do not switch the production (paper) quant leg to the trend rule.** The evidence so far
   points the other way.
 - **The forward shadow keeps running** (`docs/preregistration_trend_shadow.md`).
   It costs nothing, needs no model calls, and is the clean out-of-sample

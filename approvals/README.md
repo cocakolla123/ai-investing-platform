@@ -63,7 +63,7 @@ $ python -m dynamo.cli.approve verify \
 OK: approvals/promotion-my-strategy.yaml verified (expiry 2026-12-31, scope ('my-strategy',))
 ```
 
-For the live gate use `--kind live --scope all` (or a comma-separated list of
+For the live (real-money) gate use `--kind live --scope all` (or a comma-separated list of
 symbols/sleeves) and a **short** expiry — the artifact is a dated permission,
 not a standing one.
 

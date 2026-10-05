@@ -191,7 +191,7 @@ construction config, doc 07 §8).
 | 2 | Out-of-sample | Held-out period (most recent 12m, never touched in development): Sharpe ≥ 50% of in-sample; same sign of alpha |
 | 3 | Walk-forward | ≥ 6 folds per §4; positive median fold Sharpe; no single fold contributing > 50% of total return |
 | 4 | Stress | 2008/2020/2022 replays + doc 06 §6 synthetic shocks: no ladder −15% breach; behavior explainable at review |
-| 5 | Paper | **≥ 30 trading days** live-pipeline paper execution; realized vs backtest tracking error within band; slippage within model (§3); zero risk-constraint violations |
+| 5 | Paper | **≥ 30 trading days** nightly-pipeline paper execution; realized vs backtest tracking error within band; slippage within model (§3); zero risk-constraint violations |
 | 6 | Shadow | Runs alongside current production on identical inputs; decisions **logged, not executed**; ≥ 20 trading days; divergence report reviewed |
 | 7 | Human approval | Owner reviews the evidence bundle and signs; without the artifact, the transition API refuses |
 

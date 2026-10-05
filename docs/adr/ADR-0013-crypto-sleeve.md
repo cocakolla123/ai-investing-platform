@@ -8,7 +8,7 @@ The platform trades equities/ETFs plus three satellite sleeves (options,
 Kalshi, simulated Polymarket) through Alpaca. Alpaca also supports crypto
 pairs in PAPER mode today, with free historical daily bars since ~2021 and no
 data API key requirement. The backtest campaign plan adds crypto as a fourth
-sleeve so it can join both live paper trading and the replay campaign with
+sleeve so it can join both nightly paper trading and the replay campaign with
 real data. Crypto differs from equities in ways the platform must absorb:
 24/7 sessions, realized vol 3-5x equities, fractional-native quantities, no
 PDT rule, no fundamentals/filings/transcripts, and broker payloads that

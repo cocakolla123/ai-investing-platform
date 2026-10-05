@@ -125,5 +125,5 @@ Every model call writes one `cost_ledger` row (migration 0023) with:
 - the API-equivalent cost.
 
 Each replay day also records wall-clock seconds per stage in
-`validation.jsonl`. Live committee calls fill the same columns, except for
+`validation.jsonl`. Nightly paper committee calls fill the same columns, except for
 the request id and the retrieved ids: only the replay path passes those through today.

@@ -12,7 +12,7 @@ month), ranked stocks at least as well as the 79-feature LightGBM model:
 - fold t 3.14 against 1.58;
 - winning-fold share 0.79.
 
-The user wants the live system to be "quant mixed with committee", and the
+The user wants the nightly paper system to be "quant mixed with committee", and the
 trend rule is the strongest quant candidate. This test asks the question a
 rank IC can't answer: **does trading it beat SPY after costs and after
 adjusting for market exposure?** The campaign correction (44d266f) showed
@@ -25,7 +25,7 @@ these can disagree.
   but choosing it was informed by that period. The clean test is forward
   paper trading; this one checks whether the ranking turns into a
   portfolio edge on the stocks the system actually trades.
-- **Different universe.** Phase 5 ranked 1,315 names. The live system trades
+- **Different universe.** Phase 5 ranked 1,315 names. The nightly paper system trades
   tier 1: 55 large names plus 5 crypto pairs. Momentum among 55 mega-caps
   is a narrower bet.
 - **Survivorship.** Today's tier-1 list is applied back to 2024-12-01, its

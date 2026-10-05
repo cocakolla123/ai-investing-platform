@@ -1,6 +1,6 @@
 # Wide campaign design — discovery-enabled backtest
 
-**Status:** design, measured 2026-08-19 against the live DB. Supersedes the shape of
+**Status:** design, measured 2026-08-19 against the production (paper) database. Supersedes the shape of
 `replay-e5a49317bbee` (74 sessions, 55 mega-caps, **no discovery**).
 
 ---
@@ -150,7 +150,7 @@ Screened over 2025-09-01 → 2026-03-02 (strictly before the window, so the scre
 | …**operating companies** | **1,259** |
 
 Unfiltered sweeps flag **505–533 symbols/day**; the filtered universe flags **68/day (5.5%)**.
-The live triage cap is 60/night — so an unfiltered sweep saturates the gate with microcap
+The nightly (paper) triage cap is 60/night — so an unfiltered sweep saturates the gate with microcap
 noise before a real name is ever seen. There is **no minimum-price floor anywhere in the
 codebase**; sub-$5 names dominate percentage-move detectors and are where unadjusted
 reverse splits live.

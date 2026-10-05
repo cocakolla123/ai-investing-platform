@@ -68,7 +68,7 @@ daily t **1.00**. The bar was 2.0, so **the trend rule does not beat v8.**
 - **No promotion** and **no rescue re-runs** with another IC, σ, window or
   universe.
 - The rule permits **forward paper shadowing** as the way to collect
-  honest evidence: score the trend rule nightly beside the live system
+  honest evidence: score the trend rule nightly beside the nightly paper system
   without trading it. This needs the user's approval and a registry entry,
   but no promotion.
 - A **committee arm** (trend shortlist plus the LLM committee) would test

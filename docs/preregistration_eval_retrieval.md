@@ -51,7 +51,7 @@ ticker appears in both texts), which is why stratum X is reported separately.
 | keyword | BM25 (k1 = 1.2, b = 0.75) over entry text; query = full dossier text; lowercase alphanumeric tokens, scikit-learn English stop words removed |
 | vector | pgvector cosine through `JournalRepository.search` (production guards); query = bge-small embedding of `"Represent this sentence for searching relevant passages: " + dossier text` (model truncates at 512 tokens) |
 | hybrid | reciprocal rank fusion of keyword top-50 and vector top-50, k = 60 |
-| production (reference) | today's live query, the template `"{SYM} investment thesis, lessons and post-trade reviews"`, vector |
+| production (reference) | today's production (paper) query, the template `"{SYM} investment thesis, lessons and post-trade reviews"`, vector |
 
 Main setting: no symbol filter. Secondary setting (stratum S only): symbol
 hard filter, as production applies it.

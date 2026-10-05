@@ -7,7 +7,7 @@ before any retriever ran (`5052574`). Results: `evals/retrieval/`.
 
 | check | result |
 |---|---|
-| live embedder backend | `sentence-transformers` (BAAI/bge-small-en-v1.5, cached locally) |
+| production (paper) embedder backend | `sentence-transformers` (BAAI/bge-small-en-v1.5, cached locally) |
 | journal entries | 166 (79 lessons, 34 reviews, 53 theses) |
 | hash-fallback stamped, before / after | **0 / 0** — nothing to re-embed; the earlier re-embed was genuine |
 | stored vector vs recomputed (all 166) | cosine min 1.000000, 0 below 0.999 |

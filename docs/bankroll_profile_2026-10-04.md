@@ -8,7 +8,7 @@ replay the same saved committee verdicts (`replay-63220a3a5e9a`): $0, no
 model calls.
 
 **Verdict: no difference shown at any bankroll.** No paired daily t reached
-±2. That was the expected outcome. The profile stays off; live is unchanged.
+±2. That was the expected outcome. The profile stays off; the nightly paper configuration is unchanged.
 
 | bankroll (tier) | arm | return | vs SPY | Sharpe | max DD | alpha/yr (t) | symbols traded | avg positions | costs |
 |---|---|---|---|---|---|---|---|---|---|

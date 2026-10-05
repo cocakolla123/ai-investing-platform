@@ -5,7 +5,7 @@ Four separate mechanisms reference this file:
 
 - **Runbooks** (`docs/runbooks/`) — every one ends by writing a line here.
 - **The quarterly restore drill** (doc 12 §4) — its results are logged here,
-  and the drill is a live-gate dependency (doc 00 §5.4).
+  and the drill is a dependency of the live (real-money) gate (doc 00 §5.4).
 - **The alert-fatigue rule** (doc 12 §7, doc 13) — any alert that fires ≥3
   times in a month without prompting action is re-tiered or fixed at the
   source, and that decision is tracked here.
@@ -134,7 +134,7 @@ Rules:
   materialises the generator) and the truncation is reported in `rate_limited`
   metadata. 5 regression tests. This mattered before 23:30 ET — the committee
   reads news into its dossiers.
-- **Verified against the live failure** (run `933374be`): Finnhub 429'd mid-sweep
+- **Verified against the nightly paper run's failure** (run `933374be`): Finnhub 429'd mid-sweep
   at 11:50:43, exactly as before. The guard caught it, TickerTick carried on for
   another 7 minutes, and the run finished RUN_SUCCESS with
   `rows=2429 finnhub=1296 tickertick=1133 symbols=63 rate_limited=['finnhub']`.
@@ -148,8 +148,8 @@ Rules:
 
 ## 2026-09-23 — paper run placed zero orders in its first week: root causes
 
-**Symptom.** `orders` empty on 2026-09-23, nine days after the paper run went
-live. Every layer of the nightly chain turned out to be broken; each fix
+**Symptom.** `orders` empty on 2026-09-23, nine days after the nightly paper
+run started. Every layer of the nightly chain turned out to be broken; each fix
 exposed the next.
 
 **Operator error (mine, 2026-09-16).** Restarting Dagster to load the news
@@ -157,13 +157,13 @@ fix, I ran `make dagster` without `DAGSTER_HOME`. `dagster dev` then created a
 throwaway `.tmp_dagster_home_*` instance with every schedule off. I verified
 "38 schedules RUNNING" against the *old* `.dagster_home` — not the instance
 the new process used — so the check proved nothing. I then deleted the temp
-directory as junk: it was the live instance's storage. The daemon spent three
+directory as junk: it was the running production (paper) instance's storage. The daemon spent three
 days logging `sqlite unable to open database file` once per second (16.5 GB,
 kept as `artifacts/logs/dagster.log.2026-09-20-crashloop`), and on 09-20 03:39
 died when macOS purged `dagster dev`'s temp workspace file.
 
-**Code defects — live-only, invisible to every test and to replay:**
-1. `scores_job` never succeeded live: FRED revisions duplicated `ts` in the
+**Code defects, production (paper) only, invisible to every test and to replay:**
+1. `scores_job` never succeeded in the nightly paper configuration: FRED revisions duplicated `ts` in the
    regime reindex; tz-aware repository timestamps met naive `as_of` in
    `quality_scores` and `strategy_signals`.
 2. `risk_verdict`: the same FRED-revision reindex bug.
@@ -191,7 +191,7 @@ error envelopes surfaced. Missing bars 09-12→09-23 backfilled from Alpaca.
 Schedule cursors reset before restart so no stale tick (notably
 `paper_execution`) fired off-hours. 2,623 unit tests, pyright 0, contracts 3/3.
 
-**Verified live, 2026-09-23 ~21:40 ET:** scheduler writing heartbeats to
+**Verified on the nightly paper configuration, 2026-09-23 ~21:40 ET:** scheduler writing heartbeats to
 `.dagster_home` (checked from the daemon's own environment); `eod_ingest` and
 `crypto_bars` fired from their schedules; nightly ingest RUN_SUCCESS on 11,241
 symbols; regime → risk → target chain completes with `new_risk_allowed=true`.
