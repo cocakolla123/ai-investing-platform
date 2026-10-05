@@ -11,11 +11,37 @@ A production-quality, single-user AI investing platform:
 
 ## Status
 
-**M1–M7 implemented; paper-validation phase.** All modules are built and tested (695 unit
-tests, integration tests against Timescale, Dagster dry-run green). The complete technical
+**M1–M7 implemented; paper-validation phase.** All modules are built and tested: 2,701 unit
+tests passing and 56 skipped, plus 60 integration tests against Postgres/Timescale
+(counted 2026-10-05). The complete technical
 design lives in [`docs/design/`](docs/design/); decisions in [`docs/adr/`](docs/adr/).
 Remaining before real money: accumulate clean unattended paper runs, tune from results, then
 M8 hardening + the explicit human approval gate for live (real money) (`docs/design/00` §5).
+
+## Results so far (all paper or replay; no real money)
+
+Every result below was pre-registered before it ran, and null results are
+reported as null.
+
+- **Quant model:** LightGBM (campaign v10) beat no registered baseline. Plain
+  12-1 momentum ranked stocks at least as well. ([report](docs/ml_baselines_2026-10-03.md),
+  [re-run on fixed prices](docs/rerun_after_fixes_2026-10-04.md))
+- **Retrieval, v1:** BM25 beat vector and hybrid on cross-stock queries.
+  Production's ticker filter returns nothing for any stock without its own
+  history (19.5% of eligible decisions got a precedent). ([report](docs/eval_retrieval_2026-10-03.md))
+- **Retrieval, v2:** after filling journal metadata, a sector fallback beats
+  production only by returning something. Against plain vector or BM25 it is
+  not distinguishable on independent labels. ([report](docs/eval_retrieval_v2_2026-10-05.md))
+- **Retrieval on decisions:** turning journal retrieval off, on or hybrid made
+  no difference beyond run-to-run noise in committee decisions. ([report](docs/eval_decisions_2026-10-03.md))
+- **Parallel advocates:** cut committee wall clock by 10.9% (CI 5.2% to 16.1%),
+  about 2 minutes a night. It was declined because its pre-registered quality
+  rule narrowly failed. ([report](docs/eval_tracing_2026-10-03.md))
+- **Trading:** no strategy shows alpha distinguishable from zero. The committee
+  campaign's +11.1% (SPY about +14.7%) was mostly SPY ballast, averaging 76.7%
+  of equity, with about 2.6 committee positions at a time. ([report](docs/rerun_after_fixes_2026-10-04.md))
+- **Everything is paper or replay.** The nightly pipeline trades an Alpaca
+  paper account; no real-money order has ever been placed (see the glossary).
 
 ## Quickstart
 
