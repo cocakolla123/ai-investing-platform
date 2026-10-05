@@ -46,9 +46,16 @@ SPY returned about +14.7% over the window (2026-03-03 → 2026-08-14).
     v8's revenue features.
   - With discovery and crypto actually trading, the discovery arm went from
     worst to best of the three. None of these gaps is significant.
-- **The committee's headline number was mostly SPY.** It still is, with
-  SPY ballast averaging about 77% of the book. The committee holds about 3–4
-  positions at a time.
+- **The committee's headline number was mostly SPY.** It still is. Over the
+  115 sessions of the $100k run (`replay-1bccf6b04259`):
+  - SPY ballast's target weight averaged **76.7% of equity** per session
+    (median 78.7%);
+  - measured as SPY market value over equity it is 76.1%, or 76.7% excluding
+    the first session, before any fill;
+  - the committee's own positions (non-SPY names with a target weight)
+    averaged **2.6 per session** (median 3, max 5).
+
+  Source: `scripts/eval/ballast_share.py` → `evals/rerun/ballast_share.json`.
 
 ## Run ids
 

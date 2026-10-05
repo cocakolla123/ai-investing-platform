@@ -10,7 +10,7 @@ model calls.
 **Verdict: no difference shown at any bankroll.** No paired daily t reached
 ±2. That was the expected outcome. The profile stays off; the nightly paper configuration is unchanged.
 
-| bankroll (tier) | arm | return | vs SPY | Sharpe | max DD | alpha/yr (t) | symbols traded | avg positions | costs |
+| bankroll (tier) | arm | return | vs SPY | Sharpe | max DD | alpha/yr (t) | symbols traded | avg positions (incl. SPY) | costs |
 |---|---|---|---|---|---|---|---|---|---|
 | $1k (small) | flat | +11.23% | −3.49% | 1.88 | −7.06% | −2.15% (−0.34) | 12 | 3.6 | $3 |
 | | profile | +12.80% | −1.92% | 2.09 | −7.28% | −0.45% (−0.11) | **2** | 1.5 | $1 |
@@ -39,8 +39,10 @@ Paired daily return, profile − flat:
 - **$10k: −1.6 points.** Fewer names and a 10% sleeve. Not significant.
 - **Concentration didn't happen.** Small accounts were meant to hold fewer,
   larger positions. But the committee only says "buy" to a few names at a
-  time (3.6 positions on average even when flat), so the position count
-  never binds. The book is mostly SPY ballast.
+  time, so the position count never binds. The table's "avg positions" counts
+  every name with a target weight, SPY ballast included (3.6 when flat). The
+  committee's own names average 2.6 per session
+  (`evals/rerun/ballast_share.json`). The book is mostly SPY ballast.
 
 ## What would make this test informative
 

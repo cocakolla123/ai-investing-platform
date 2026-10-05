@@ -1,0 +1,15 @@
+{
+  "run_id": "replay-1bccf6b04259",
+  "sessions": 115,
+  "window": [
+    "2026-03-03",
+    "2026-08-14"
+  ],
+  "spy_target_weight_mean": 0.767,
+  "spy_target_weight_median": 0.7874,
+  "spy_market_value_share_of_equity_mean": 0.7605,
+  "spy_market_value_share_mean_excluding_first_session": 0.7672,
+  "committee_positions_per_session_mean": 2.59,
+  "committee_positions_per_session_median": 3,
+  "committee_positions_per_session_max": 5
+}
