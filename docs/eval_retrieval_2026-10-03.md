@@ -81,3 +81,11 @@ on same-stock" (stripped: +0.057 [−0.062, +0.185]). Everything else holds.
 These findings set the Phase 3 arms (see its pre-registration): "vector" =
 production as deployed, "hybrid" = RRF over the dossier text with no ticker
 filter, "off" = no journal hits.
+
+## Correction (2026-10-05)
+
+The contamination-corrected table above missed one result. On the stripped
+queries, keyword beats hybrid across all queries: hybrid − keyword nDCG@10 is
+−0.062, 95% CI −0.114 to −0.007, which excludes zero. It does not say
+"everything else holds" for that pair. The v2 evaluation reproduces the
+number exactly (`docs/eval_retrieval_v2_2026-10-05.md`).
