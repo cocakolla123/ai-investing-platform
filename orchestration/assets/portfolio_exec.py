@@ -119,7 +119,27 @@ def _portfolio_state(dynamo: DynamoResource) -> Any | None:
         cash = float(account.get("cash", equity))
     if equity <= 0.0:
         return None
-    return PortfolioState(as_of=utcnow(), equity=equity, cash=cash, positions=positions)
+    return PortfolioState(
+        as_of=utcnow(),
+        equity=equity,
+        cash=cash,
+        positions=positions,
+        high_water_mark=max(_equity_high_water_mark(dynamo), equity),
+    )
+
+
+def _equity_high_water_mark(dynamo: DynamoResource) -> float:
+    """Highest recorded account equity (0.0 before the first snapshot).
+
+    The risk engine falls back to today's equity when this is unset, which
+    made drawdown 0 every night and the drawdown ladder unreachable. It reads
+    the stored ``equity_curve``, so the curve must be right first: the rows
+    written while cash was frozen (2026-09-25 to 10-05) peak near $194.5k
+    and would read as a 48% drawdown (DD20) until they are repaired.
+    """
+    eq = schema.equity_curve
+    frame = _read_df(dynamo, select(eq.c.equity).order_by(eq.c.equity.desc()).limit(1))
+    return 0.0 if frame.empty else float(frame.iloc[0]["equity"])
 
 
 def _latest_prices(dynamo: DynamoResource, symbols: list[str], as_of: date) -> dict[str, float]:

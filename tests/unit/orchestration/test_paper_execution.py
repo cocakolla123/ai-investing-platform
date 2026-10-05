@@ -685,6 +685,33 @@ def test_a_buy_fill_moves_cash_not_equity_and_reconciles_clean(
     assert not _equities_sticky_halt_active(wiring.dynamo)
 
 
+def test_portfolio_state_carries_the_high_water_mark(
+    wiring: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unset, the risk engine used today's equity as the HWM: drawdown was 0
+    every night and the ladder could never move."""
+    from orchestration.assets.portfolio_exec import _portfolio_state
+
+    def read_df(peak: float | None) -> Any:
+        def _read(_dynamo: Any, _stmt: Any) -> pd.DataFrame:
+            rows = [] if peak is None else [{"equity": peak}]
+            return pd.DataFrame(rows, columns=["equity"])
+
+        return _read
+
+    monkeypatch.setattr(pexec, "_read_df", read_df(110_000.0))
+    state = _portfolio_state(wiring.dynamo)
+    assert state is not None and state.high_water_mark == pytest.approx(110_000.0)
+
+    monkeypatch.setattr(pexec, "_read_df", read_df(90_000.0))  # today is the high
+    state = _portfolio_state(wiring.dynamo)
+    assert state is not None and state.high_water_mark == pytest.approx(EQUITY)
+
+    monkeypatch.setattr(pexec, "_read_df", read_df(None))  # no snapshot yet
+    state = _portfolio_state(wiring.dynamo)
+    assert state is not None and state.high_water_mark == pytest.approx(EQUITY)
+
+
 # --------------------------------------------------------------------------
 # Drawdown-ladder acks (doc 06 §3) — RungEffects.requires_human_ack had no
 # reader at all before this: DD8/DD15 changed nothing in the live path.
