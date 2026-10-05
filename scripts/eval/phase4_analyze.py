@@ -165,10 +165,16 @@ def main(code_version: str) -> None:
         ]
     )
     faster_days = int(sum(p < 0 for p in pct))
+    # Headline measure (pre-registered): MEAN over days. The medians (p50) and
+    # the p95 of five daily values stay as secondary rows; with only five days
+    # that differ, the medians imply a larger cut than the means.
     wall = {
         arm: {
+            "mean_s": float(np.mean([x["wall_s_per_decision"] for x in days[arm].values()])),
             "p50_s": _q([x["wall_s_per_decision"] for x in days[arm].values()], 0.5),
             "p95_s": _q([x["wall_s_per_decision"] for x in days[arm].values()], 0.95),
+            "mean_total_s": float(np.mean([x["total_s"] for x in days[arm].values()])),
+            "median_total_s": _q([x["total_s"] for x in days[arm].values()], 0.5),
             "per_day": days[arm],
         }
         for arm in arms
@@ -262,6 +268,12 @@ def main(code_version: str) -> None:
             "days_compared": len(common),
             "days_par_faster": faster_days,
             "mean_pct_change_wall_per_decision": _boot_mean(pct),
+            # Seconds saved per night (per day's committee run), same days, mean.
+            "mean_total_s_saved_per_day": float(
+                np.mean([days["seq"][d]["total_s"] - days["par"][d]["total_s"] for d in common])
+            )
+            if common
+            else math.nan,
             "works": len(common) >= 5 and faster_days >= 4,
         },
         "quality_held": {

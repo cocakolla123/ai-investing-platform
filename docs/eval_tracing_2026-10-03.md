@@ -17,7 +17,7 @@ process running. Metered cost was $0.
 - The optimization **works**, but the gain is smaller than predicted.
 - **Quality is not shown to hold** under the pre-registered rule: it misses
   by one flip and by one recovered retry.
-- **Recommendation: leave `COMMITTEE_PARALLEL_ADVOCATES` off in live.**
+- **Recommendation: leave `COMMITTEE_PARALLEL_ADVOCATES` off in the nightly paper configuration.**
 
 ## Latency per call (both arms)
 
@@ -36,7 +36,9 @@ slow either call.
 
 | | seq | par |
 |---|---|---|
-| **wall clock per decision**, p50 / p95 (primary) | 270 s / 273 s | **232 s / 264 s** |
+| **wall clock per decision, mean over the 5 days (primary)** | **268.9 s** | **239.7 s** |
+| wall clock per decision, median / p95 of the 5 days (secondary) | 269.9 s / 273.2 s | 232.3 s / 264.2 s |
+| committee wall clock per night, mean (median) | 1,075.6 s (1,079.4 s), about 17.9 min | 958.9 s (929.3 s), about 16.0 min |
 | compute per decision (sum of call latencies), p50 / p95 | 244 s / 276 s | 246 s / 288 s |
 | advocate stage per day (4 dives) | 338–376 s | 185–244 s |
 | metered cost | $0.00 | $0.00 |
@@ -50,8 +52,14 @@ roughly $3.60 a night at 4 dives.
 
 ## Optimization rule: **met**
 
-Parallel was faster on **5 of 5 days**. Mean change in wall clock per
-decision: **−10.9%** (95% CI −16.1% to −5.2%).
+Parallel was faster on **5 of 5 days**. The pre-registered measure is the
+mean of the five per-day percentage changes in wall clock per decision:
+**−10.9%** (95% CI −16.1% to −5.2%). The matching absolute numbers are the
+per-day means: **268.9 s → 239.7 s per decision**, and 116.7 s (about 2
+minutes) saved per nightly committee run. The medians (269.9 s → 232.3 s)
+imply a larger cut, about 13.9%, because the five days differ: one day
+barely changed (−0.6%) while two changed by 15–19%. The headline stays the
+pre-registered mean.
 
 The advocate stage itself shrank by about 43%. The pre-registered
 expectation of 20–35% overall was too high: the arbiter (Fable, ~90 s ×
@@ -91,9 +99,11 @@ None of these differences is meaningful at this size.
 
 ## Recommendation
 
-**Keep `COMMITTEE_PARALLEL_ADVOCATES=false`.** Live gains about 11% of
-wall clock, roughly 2½ minutes on an ~18-minute nightly committee. That
-isn't worth shipping a change whose quality check failed, even narrowly.
+**Keep `COMMITTEE_PARALLEL_ADVOCATES=false`.** In the nightly paper
+configuration it would save about 11% of committee wall clock (the mean per
+day), about 2 minutes on an ~18-minute committee run (17.9 → 16.0 minutes,
+per-day means). That isn't worth shipping a change whose quality check
+failed, even narrowly. The optimization was evaluated and declined.
 
 If speed ever matters, the bigger levers are:
 
