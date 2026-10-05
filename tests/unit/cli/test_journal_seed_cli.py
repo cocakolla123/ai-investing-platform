@@ -49,14 +49,21 @@ REPLAY = LIVE.model_copy(
 )
 
 
+LIVE_REGIMES = [(date(2026, 5, 14), "neutral")]
+REPLAY_REGIMES = [(date(2026, 5, 14), "risk_off")]
+SECTORS = {"AAPL": "Information Technology", "KO": "Consumer Staples"}
+
+
 class FakeJournal:
     def __init__(self) -> None:
         self.inserted: list[tuple[str, str]] = []
         self.updated: list[tuple[str, str]] = []
         self.stale: list[Any] = []
+        self.entries: list[Any] = []
 
     def insert(self, entry: Any, embedding: Any = None, embedding_version: str = "") -> None:
         self.inserted.append((entry.id, embedding_version))
+        self.entries.append(entry)
 
     def entries_with_embedding_version(self, version: str) -> list[Any]:
         return list(self.stale)
@@ -93,9 +100,14 @@ def wired(monkeypatch: pytest.MonkeyPatch) -> FakeJournal:
     import orchestration.resources as resources_mod
 
     import dynamo.persistence.repositories.experience as exp_mod
+    import dynamo.persistence.repositories.journal_meta as meta_mod
     import dynamo.persistence.repositories.learning as learn_mod
 
     monkeypatch.setattr(exp_mod, "ExperienceRepository", FakeExperienceRepo)
+    # Metadata sources (docs/journal_metadata.md), read once by the CLI.
+    monkeypatch.setattr(meta_mod, "live_regime_history", lambda engine: LIVE_REGIMES)
+    monkeypatch.setattr(meta_mod, "replay_regime_history", lambda engine: REPLAY_REGIMES)
+    monkeypatch.setattr(meta_mod, "sector_map", lambda engine, syms: dict(SECTORS))
     monkeypatch.setattr(learn_mod, "JournalRepository", lambda engine: journal)
     monkeypatch.setattr(
         resources_mod.DynamoResource, "engine", lambda self: object(), raising=False
@@ -163,3 +175,15 @@ def test_reembed_upgrades_entries_written_under_the_fallback(
     assert cli.main(["--reembed"]) == 0
     assert wired.updated == [("review:exp:live:AAPL-2026-05-01", "sentence-transformers")]
     assert wired.inserted == []
+
+
+def test_seeded_entries_carry_write_date_regime_and_sectors(wired: FakeJournal) -> None:
+    """docs/journal_metadata.md: regime on the write date (the exit, 05-15),
+    from the replay history for replay rows and regime_states for live rows;
+    sectors from instruments when the experience has none."""
+    assert cli.main(["--replay-run-id", "r1"]) == 0
+    by_symbol = {e.symbols[0]: e for e in wired.entries}
+    assert by_symbol["AAPL"].regime_at_write == "neutral"
+    assert by_symbol["KO"].regime_at_write == "risk_off"
+    assert by_symbol["AAPL"].sectors == ("Information Technology",)
+    assert by_symbol["KO"].sectors == ("Consumer Staples",)
