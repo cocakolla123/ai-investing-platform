@@ -404,3 +404,56 @@ class EquityCurveRepository:
         )
         with self._engine.begin() as cx:
             cx.execute(stmt)
+
+
+class CashLedgerRepository:
+    """Internal cash from the ledger (dynamo.execution.cash_ledger).
+
+    Opening cash is the earliest ``equity_curve`` row: the bootstrap snapshot
+    taken from the broker before any fill. Every trade filled on or after that
+    date is applied on top. Only the equities/crypto ``trades`` table is
+    included; options and prediction-market fills keep their own ledgers, so an
+    options fill on the same broker account shows up as a cash divergence
+    rather than being silently absorbed.
+
+    ``equity_curve`` has no write timestamp, so the opening row must be taken
+    before the account's first fill, on a day with no fills, and never
+    rewritten (the nightly snapshot skips it). Fills on the opening date
+    itself are counted.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    def opening(self) -> tuple[date, float] | None:
+        with self._engine.connect() as cx:
+            row = cx.execute(
+                select(equity_curve.c.as_of, equity_curve.c.cash)
+                .order_by(equity_curve.c.as_of)
+                .limit(1)
+            ).first()
+        return None if row is None else (row.as_of, float(row.cash))
+
+    def cash(self, as_of: datetime | None = None) -> float | None:
+        """Ledger cash, optionally as of a moment (fills after it excluded).
+        None when there is no opening snapshot yet."""
+        from datetime import UTC
+        from datetime import time as dtime
+
+        from dynamo.execution.cash_ledger import Fill, ledger_cash
+
+        opening = self.opening()
+        if opening is None:
+            return None
+        start = datetime.combine(opening[0], dtime.min, tzinfo=UTC)
+        stmt = select(trades.c.side, trades.c.qty, trades.c.fill_price, trades.c.fees).where(
+            trades.c.filled_at >= start
+        )
+        if as_of is not None:
+            stmt = stmt.where(trades.c.filled_at <= as_of)
+        with self._engine.connect() as cx:
+            rows = cx.execute(stmt).all()
+        return ledger_cash(
+            opening[1],
+            (Fill(r.side, float(r.qty), float(r.fill_price), float(r.fees or 0.0)) for r in rows),
+        )

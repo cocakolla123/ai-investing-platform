@@ -126,6 +126,7 @@ class Reconciler:
         alert: AlertCallback,
         *,
         cash_tolerance: float = 1.00,
+        equity_tolerance_pct: float = 0.0,
         halts: HaltRegistry | None = None,
         run_scope: str = EQUITY_RUN_SCOPE,
     ) -> None:
@@ -134,6 +135,8 @@ class Reconciler:
         self._store = store
         self._alert = alert
         self._cash_tolerance = cash_tolerance
+        # 0.0 keeps the old behavior (equity held to the cash tolerance).
+        self._equity_tolerance_pct = equity_tolerance_pct
         self._run_scope = run_scope
         self.halts = halts if halts is not None else HaltRegistry()
 
@@ -253,7 +256,10 @@ class Reconciler:
                     GLOBAL_SCOPE, "cash", self._internal.cash(), broker_cash, "cash mismatch"
                 )
             )
-        if abs(broker_equity - self._internal.equity()) > self._cash_tolerance:
+        equity_tolerance = max(
+            self._cash_tolerance, self._equity_tolerance_pct * abs(broker_equity)
+        )
+        if abs(broker_equity - self._internal.equity()) > equity_tolerance:
             out.append(
                 Divergence(
                     GLOBAL_SCOPE,

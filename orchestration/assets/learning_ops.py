@@ -1323,9 +1323,18 @@ def metrics_daily_asset(
 @dagster_asset(name="equity_curve", group_name=LEARNING_GROUP)
 def equity_curve_asset(context: AssetExecutionContext, dynamo: DynamoResource) -> MaterializeResult:
     """Mark-to-market equity snapshot -> equity_curve row."""
-    from dynamo.persistence.repositories.execution import EquityCurveRepository
+    from dynamo.persistence.repositories.execution import (
+        CashLedgerRepository,
+        EquityCurveRepository,
+    )
 
     as_of = utcnow().date()
+    opening = CashLedgerRepository(dynamo.engine()).opening()
+    if opening is not None and opening[0] == as_of:
+        # The opening row is the ledger's starting cash; rewriting it with
+        # ledger cash would count that day's fills twice.
+        context.log.info("equity_curve: %s is the ledger opening row; left as is", as_of)
+        return MaterializeResult(metadata={"skipped": "ledger opening row"})
     state = _portfolio_state(dynamo)
     if state is None:
         context.log.warning("equity_curve: no portfolio state — skipping")

@@ -82,17 +82,34 @@ def _broker(dynamo: DynamoResource) -> Any | None:
     return AlpacaBroker(s)
 
 
+def _ledger_cash_and_equity(dynamo: DynamoResource, positions: Any) -> tuple[float, float] | None:
+    """(cash, equity) from the cash ledger, marked to the latest closes.
+
+    None before the bootstrap snapshot exists. Cash used to be read from the
+    latest ``equity_curve`` row, which the nightly snapshot wrote back
+    unchanged, so fills never reduced it (dynamo.execution.cash_ledger).
+    """
+    from dynamo.execution.cash_ledger import mark_to_market
+    from dynamo.persistence.repositories.execution import CashLedgerRepository
+
+    cash = CashLedgerRepository(dynamo.engine()).cash()
+    if cash is None:
+        return None
+    prices = _latest_prices(dynamo, sorted({p.symbol for p in positions}), utcnow().date())
+    equity, _ = mark_to_market(cash, positions, prices)
+    return cash, equity
+
+
 def _portfolio_state(dynamo: DynamoResource) -> Any | None:
-    """Internal portfolio state: positions table + equity curve (broker fallback)."""
+    """Internal portfolio state: positions table + ledger cash, marked to market
+    (broker snapshot only to bootstrap the first equity_curve row)."""
     from dynamo.domain.models.portfolio import PortfolioState
     from dynamo.persistence.repositories.execution import PositionRepository
 
     positions = tuple(PositionRepository(dynamo.engine()).all_positions())
-    eq = schema.equity_curve
-    frame = _read_df(dynamo, select(eq).order_by(eq.c.as_of.desc()).limit(1))
-    if not frame.empty:
-        row = frame.iloc[0]
-        equity, cash = float(row["equity"]), float(row["cash"])
+    ledger = _ledger_cash_and_equity(dynamo, positions)
+    if ledger is not None:
+        cash, equity = ledger
     else:
         broker = _broker(dynamo)
         if broker is None:
@@ -968,11 +985,10 @@ class _InternalReader:
         ]
 
     def _equity_row(self) -> tuple[float, float]:
-        eq = schema.equity_curve
-        frame = _read_df(self._dynamo, select(eq).order_by(eq.c.as_of.desc()).limit(1))
-        if frame.empty:
-            return 0.0, 0.0
-        return float(frame.iloc[0]["cash"]), float(frame.iloc[0]["equity"])
+        """(cash, equity) from the cash ledger, marked to the latest closes; the
+        same numbers the portfolio state uses."""
+        ledger = _ledger_cash_and_equity(self._dynamo, self.positions())
+        return (0.0, 0.0) if ledger is None else ledger
 
     def cash(self) -> float:
         return self._equity_row()[0]
@@ -1043,6 +1059,7 @@ def reconcile_broker_state(context: OpExecutionContext, dynamo: DynamoResource) 
         ReconciliationRepository(dynamo.engine()),
         alert,
         cash_tolerance=s.reconciliation_cash_tolerance,
+        equity_tolerance_pct=s.reconciliation_equity_tolerance_pct,
     )
     result = reconciler.reconcile(utcnow())
     context.log.info(
