@@ -3,11 +3,14 @@
 Pre-registration: `docs/preregistration_ml_baselines.md` (e7a5af7), committed
 before any model was fitted. Script: `scripts/eval/ml_baselines.py`.
 Results: `evals/ml/results_phase5.json`. MLflow experiment
-`quant-phase5-v10-folds` holds 19 runs:
+`quant-phase5-v10-folds` logs one main run (all four models on the same 19
+walk-forward folds), 17 drop-one-group ablation runs, and one summary run.
+These are not 19 independent experiments: the ablations re-fit LightGBM on
+the same folds with one feature group removed.
 
-- the main models run;
-- 17 drop-one-group ablations;
-- a summary run.
+The re-run on the fixed bars (2026-10-04) is a second experiment,
+`quant-phase5-v10-folds-barfix`, with the same structure (one main run, 17
+ablations, one summary); see `docs/rerun_after_fixes_2026-10-04.md`.
 
 ## Reproduction check
 
