@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     execution_auto_approve: bool = True  # paper default; always False in LIVE
     approval_ttl_minutes: int = 30
     reconciliation_cash_tolerance: float = 1.00
+    #: Equity is compared with a RELATIVE tolerance: internal equity marks
+    #: positions to the latest daily close, the broker to intraday prices, so a
+    #: $1 band diverged on almost every run while any position was held. Cash
+    #: and positions stay strict; they are what catch real bookkeeping errors.
+    reconciliation_equity_tolerance_pct: float = 0.01
 
     # --- Crypto sleeve (ADR-0013; Alpaca crypto, paper-capable today) ---
     # Caps are deliberately conservative: crypto realized vol runs 3-5x

@@ -159,3 +159,59 @@ def test_unknown_broker_order_is_a_divergence() -> None:
     assert not result.clean
     assert any(d.kind == "unknown_order" for d in result.divergences)
     assert rec.halts.is_halted("AAPL")
+
+
+# --- equity tolerance (2026-10 cash-ledger fix) ----------------------------
+
+
+def _equity_reconciler(internal: FakeInternal, pct: float) -> Reconciler:
+    return Reconciler(
+        _broker_with_position(),
+        internal,
+        FakeReconStore(),
+        lambda n, m: None,
+        cash_tolerance=1.0,
+        equity_tolerance_pct=pct,
+    )
+
+
+def test_equity_mark_gap_within_relative_tolerance_is_clean() -> None:
+    """Internal equity marks at the last daily close, the broker intraday: a
+    $50 gap on $101k is a pricing difference, not a bookkeeping error."""
+    broker = _broker_with_position()
+    acct = broker.account()
+    internal = FakeInternal(
+        positions=[Position(symbol="AAPL", qty=10, avg_entry_price=100.0)],
+        cash=acct["cash"],
+        equity=acct["equity"] - 50.0,
+    )
+    assert _equity_reconciler(internal, 0.01).reconcile(NOW).clean
+    # The default (0.0) keeps the old strict behavior.
+    assert not _equity_reconciler(internal, 0.0).reconcile(NOW).clean
+
+
+def test_equity_tolerance_never_loosens_cash() -> None:
+    """The 2026-09-24 failure: cash frozen while equity double counted. The
+    relative band is for equity only; a cash gap still halts globally."""
+    broker = _broker_with_position()
+    acct = broker.account()
+    internal = FakeInternal(
+        positions=[Position(symbol="AAPL", qty=10, avg_entry_price=100.0)],
+        cash=acct["cash"] + 500.0,
+        equity=acct["equity"],
+    )
+    rec = _equity_reconciler(internal, 0.01)
+    result = rec.reconcile(NOW)
+    assert not result.clean
+    assert GLOBAL_SCOPE in result.halted_scopes
+
+
+def test_equity_gap_beyond_relative_tolerance_halts() -> None:
+    broker = _broker_with_position()
+    acct = broker.account()
+    internal = FakeInternal(
+        positions=[Position(symbol="AAPL", qty=10, avg_entry_price=100.0)],
+        cash=acct["cash"],
+        equity=acct["equity"] * 1.95,  # the double count seen in paper
+    )
+    assert not _equity_reconciler(internal, 0.01).reconcile(NOW).clean

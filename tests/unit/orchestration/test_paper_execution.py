@@ -120,6 +120,27 @@ class MemoryTrades:
         return sum(t.qty for t in self.trades if t.client_order_id == coid)
 
 
+class MemoryCashLedger:
+    """CashLedgerRepository over MemoryTrades: opening cash EQUITY plus every
+    recorded fill, the same arithmetic as the real ledger."""
+
+    def __init__(self, trades: MemoryTrades, opening_cash: float = EQUITY) -> None:
+        self._trades = trades
+        self.opening_cash = opening_cash
+
+    def cash(self, as_of: datetime | None = None) -> float:
+        from dynamo.execution.cash_ledger import Fill, ledger_cash
+
+        return ledger_cash(
+            self.opening_cash,
+            (
+                Fill(t.side.value, t.qty, t.fill_price, t.fees)
+                for t in self._trades.trades
+                if as_of is None or t.filled_at <= as_of
+            ),
+        )
+
+
 class MemoryPositions:
     """``PositionRepository`` — the same upsert/close arithmetic, in memory."""
 
@@ -248,6 +269,7 @@ class Wiring:
     def __init__(self) -> None:
         self.orders = MemoryOrders()
         self.trades = MemoryTrades()
+        self.cash_ledger = MemoryCashLedger(self.trades)
         self.positions = MemoryPositions()
         self.decision_contexts = MemoryDecisionContexts()
         self.reconciliation = MemoryReconciliation()
@@ -312,6 +334,7 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     monkeypatch.setattr(exec_repos, "OrderRepository", lambda _e: w.orders)
     monkeypatch.setattr(exec_repos, "TradeRepository", lambda _e: w.trades)
     monkeypatch.setattr(exec_repos, "PositionRepository", lambda _e: w.positions)
+    monkeypatch.setattr(exec_repos, "CashLedgerRepository", lambda _e: w.cash_ledger)
     monkeypatch.setattr(exec_repos, "ReconciliationRepository", lambda _e: w.reconciliation)
     monkeypatch.setattr(learn_repos, "DecisionContextRepository", lambda _e: w.decision_contexts)
     monkeypatch.setattr(risk_repos, "LadderEventRepository", lambda _e: w.ladder_events)
@@ -624,6 +647,69 @@ def test_nightly_equity_path_target_to_position(
     # --- and a re-poll of the same night changes nothing ---
     poll_equity_fills(ctx, wiring.dynamo)
     assert len(wiring.trades.trades) == 1
+
+
+def test_a_buy_fill_moves_cash_not_equity_and_reconciles_clean(
+    wiring: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for the 2026-09-24 halt.
+
+    Internal cash used to be the latest ``equity_curve`` row, which the nightly
+    snapshot wrote back unchanged, so the first paper fill (SPY) left cash at
+    $100,000 while the broker showed $5,409. Equity counted the position on top
+    of untouched cash, every reconciliation diverged, and the sticky halt
+    stopped all trading. Cash now comes from the ledger: opening cash plus
+    fills.
+    """
+    from orchestration.assets.portfolio_exec import _portfolio_state, reconcile_broker_state
+
+    target = _target(("AAA", 0.10))
+    _run(wiring, target, monkeypatch)
+    coid, order = next(iter(wiring.orders.orders.items()))
+    price = wiring.decision_contexts.rows[0].payload["decision_price"]
+    wiring.broker.force_fill(coid, None, price)
+    poll_equity_fills(build_op_context(), wiring.dynamo)
+    # Mark at the fill price, as the broker does, so equity is comparable.
+    monkeypatch.setattr(pexec, "_latest_prices", lambda _d, _s, _a: {"AAA": price})
+
+    state = _portfolio_state(wiring.dynamo)
+    assert state is not None
+    notional = order.qty * price
+    assert state.cash == pytest.approx(EQUITY - notional)
+    assert state.equity == pytest.approx(EQUITY)
+    assert state.cash == pytest.approx(wiring.broker.account()["cash"])
+
+    reconcile_broker_state(build_op_context(), wiring.dynamo)
+    assert [r["result"] for r in wiring.reconciliation.runs][-1] != "divergent"
+    assert wiring.reconciliation.unacked_divergent_runs() == []
+    assert not _equities_sticky_halt_active(wiring.dynamo)
+
+
+def test_portfolio_state_carries_the_high_water_mark(
+    wiring: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unset, the risk engine used today's equity as the HWM: drawdown was 0
+    every night and the ladder could never move."""
+    from orchestration.assets.portfolio_exec import _portfolio_state
+
+    def read_df(peak: float | None) -> Any:
+        def _read(_dynamo: Any, _stmt: Any) -> pd.DataFrame:
+            rows = [] if peak is None else [{"equity": peak}]
+            return pd.DataFrame(rows, columns=["equity"])
+
+        return _read
+
+    monkeypatch.setattr(pexec, "_read_df", read_df(110_000.0))
+    state = _portfolio_state(wiring.dynamo)
+    assert state is not None and state.high_water_mark == pytest.approx(110_000.0)
+
+    monkeypatch.setattr(pexec, "_read_df", read_df(90_000.0))  # today is the high
+    state = _portfolio_state(wiring.dynamo)
+    assert state is not None and state.high_water_mark == pytest.approx(EQUITY)
+
+    monkeypatch.setattr(pexec, "_read_df", read_df(None))  # no snapshot yet
+    state = _portfolio_state(wiring.dynamo)
+    assert state is not None and state.high_water_mark == pytest.approx(EQUITY)
 
 
 # --------------------------------------------------------------------------
